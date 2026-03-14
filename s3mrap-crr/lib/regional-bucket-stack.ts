@@ -1,0 +1,39 @@
+import * as cdk from 'aws-cdk-lib';
+import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as sns from 'aws-cdk-lib/aws-sns';
+import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
+
+export interface RegionalBucketStackProps extends cdk.StackProps {
+  readonly project: string;
+}
+
+export class RegionalBucketStack extends cdk.Stack {
+  public readonly bucket: s3.Bucket;
+
+  constructor(scope: cdk.App, id: string, props: RegionalBucketStackProps) {
+    super(scope, id, props);
+
+    this.bucket = new s3.Bucket(this, 'Bucket', {
+      bucketName: `${props.project}-${this.region}-${this.account}`,
+      versioned: true,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+    });
+
+    // SNS topic for replication failure events
+    const replFailTopic = new sns.Topic(this, 'ReplicationFailureTopic', {
+      topicName: `${props.project}-repl-failures-${this.region}`,
+    });
+
+    this.bucket.addEventNotification(
+      s3.EventType.REPLICATION_OPERATION_FAILED_REPLICATION,
+      new s3n.SnsDestination(replFailTopic),
+    );
+
+    new cdk.CfnOutput(this, 'BucketName', { value: this.bucket.bucketName });
+    new cdk.CfnOutput(this, 'BucketArn', { value: this.bucket.bucketArn });
+    new cdk.CfnOutput(this, 'ReplicationFailureTopicArn', { value: replFailTopic.topicArn });
+  }
+}
