@@ -79,7 +79,7 @@ cdk deploy s3mrap-bootstrap ──────►  CodeBuild Project (us-east-1)
 ### 6. MonitoringStack (`s3mrap-monitoring-primary/secondary`)
 - CloudWatch Alarms: ReplicationLatency, BytesPendingReplication, OperationsPendingReplication, OperationsFailedReplication
 - SNS alarm topic per region — all alarms have ALARM + OK notification actions
-- CloudWatch Dashboard: MRAP traffic dial + 4 replication metrics + daily storage metrics (BucketSizeBytes, NumberOfObjects)
+- CloudWatch Dashboard: MRAP traffic dial + replication latency + bytes pending + replication operations (pending + failed)
 - MRAP Monitor Lambda (runs every 1 min via EventBridge)
   - Reads MRAP routes, publishes MrapTrafficDial custom metric
   - MRAP alias passed as env var at deploy time
@@ -176,9 +176,5 @@ Per AWS best practices research, the following improvements are recommended:
 
 | Priority | Improvement | Detail |
 |----------|------------|--------|
-| HIGH | S3 Event Notifications for replication failures | Configure s3:Replication:OperationFailedReplication on both buckets → SNS. Provides per-object failure reasons. |
 | MEDIUM | S3 request metrics (4xx/5xx, latency) | Enable CloudWatch request metrics on both buckets. Alarm on 5xxErrors. Add FirstByteLatency to dashboards. |
-| MEDIUM | SNS notification actions on alarms | Add SNS topic + alarm actions for ALARM/OK transitions. Enables email/Slack/PagerDuty. |
-| MEDIUM | Daily storage metrics on dashboards | Add BucketSizeBytes + NumberOfObjects. Compare across regions to detect replication drift. |
 | LOW | Cross-region unified dashboard | Single dashboard in us-east-1 pulling metrics from both regions. |
-| LOW | S3 Storage Lens advanced metrics | Replication rule auditing and data protection metrics. |

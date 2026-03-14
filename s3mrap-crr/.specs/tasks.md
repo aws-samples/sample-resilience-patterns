@@ -84,9 +84,9 @@
 - [x] 12.1 Add S3 Event Notifications for replication failures (s3:Replication:OperationFailedReplication → SNS)
 - [ ] 12.2 Enable S3 request metrics on both buckets (4xx/5xx errors, FirstByteLatency)
 - [x] 12.3 Add SNS topic + alarm notification actions for ALARM/OK transitions
-- [x] 12.4 Add daily storage metrics to dashboards (BucketSizeBytes, NumberOfObjects)
-- [x] 12.5 Add OperationsPendingReplication alarm
-- [ ] 12.6 Consider cross-region unified CloudWatch dashboard
-- [x] 12.7 Set initial MRAP routing to primary=100%, secondary=0% on creation
-- [x] 12.8 MRAP routing Lambda uses ARN (with alias) instead of name
-- [x] 12.9 Integration tests verify no Lambda uses MRAP_NAME and IAM policies use alias-based ARN
+- [x] 12.4 Add OperationsPendingReplication alarm
+- [x] 12.5 Set initial MRAP routing to primary=100%, secondary=0% on creation
+- [x] 12.6 MRAP routing Lambda uses ARN (with alias) instead of name
+- [x] 12.7 Integration tests verify no Lambda uses MRAP_NAME and IAM policies use alias-based ARN
+- [ ] 12.8 Enable S3 request metrics on both buckets (4xx/5xx errors, FirstByteLatency)
+- [ ] 12.9 Consider cross-region unified CloudWatch dashboard

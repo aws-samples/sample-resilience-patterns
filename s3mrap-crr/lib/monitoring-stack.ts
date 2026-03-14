@@ -167,56 +167,10 @@ export class MonitoringStack extends cdk.Stack {
         ],
         [
           new cloudwatch.GraphWidget({
-            title: `Operations Pending Replication`,
+            title: `Replication Operations`,
             left: [opsPending],
-            width: 12,
-          }),
-          new cloudwatch.GraphWidget({
-            title: `Operations Failed Replication`,
-            left: [opsFailed],
-            width: 12,
-          }),
-        ],
-        [
-          new cloudwatch.SingleValueWidget({
-            title: `Storage: ${props.sourceBucketName}`,
-            metrics: [
-              new cloudwatch.Metric({
-                namespace: 'AWS/S3',
-                metricName: 'BucketSizeBytes',
-                dimensionsMap: { BucketName: props.sourceBucketName, StorageType: 'StandardStorage' },
-                statistic: 'Average',
-                period: cdk.Duration.days(1),
-              }),
-              new cloudwatch.Metric({
-                namespace: 'AWS/S3',
-                metricName: 'NumberOfObjects',
-                dimensionsMap: { BucketName: props.sourceBucketName, StorageType: 'AllStorageTypes' },
-                statistic: 'Average',
-                period: cdk.Duration.days(1),
-              }),
-            ],
-            width: 12,
-          }),
-          new cloudwatch.SingleValueWidget({
-            title: `Storage: ${props.destBucketName}`,
-            metrics: [
-              new cloudwatch.Metric({
-                namespace: 'AWS/S3',
-                metricName: 'BucketSizeBytes',
-                dimensionsMap: { BucketName: props.destBucketName, StorageType: 'StandardStorage' },
-                statistic: 'Average',
-                period: cdk.Duration.days(1),
-              }),
-              new cloudwatch.Metric({
-                namespace: 'AWS/S3',
-                metricName: 'NumberOfObjects',
-                dimensionsMap: { BucketName: props.destBucketName, StorageType: 'AllStorageTypes' },
-                statistic: 'Average',
-                period: cdk.Duration.days(1),
-              }),
-            ],
-            width: 12,
+            right: [opsFailed],
+            width: 24,
           }),
         ],
       ],

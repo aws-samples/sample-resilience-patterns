@@ -81,9 +81,4 @@ test('OperationsPendingReplication alarm exists', () => {
   });
 });
 
-test('Dashboard includes storage metrics', () => {
-  const dashboards = template.findResources('AWS::CloudWatch::Dashboard');
-  const body = JSON.stringify(Object.values(dashboards)[0]);
-  expect(body).toContain('BucketSizeBytes');
-  expect(body).toContain('NumberOfObjects');
-});
+

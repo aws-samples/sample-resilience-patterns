@@ -39,9 +39,8 @@ Demonstrate S3 Multi-Region Access Points with Cross-Region Replication, CloudWa
   - MRAP Traffic Dial (%) — SingleValueWidget showing active/passive status per region
   - ReplicationLatency over time
   - BytesPendingReplication over time
-  - OperationsFailedReplication count
-  - OperationsPendingReplication count
-  - Daily storage metrics: BucketSizeBytes + NumberOfObjects for both buckets
+  - OperationsPendingReplication over time
+  - Replication Operations graph (OperationsPendingReplication + OperationsFailedReplication)
 
 ### FR-6: ARC Region Switch Plan
 - AWS::ARCRegionSwitch::Plan resource
