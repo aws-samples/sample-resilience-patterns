@@ -42,10 +42,11 @@ deploy-buckets:
 .PHONY: deploy-routing
 deploy-routing:
 	$(CDK) deploy $(PROJECT)-global-routing $(CDK_CONTEXT) -c stack=global-routing --require-approval never
-	$(eval MRAP_ALIAS := $(shell aws cloudformation describe-stacks --stack-name $(PROJECT)-global-routing --region $(PRIMARY_REGION) --query "Stacks[0].Outputs[?OutputKey=='MrapAlias'].OutputValue" --output text))
 
 .PHONY: deploy-routing-lambdas
 deploy-routing-lambdas:
+	$(eval MRAP_ALIAS := $(shell aws cloudformation describe-stacks --stack-name $(PROJECT)-global-routing --region $(PRIMARY_REGION) --query "Stacks[0].Outputs[?OutputKey=='MrapAlias'].OutputValue" --output text))
+	@echo "MRAP_ALIAS=$(MRAP_ALIAS)"
 	$(CDK) deploy $(PROJECT)-routing-primary $(CDK_CONTEXT) -c stack=routing-primary -c mrapAlias=$(MRAP_ALIAS) --require-approval never -o cdk.out.rp & p1=$$!; \
 	$(CDK) deploy $(PROJECT)-routing-secondary $(CDK_CONTEXT) -c stack=routing-secondary -c mrapAlias=$(MRAP_ALIAS) --require-approval never -o cdk.out.rs & p2=$$!; \
 	wait $$p1 && wait $$p2
@@ -66,6 +67,8 @@ deploy: deploy-buckets deploy-routing deploy-routing-lambdas deploy-failover-and
 
 .PHONY: deploy-failover-and-monitoring
 deploy-failover-and-monitoring:
+	$(eval MRAP_ALIAS := $(shell aws cloudformation describe-stacks --stack-name $(PROJECT)-global-routing --region $(PRIMARY_REGION) --query "Stacks[0].Outputs[?OutputKey=='MrapAlias'].OutputValue" --output text))
+	@echo "MRAP_ALIAS=$(MRAP_ALIAS)"
 	$(CDK) deploy $(PROJECT)-failover $(CDK_CONTEXT) -c stack=failover --require-approval never -o cdk.out.fo & p1=$$!; \
 	$(CDK) deploy $(PROJECT)-monitoring-primary $(CDK_CONTEXT) -c stack=monitoring-primary -c mrapAlias=$(MRAP_ALIAS) --require-approval never -o cdk.out.mp & p2=$$!; \
 	$(CDK) deploy $(PROJECT)-monitoring-secondary $(CDK_CONTEXT) -c stack=monitoring-secondary -c mrapAlias=$(MRAP_ALIAS) --require-approval never -o cdk.out.ms & p3=$$!; \
