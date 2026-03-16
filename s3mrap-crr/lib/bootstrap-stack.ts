@@ -21,6 +21,7 @@ export class BootstrapStack extends cdk.Stack {
       bucketName: `${props.project}-codebuild-artifacts`,
       encryption: s3.BucketEncryption.S3_MANAGED,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      enforceSSL: true,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
     });

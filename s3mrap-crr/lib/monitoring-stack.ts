@@ -31,6 +31,7 @@ export class MonitoringStack extends cdk.Stack {
     // SNS topic for alarm notifications
     const alarmTopic = new sns.Topic(this, 'AlarmTopic', {
       topicName: `${props.project}-replication-alarms-${props.destRegionLabel}`,
+      enforceSSL: true,
     });
 
     new cdk.CfnOutput(this, 'AlarmTopicArn', { value: alarmTopic.topicArn });

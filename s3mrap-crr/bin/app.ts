@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import * as cdk from 'aws-cdk-lib';
+import { AwsSolutionsChecks, NagSuppressions } from 'cdk-nag';
 import { BootstrapStack } from '../lib/bootstrap-stack';
 import { RegionalBucketStack } from '../lib/regional-bucket-stack';
 import { GlobalRoutingStack } from '../lib/global-routing-stack';
@@ -8,6 +9,18 @@ import { FailoverStack } from '../lib/failover-stack';
 import { MonitoringStack } from '../lib/monitoring-stack';
 
 const app = new cdk.App();
+
+// Enable cdk-nag with: -c nag=true
+if (app.node.tryGetContext('nag') === 'true') {
+  cdk.Aspects.of(app).add(new AwsSolutionsChecks({ verbose: true }));
+}
+
+// Global nag suppressions for CDK framework internals and intentional decisions
+const globalSuppressions = [
+  { id: 'AwsSolutions-IAM4', reason: 'AWSLambdaBasicExecutionRole is standard for Lambda functions' },
+  { id: 'AwsSolutions-IAM5', reason: 'Wildcard permissions required: S3 replication needs bucket/*, MRAP alias unknown at synth, CDK framework constructs use wildcards' },
+  { id: 'AwsSolutions-L1', reason: 'Python 3.12 is current LTS. CDK Provider framework Lambda runtimes are not user-configurable.' },
+];
 
 const project = app.node.tryGetContext('project') || process.env.PROJECT || 's3mrap';
 const primaryRegion = app.node.tryGetContext('primaryRegion') || process.env.PRIMARY_REGION || 'us-east-1';
@@ -35,76 +48,86 @@ const routingLambdaProps = {
   mrapAlias,
 };
 
+function addSuppressions(stack: cdk.Stack, extra: { id: string; reason: string }[] = []) {
+  NagSuppressions.addStackSuppressions(stack, [...globalSuppressions, ...extra], true);
+}
+
 if (targetStack === 'bootstrap' || targetStack === 'all') {
-  new BootstrapStack(app, `${project}-bootstrap`, {
+  const s = new BootstrapStack(app, `${project}-bootstrap`, {
     project, primaryRegion, secondaryRegion,
     env: { account: accountId, region: primaryRegion },
   });
+  addSuppressions(s, [
+    { id: 'AwsSolutions-S1', reason: 'Artifact bucket is temporary build storage, access logs not needed' },
+    { id: 'AwsSolutions-CB4', reason: 'Demo project — KMS encryption for CodeBuild not required' },
+    { id: 'AwsSolutions-SF1', reason: 'CDK Provider waiter state machine — not user-configurable' },
+    { id: 'AwsSolutions-SF2', reason: 'CDK Provider waiter state machine — not user-configurable' },
+  ]);
 }
 
 if (targetStack === 'bucket-primary' || targetStack === 'all') {
-  new RegionalBucketStack(app, `${project}-bucket-primary`, {
+  addSuppressions(new RegionalBucketStack(app, `${project}-bucket-primary`, {
     project,
     env: { account: accountId, region: primaryRegion },
-  });
+  }));
 }
 
 if (targetStack === 'bucket-secondary' || targetStack === 'all') {
-  new RegionalBucketStack(app, `${project}-bucket-secondary`, {
+  addSuppressions(new RegionalBucketStack(app, `${project}-bucket-secondary`, {
     project,
     env: { account: accountId, region: secondaryRegion },
-  });
+  }));
 }
 
 if (targetStack === 'global-routing' || targetStack === 'all') {
-  new GlobalRoutingStack(app, `${project}-global-routing`, {
+  addSuppressions(new GlobalRoutingStack(app, `${project}-global-routing`, {
     project, primaryBucketName, secondaryBucketName,
     primaryRegion, secondaryRegion, accountId,
     env: { account: accountId, region: primaryRegion },
-  });
+  }));
 }
 
 if (targetStack === 'routing-primary' || targetStack === 'all') {
-  new RoutingLambdaStack(app, `${project}-routing-primary`, {
+  addSuppressions(new RoutingLambdaStack(app, `${project}-routing-primary`, {
     ...routingLambdaProps,
     env: { account: accountId, region: primaryRegion },
-  });
+  }));
 }
 
 if (targetStack === 'routing-secondary' || targetStack === 'all') {
-  new RoutingLambdaStack(app, `${project}-routing-secondary`, {
+  addSuppressions(new RoutingLambdaStack(app, `${project}-routing-secondary`, {
     ...routingLambdaProps,
     env: { account: accountId, region: secondaryRegion },
-  });
+  }));
 }
 
 if (targetStack === 'failover' || targetStack === 'all') {
-  new FailoverStack(app, `${project}-failover`, {
+  addSuppressions(new FailoverStack(app, `${project}-failover`, {
     project, primaryBucketName, secondaryBucketName,
     primaryRegion, secondaryRegion, accountId, mrapName,
     primaryRoutingLambdaArn, secondaryRoutingLambdaArn,
     env: { account: accountId, region: primaryRegion },
-  });
+  }));
 }
 
 if (targetStack === 'monitoring-primary' || targetStack === 'all') {
-  new MonitoringStack(app, `${project}-monitoring-primary`, {
+  addSuppressions(new MonitoringStack(app, `${project}-monitoring-primary`, {
     project,
     sourceBucketName: secondaryBucketName, destBucketName: primaryBucketName,
     replicationRuleId: 'to-primary', sourceRegionLabel: 'pdx', destRegionLabel: 'iad',
     reverseRuleId: 'to-secondary', reverseSourceBucketName: primaryBucketName, reverseDestBucketName: secondaryBucketName,
     primaryRegion, secondaryRegion, accountId, mrapAlias,
     env: { account: accountId, region: primaryRegion },
-  });
+  }));
 }
 
 if (targetStack === 'monitoring-secondary' || targetStack === 'all') {
-  new MonitoringStack(app, `${project}-monitoring-secondary`, {
+  addSuppressions(new MonitoringStack(app, `${project}-monitoring-secondary`, {
     project,
     sourceBucketName: primaryBucketName, destBucketName: secondaryBucketName,
     replicationRuleId: 'to-secondary', sourceRegionLabel: 'iad', destRegionLabel: 'pdx',
     reverseRuleId: 'to-primary', reverseSourceBucketName: secondaryBucketName, reverseDestBucketName: primaryBucketName,
     primaryRegion, secondaryRegion, accountId, mrapAlias,
     env: { account: accountId, region: secondaryRegion },
-  });
+  }));
 }
