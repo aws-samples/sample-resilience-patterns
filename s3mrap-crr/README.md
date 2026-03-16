@@ -28,11 +28,18 @@ Demonstrates S3 Multi-Region Access Points (MRAP) with bidirectional Cross-Regio
 - AWS CLI configured with credentials
 - Node.js 20+
 - CDK CLI (`npm install -g aws-cdk`)
+- Project dependencies installed (`npm install`)
 - CDK bootstrapped in both regions:
   ```bash
   cdk bootstrap aws://ACCOUNT_ID/us-east-1
   cdk bootstrap aws://ACCOUNT_ID/us-west-2
   ```
+
+## Quick Start
+
+```bash
+npx cdk deploy s3mrap-bootstrap -c accountId=ACCOUNT_ID
+```
 
 ## Deployment
 
@@ -151,7 +158,7 @@ This invokes the MRAP routing Lambda, which sets the active region's traffic dia
 ./cleanup.sh 123456789012 cloudAdmin-sbx0
 ```
 
-This deletes all stacks in reverse dependency order (parallel where possible), handles stuck stacks in ROLLBACK_COMPLETE/ROLLBACK_FAILED, and removes the bootstrap stack last.
+This deletes all stacks in reverse dependency order (parallel where possible), handles stuck stacks in ROLLBACK_COMPLETE/ROLLBACK_FAILED, removes the bootstrap stack last, cleans up orphaned S3 buckets, and removes local `cdk.out` directories.
 
 ## Configuration
 
@@ -163,3 +170,13 @@ Override defaults via environment or make variables:
 | `PRIMARY_REGION` | `us-east-1` | Primary AWS region |
 | `SECONDARY_REGION` | `us-west-2` | Secondary AWS region |
 | `ACCOUNT_ID` | Auto-detected | AWS account ID |
+
+## Contributing
+
+### Running Tests
+
+```bash
+npm test    # 47 CDK assertion tests including cross-stack integration tests
+```
+
+Run tests before committing changes to catch CloudFormation template errors, cross-stack naming mismatches, and IAM policy issues before deployment.

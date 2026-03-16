@@ -20,9 +20,14 @@ def handler(event, context):
     cw = boto3.client('cloudwatch')
 
     mrap_arn = f'arn:aws:s3::{account_id}:accesspoint/{mrap_alias}'
-    resp = s3control.get_multi_region_access_point_routes(
-        AccountId=account_id, Mrap=mrap_arn,
-    )
+
+    try:
+        resp = s3control.get_multi_region_access_point_routes(
+            AccountId=account_id, Mrap=mrap_arn,
+        )
+    except Exception as e:
+        logger.error(f'Failed to get MRAP routes: {e}')
+        return {'statusCode': 500, 'error': str(e)}
 
     metric_data = []
     for route in resp.get('Routes', []):
