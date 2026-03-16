@@ -1,0 +1,46 @@
+name: "s3mrap-crr: deploy"
+on:
+  push:
+    branches: [main]
+    paths: ['s3mrap-crr/**']
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: s3mrap-crr
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build and test
+        run: npx projen build
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-arn: arn:aws:iam::123456789012:role/github-actions-aws-samples_sample-resilience-patterns
+          aws-region: us-east-1
+
+      - name: CDK Bootstrap (both regions)
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          npx cdk bootstrap aws://$ACCOUNT_ID/us-east-1
+          npx cdk bootstrap aws://$ACCOUNT_ID/us-west-2
+
+      - name: Deploy
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          npx cdk deploy s3mrap-bootstrap -c accountId=$ACCOUNT_ID --require-approval never
