@@ -39,13 +39,9 @@ const primaryRoutingLambdaArn = `arn:aws:lambda:${primaryRegion}:${accountId}:fu
 const secondaryRoutingLambdaArn = `arn:aws:lambda:${secondaryRegion}:${accountId}:function:${routingFnName}`;
 
 // MRK key ARN/ID — resolved after kms stack deploys, passed via context for subsequent stacks
-const encryptionKeyId = app.node.tryGetContext('encryptionKeyId') || '';
-const encryptionKeyArnPrimary = encryptionKeyId
-  ? `arn:aws:kms:${primaryRegion}:${accountId}:key/${encryptionKeyId}`
-  : '';
-const encryptionKeyArnSecondary = encryptionKeyId
-  ? `arn:aws:kms:${secondaryRegion}:${accountId}:key/${encryptionKeyId}`
-  : '';
+const encryptionKeyId = app.node.tryGetContext('encryptionKeyId') || 'PLACEHOLDER';
+const encryptionKeyArnPrimary = `arn:aws:kms:${primaryRegion}:${accountId}:key/${encryptionKeyId}`;
+const encryptionKeyArnSecondary = `arn:aws:kms:${secondaryRegion}:${accountId}:key/${encryptionKeyId}`;
 
 const routingLambdaProps = {
   project,
