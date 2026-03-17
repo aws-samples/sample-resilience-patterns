@@ -15,7 +15,6 @@ export class RegionalBucketStack extends cdk.Stack {
     super(scope, id, props);
 
     const accessLogsBucket = new s3.Bucket(this, 'AccessLogsBucket', {
-      bucketName: `${props.project}-access-logs-${this.region}-${this.account}`,
       encryption: s3.BucketEncryption.S3_MANAGED,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
