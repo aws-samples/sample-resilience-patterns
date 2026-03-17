@@ -19,7 +19,7 @@ test('S3 bucket has encryption enabled', () => {
   template.hasResourceProperties('AWS::S3::Bucket', {
     BucketEncryption: {
       ServerSideEncryptionConfiguration: [
-        { ServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } },
+        { ServerSideEncryptionByDefault: { SSEAlgorithm: 'aws:kms' } },
       ],
     },
   });

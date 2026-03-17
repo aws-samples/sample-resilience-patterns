@@ -31,6 +31,10 @@ def handler(event, context):
 def _put_replication(source_bucket, dest_bucket, dest_region, role_arn, rule_id):
     logger.info(f'Configuring replication: {source_bucket} -> {dest_bucket} ({dest_region})')
 
+    # Get account ID from source bucket ARN context
+    sts = boto3.client('sts')
+    account_id = sts.get_caller_identity()['Account']
+
     s3_regional = boto3.client('s3', region_name=_bucket_region(source_bucket))
     s3_regional.put_bucket_replication(
         Bucket=source_bucket,
@@ -50,8 +54,14 @@ def _put_replication(source_bucket, dest_bucket, dest_region, role_arn, rule_id)
                         'Status': 'Enabled',
                         'Time': {'Minutes': 15},
                     },
+                    'EncryptionConfiguration': {
+                        'ReplicaKmsKeyID': f'arn:aws:kms:{dest_region}:{account_id}:alias/aws/s3',
+                    },
                 },
                 'DeleteMarkerReplication': {'Status': 'Enabled'},
+                'SourceSelectionCriteria': {
+                    'SseKmsEncryptedObjects': {'Status': 'Enabled'},
+                },
                 'Priority': 1,
             }],
         },
