@@ -54,6 +54,8 @@ export class BootstrapStack extends cdk.Stack {
       resources: [`arn:aws:ssm:*:${this.account}:parameter/cdk-bootstrap/*`],
     }));
 
+    artifactBucket.grantRead(buildRole);
+
     const cbProject = new codebuild.Project(this, 'DeployProject', {
       projectName: `${props.project}-deploy`,
       source: codebuild.Source.s3({
