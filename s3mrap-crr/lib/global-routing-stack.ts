@@ -69,6 +69,19 @@ export class GlobalRoutingStack extends cdk.Stack {
       ],
     }));
 
+    // KMS permissions for CRR with KMS-encrypted buckets (aws/s3 managed keys)
+    replicationRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['kms:Decrypt'],
+      resources: [`arn:aws:kms:${props.primaryRegion}:${props.accountId}:key/*`, `arn:aws:kms:${props.secondaryRegion}:${props.accountId}:key/*`],
+      conditions: { StringLike: { 'kms:ViaService': [`s3.${props.primaryRegion}.amazonaws.com`, `s3.${props.secondaryRegion}.amazonaws.com`] } },
+    }));
+
+    replicationRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['kms:Encrypt'],
+      resources: [`arn:aws:kms:${props.primaryRegion}:${props.accountId}:key/*`, `arn:aws:kms:${props.secondaryRegion}:${props.accountId}:key/*`],
+      conditions: { StringLike: { 'kms:ViaService': [`s3.${props.primaryRegion}.amazonaws.com`, `s3.${props.secondaryRegion}.amazonaws.com`] } },
+    }));
+
     // Custom resource Lambda for bidirectional CRR
     const crrFn = new lambda.Function(this, 'CrrFunction', {
       runtime: lambda.Runtime.PYTHON_3_12,
