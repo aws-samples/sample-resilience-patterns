@@ -1,5 +1,8 @@
 # AWS Resilience Patterns — Sample Implementations
 
+![s3mrap-crr build](https://github.com/aws-samples/sample-resilience-patterns/actions/workflows/s3mrap-crr-build.yml/badge.svg)
+![s3mrap-crr e2e](https://github.com/aws-samples/sample-resilience-patterns/actions/workflows/s3mrap-crr-e2e.yml/badge.svg)
+
 A collection of sample implementations demonstrating resilient architectures for common AWS services and patterns. Each subdirectory is a standalone, fully deployable reference implementation.
 
 ## Purpose
