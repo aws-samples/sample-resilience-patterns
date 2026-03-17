@@ -29,11 +29,12 @@ Demonstrates S3 Multi-Region Access Points (MRAP) with bidirectional Cross-Regio
 - Node.js 20+
 - CDK CLI (`npm install -g aws-cdk`)
 - Project dependencies installed (`npm install`)
-- CDK bootstrapped in both regions:
+- CDK bootstrapped in both regions (one-time setup per account):
   ```bash
   cdk bootstrap aws://ACCOUNT_ID/us-east-1
   cdk bootstrap aws://ACCOUNT_ID/us-west-2
   ```
+  This creates the CDK toolkit stack with IAM roles that GitHub Actions and CodeBuild assume for deployments. Only needs to be run once per account/region.
 
 ## Quick Start
 
