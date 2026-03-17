@@ -31,7 +31,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-arn: arn:aws:iam::123456789012:role/github-actions-aws-samples_sample-resilience-patterns
+          role-to-assume: arn:aws:iam::123456789012:role/github-actions-aws-samples_sample-resilience-patterns
           aws-region: us-east-1
 
       - name: CDK Bootstrap (both regions)
