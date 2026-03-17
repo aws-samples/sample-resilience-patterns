@@ -49,6 +49,11 @@ export class BootstrapStack extends cdk.Stack {
       resources: [`arn:aws:cloudformation:*:${this.account}:stack/${props.project}-*/*`],
     }));
 
+    buildRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['ssm:GetParameter'],
+      resources: [`arn:aws:ssm:*:${this.account}:parameter/cdk-bootstrap/*`],
+    }));
+
     const cbProject = new codebuild.Project(this, 'DeployProject', {
       projectName: `${props.project}-deploy`,
       source: codebuild.Source.s3({
