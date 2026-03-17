@@ -37,6 +37,8 @@ bootstrap:
 deploy-kms:
 	$(CDK) deploy $(PROJECT)-kms $(CDK_CONTEXT) -c stack=kms --require-approval never
 	$(eval ENCRYPTION_KEY_ID := $(shell aws cloudformation describe-stacks --stack-name $(PROJECT)-kms --region $(PRIMARY_REGION) --query "Stacks[0].Outputs[?OutputKey=='KeyId'].OutputValue" --output text))
+	@if [ -z "$(ENCRYPTION_KEY_ID)" ] || [ "$(ENCRYPTION_KEY_ID)" = "None" ]; then echo "ERROR: Failed to get KMS key ID"; exit 1; fi
+	@echo "ENCRYPTION_KEY_ID=$(ENCRYPTION_KEY_ID)"
 	$(CDK) deploy $(PROJECT)-kms-replica $(CDK_CONTEXT) -c stack=kms-replica -c encryptionKeyId=$(ENCRYPTION_KEY_ID) --require-approval never -o cdk.out.kmsr
 
 .PHONY: deploy-buckets
