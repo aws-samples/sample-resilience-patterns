@@ -12,14 +12,17 @@ export interface BootstrapStackProps extends cdk.StackProps {
   readonly project: string;
   readonly primaryRegion: string;
   readonly secondaryRegion: string;
-  readonly encryptionKeyArn: string;
 }
 
 export class BootstrapStack extends cdk.Stack {
   constructor(scope: cdk.App, id: string, props: BootstrapStackProps) {
     super(scope, id, props);
 
-    const encryptionKey = kms.Key.fromKeyArn(this, 'EncryptionKey', props.encryptionKeyArn);
+    const encryptionKey = new kms.Key(this, 'ArtifactKey', {
+      alias: `${props.project}-artifacts`,
+      enableKeyRotation: true,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
 
     const artifactBucket = new s3.Bucket(this, 'ArtifactBucket', {
       bucketName: `${props.project}-codebuild-${this.account}`,
