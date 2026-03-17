@@ -7,6 +7,7 @@ const stack = new BootstrapStack(app, 'TestBootstrap', {
   project: 's3mrap',
   primaryRegion: 'us-east-1',
   secondaryRegion: 'us-west-2',
+  encryptionKeyArn: 'arn:aws:kms:us-east-1:123456789012:key/test-key-id',
   env: { account: '123456789012', region: 'us-east-1' },
 });
 const template = Template.fromStack(stack);
