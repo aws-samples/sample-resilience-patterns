@@ -82,7 +82,7 @@ delete_stack "${PROJECT}-bootstrap" "$PRIMARY_REGION"
 
 echo ""
 echo "Step 6/6: Clean up orphaned S3 buckets"
-for bucket in "${PROJECT}-${PRIMARY_REGION}-${ACCOUNT_ID}" "${PROJECT}-${SECONDARY_REGION}-${ACCOUNT_ID}" "${PROJECT}-codebuild-artifacts"; do
+for bucket in "${PROJECT}-${PRIMARY_REGION}-${ACCOUNT_ID}" "${PROJECT}-${SECONDARY_REGION}-${ACCOUNT_ID}" "${PROJECT}-codebuild-${ACCOUNT_ID}"; do
   if aws s3api head-bucket --bucket "$bucket" $PROFILE_ARG 2>/dev/null; then
     echo "  DEL: s3://$bucket (orphaned)"
     aws s3 rb "s3://$bucket" --force $PROFILE_ARG 2>/dev/null || true

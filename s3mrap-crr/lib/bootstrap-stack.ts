@@ -18,7 +18,7 @@ export class BootstrapStack extends cdk.Stack {
     super(scope, id, props);
 
     const artifactBucket = new s3.Bucket(this, 'ArtifactBucket', {
-      bucketName: `${props.project}-codebuild-artifacts`,
+      bucketName: `${props.project}-codebuild-${this.account}`,
       encryption: s3.BucketEncryption.S3_MANAGED,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
