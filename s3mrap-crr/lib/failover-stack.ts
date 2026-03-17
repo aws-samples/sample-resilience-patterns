@@ -28,7 +28,6 @@ export class FailoverStack extends cdk.Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'load-test')),
       timeout: cdk.Duration.minutes(15),
       memorySize: 512,
-      reservedConcurrentExecutions: 1,
       environment: {
         PRIMARY_BUCKET: props.primaryBucketName,
         SECONDARY_BUCKET: props.secondaryBucketName,
