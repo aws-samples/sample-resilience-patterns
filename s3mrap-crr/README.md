@@ -36,12 +36,6 @@ Demonstrates S3 Multi-Region Access Points (MRAP) with bidirectional Cross-Regio
   ```
   This creates the CDK toolkit stack with IAM roles that GitHub Actions and CodeBuild assume for deployments. Only needs to be run once per account/region.
 
-## Quick Start
-
-```bash
-npx cdk deploy s3mrap-bootstrap -c accountId=ACCOUNT_ID
-```
-
 ## Deployment
 
 ### Option A: Via CodeBuild (recommended)
