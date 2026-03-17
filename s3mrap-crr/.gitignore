@@ -48,3 +48,10 @@ junit.xml
 .cdk.staging/
 .parcel-cache/
 !/.projenrc.ts
+
+# Compiled output
+*.js
+*.d.ts
+*.d.ts.map
+!.projenrc.ts
+!jest.config.js
