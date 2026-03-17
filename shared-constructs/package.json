@@ -1,0 +1,17 @@
+{
+  "name": "@sample-resilience/shared-constructs",
+  "version": "0.0.0",
+  "private": true,
+  "main": "index.ts",
+  "types": "index.ts",
+  "peerDependencies": {
+    "aws-cdk-lib": "^2.200.0",
+    "cdk-nag": "^2.0.0",
+    "constructs": "^10.0.0"
+  },
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^5.9.3"
+  }
+}
