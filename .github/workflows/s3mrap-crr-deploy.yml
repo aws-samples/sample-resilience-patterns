@@ -34,12 +34,6 @@ jobs:
           role-to-assume: arn:aws:iam::190334034435:role/github-actions-aws-samples_sample-resilience-patterns
           aws-region: us-east-1
 
-      - name: CDK Bootstrap (both regions)
-        run: |
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          npx cdk bootstrap aws://$ACCOUNT_ID/us-east-1
-          npx cdk bootstrap aws://$ACCOUNT_ID/us-west-2
-
       - name: Deploy
         run: |
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
