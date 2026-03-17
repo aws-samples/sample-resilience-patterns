@@ -30,6 +30,7 @@ export class RoutingLambdaStack extends cdk.Stack {
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'mrap-routing')),
       timeout: cdk.Duration.minutes(2),
+      reservedConcurrentExecutions: 5,
       environment: {
         ACCOUNT_ID: props.accountId,
         MRAP_ARN: `arn:aws:s3::${props.accountId}:accesspoint/${props.mrapAlias}`,

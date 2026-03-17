@@ -75,6 +75,7 @@ export class GlobalRoutingStack extends cdk.Stack {
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'crr-custom-resource')),
       timeout: cdk.Duration.minutes(5),
+      reservedConcurrentExecutions: 1,
       environment: {
         PRIMARY_BUCKET: props.primaryBucketName,
         SECONDARY_BUCKET: props.secondaryBucketName,
@@ -101,6 +102,7 @@ export class GlobalRoutingStack extends cdk.Stack {
     crrFn.addToRolePolicy(new iam.PolicyStatement({
       actions: ['iam:PassRole'],
       resources: [replicationRole.roleArn],
+      conditions: { StringEquals: { 'iam:PassedToService': 's3.amazonaws.com' } },
     }));
 
     const crrProvider = new cr.Provider(this, 'CrrProvider', {

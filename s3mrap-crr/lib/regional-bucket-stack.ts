@@ -2,6 +2,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as kms from 'aws-cdk-lib/aws-kms';
 import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 
 export interface RegionalBucketStackProps extends cdk.StackProps {
@@ -25,7 +26,7 @@ export class RegionalBucketStack extends cdk.Stack {
     this.bucket = new s3.Bucket(this, 'Bucket', {
       bucketName: `${props.project}-${this.region}-${this.account}`,
       versioned: true,
-      encryption: s3.BucketEncryption.S3_MANAGED,
+      encryption: s3.BucketEncryption.KMS_MANAGED,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
       serverAccessLogsBucket: accessLogsBucket,
@@ -38,6 +39,7 @@ export class RegionalBucketStack extends cdk.Stack {
     const replFailTopic = new sns.Topic(this, 'ReplicationFailureTopic', {
       topicName: `${props.project}-repl-failures-${this.region}`,
       enforceSSL: true,
+      masterKey: kms.Alias.fromAliasName(this, 'SnsKey', 'alias/aws/sns'),
     });
 
     this.bucket.addEventNotification(

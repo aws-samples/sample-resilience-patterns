@@ -19,7 +19,7 @@ export class BootstrapStack extends cdk.Stack {
 
     const artifactBucket = new s3.Bucket(this, 'ArtifactBucket', {
       bucketName: `${props.project}-codebuild-${this.account}`,
-      encryption: s3.BucketEncryption.S3_MANAGED,
+      encryption: s3.BucketEncryption.KMS_MANAGED,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
@@ -45,17 +45,8 @@ export class BootstrapStack extends cdk.Stack {
     }));
 
     buildRole.addToPolicy(new iam.PolicyStatement({
-      actions: [
-        'cloudformation:*',
-        's3:*',
-        'lambda:*',
-        'iam:*',
-        'cloudwatch:*',
-        'ssm:*',
-        'logs:*',
-        'arcregionswitch:*',
-      ],
-      resources: ['*'],
+      actions: ['cloudformation:DescribeStacks'],
+      resources: [`arn:aws:cloudformation:*:${this.account}:stack/${props.project}-*/*`],
     }));
 
     const cbProject = new codebuild.Project(this, 'DeployProject', {
