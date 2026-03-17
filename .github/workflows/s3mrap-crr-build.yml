@@ -2,6 +2,9 @@ name: "s3mrap-crr: build"
 on:
   pull_request:
     paths: ['s3mrap-crr/**']
+  push:
+    branches: [main, S3MRAP]
+    paths: ['s3mrap-crr/**']
   workflow_dispatch: {}
 
 jobs:
