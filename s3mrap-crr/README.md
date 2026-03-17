@@ -91,6 +91,26 @@ make deploy-monitoring   # CloudWatch alarms + dashboards
 | `s3mrap-monitoring-primary` | us-east-1 | CloudWatch alarms + dashboard, MRAP monitor Lambda |
 | `s3mrap-monitoring-secondary` | us-west-2 | CloudWatch alarms + dashboard, MRAP monitor Lambda |
 
+## Routing and Failover Design
+
+This demo implements **active-passive** routing: one region receives 100% of traffic while the other receives 0%. Failover is explicit — triggered via [ARC Region Switch Plans](https://docs.aws.amazon.com/r53recovery/latest/dg/arc-zonal-shift.region-switch.html) which invoke a Lambda to update the [MRAP traffic dial](https://docs.aws.amazon.com/AmazonS3/latest/userguide/FailoverConfiguration.html).
+
+This gives you **deterministic write locality**: you always know which region is receiving writes, which simplifies consistency reasoning, audit trails, and replication monitoring. The tradeoff is that failover is not automatic — someone (or something) must trigger the ARC Region Switch.
+
+**The alternative: active-active routing**
+
+MRAP also supports [active-active configuration](https://docs.aws.amazon.com/AmazonS3/latest/userguide/MultiRegionAccessPointRequestRouting.html) where both regions are set to 100%. In this mode, MRAP routes every request to the **closest-proximity bucket** and automatically redirects traffic if a region experiences disruption — no manual failover needed.
+
+| | Active-Passive (this demo) | Active-Active |
+|---|---|---|
+| Traffic routing | Deterministic — one region gets all writes | Proximity-based — closest region gets the request |
+| Failover | Manual via ARC (~30 seconds) | Automatic on disruption (seconds) |
+| Write locality | Known — always the active region | Unknown — depends on caller location |
+| Consistency model | Simpler — one source of truth, CRR replicates out | More complex — writes land in either region, bidirectional CRR reconciles |
+| Best for | Workloads needing predictable write region, compliance, audit | Latency-sensitive global workloads tolerant of eventual consistency |
+
+For production workloads where RTO must be near-zero and you can tolerate proximity-based write distribution, active-active is the better choice. For workloads requiring deterministic write control — regulatory compliance, ordered event processing, simplified debugging — active-passive with ARC provides explicit failover with full operational visibility.
+
 ## Demo Walkthrough
 
 ### 1. Verify Replication
