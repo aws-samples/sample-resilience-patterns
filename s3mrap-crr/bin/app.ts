@@ -7,6 +7,7 @@ import { GlobalRoutingStack } from '../lib/global-routing-stack';
 import { RoutingLambdaStack } from '../lib/routing-lambda-stack';
 import { FailoverStack } from '../lib/failover-stack';
 import { MonitoringStack } from '../lib/monitoring-stack';
+import { KmsStack, KmsReplicaStack } from '../lib/kms-stack';
 
 const app = new cdk.App();
 
@@ -37,6 +38,15 @@ const routingFnName = `${project}-mrap-routing`;
 const primaryRoutingLambdaArn = `arn:aws:lambda:${primaryRegion}:${accountId}:function:${routingFnName}`;
 const secondaryRoutingLambdaArn = `arn:aws:lambda:${secondaryRegion}:${accountId}:function:${routingFnName}`;
 
+// MRK key ARN/ID — resolved after kms stack deploys, passed via context for subsequent stacks
+const encryptionKeyId = app.node.tryGetContext('encryptionKeyId') || '';
+const encryptionKeyArnPrimary = encryptionKeyId
+  ? `arn:aws:kms:${primaryRegion}:${accountId}:key/${encryptionKeyId}`
+  : '';
+const encryptionKeyArnSecondary = encryptionKeyId
+  ? `arn:aws:kms:${secondaryRegion}:${accountId}:key/${encryptionKeyId}`
+  : '';
+
 const routingLambdaProps = {
   project,
   primaryBucketName,
@@ -55,6 +65,7 @@ function addSuppressions(stack: cdk.Stack, extra: { id: string; reason: string }
 if (targetStack === 'bootstrap' || targetStack === 'all') {
   const s = new BootstrapStack(app, `${project}-bootstrap`, {
     project, primaryRegion, secondaryRegion,
+    encryptionKeyArn: encryptionKeyArnPrimary,
     env: { account: accountId, region: primaryRegion },
   });
   addSuppressions(s, [
@@ -65,9 +76,25 @@ if (targetStack === 'bootstrap' || targetStack === 'all') {
   ]);
 }
 
+if (targetStack === 'kms' || targetStack === 'all') {
+  addSuppressions(new KmsStack(app, `${project}-kms`, {
+    project,
+    env: { account: accountId, region: primaryRegion },
+  }));
+}
+
+if (targetStack === 'kms-replica' || targetStack === 'all') {
+  addSuppressions(new KmsReplicaStack(app, `${project}-kms-replica`, {
+    project, accountId,
+    primaryKeyArn: encryptionKeyArnPrimary,
+    env: { account: accountId, region: secondaryRegion },
+  }));
+}
+
 if (targetStack === 'bucket-primary' || targetStack === 'all') {
   addSuppressions(new RegionalBucketStack(app, `${project}-bucket-primary`, {
     project,
+    encryptionKeyArn: encryptionKeyArnPrimary,
     env: { account: accountId, region: primaryRegion },
   }));
 }
@@ -75,6 +102,7 @@ if (targetStack === 'bucket-primary' || targetStack === 'all') {
 if (targetStack === 'bucket-secondary' || targetStack === 'all') {
   addSuppressions(new RegionalBucketStack(app, `${project}-bucket-secondary`, {
     project,
+    encryptionKeyArn: encryptionKeyArnSecondary,
     env: { account: accountId, region: secondaryRegion },
   }));
 }
@@ -83,6 +111,7 @@ if (targetStack === 'global-routing' || targetStack === 'all') {
   addSuppressions(new GlobalRoutingStack(app, `${project}-global-routing`, {
     project, primaryBucketName, secondaryBucketName,
     primaryRegion, secondaryRegion, accountId,
+    encryptionKeyId,
     env: { account: accountId, region: primaryRegion },
   }));
 }
@@ -117,6 +146,7 @@ if (targetStack === 'monitoring-primary' || targetStack === 'all') {
     replicationRuleId: 'to-primary', sourceRegionLabel: 'pdx', destRegionLabel: 'iad',
     reverseRuleId: 'to-secondary', reverseSourceBucketName: primaryBucketName, reverseDestBucketName: secondaryBucketName,
     primaryRegion, secondaryRegion, accountId, mrapAlias,
+    encryptionKeyArn: encryptionKeyArnPrimary,
     env: { account: accountId, region: primaryRegion },
   }));
 }
@@ -128,6 +158,7 @@ if (targetStack === 'monitoring-secondary' || targetStack === 'all') {
     replicationRuleId: 'to-secondary', sourceRegionLabel: 'iad', destRegionLabel: 'pdx',
     reverseRuleId: 'to-primary', reverseSourceBucketName: secondaryBucketName, reverseDestBucketName: primaryBucketName,
     primaryRegion, secondaryRegion, accountId, mrapAlias,
+    encryptionKeyArn: encryptionKeyArnSecondary,
     env: { account: accountId, region: secondaryRegion },
   }));
 }

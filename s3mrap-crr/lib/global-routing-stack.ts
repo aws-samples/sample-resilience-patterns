@@ -12,6 +12,7 @@ export interface GlobalRoutingStackProps extends cdk.StackProps {
   readonly primaryRegion: string;
   readonly secondaryRegion: string;
   readonly accountId: string;
+  readonly encryptionKeyId: string;
 }
 
 export class GlobalRoutingStack extends cdk.Stack {
@@ -69,17 +70,13 @@ export class GlobalRoutingStack extends cdk.Stack {
       ],
     }));
 
-    // KMS permissions for CRR with KMS-encrypted buckets (aws/s3 managed keys)
+    // KMS permissions for CRR with MRK-encrypted buckets (same key ID in both regions)
     replicationRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['kms:Decrypt'],
-      resources: [`arn:aws:kms:${props.primaryRegion}:${props.accountId}:key/*`, `arn:aws:kms:${props.secondaryRegion}:${props.accountId}:key/*`],
-      conditions: { StringLike: { 'kms:ViaService': [`s3.${props.primaryRegion}.amazonaws.com`, `s3.${props.secondaryRegion}.amazonaws.com`] } },
-    }));
-
-    replicationRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['kms:Encrypt'],
-      resources: [`arn:aws:kms:${props.primaryRegion}:${props.accountId}:key/*`, `arn:aws:kms:${props.secondaryRegion}:${props.accountId}:key/*`],
-      conditions: { StringLike: { 'kms:ViaService': [`s3.${props.primaryRegion}.amazonaws.com`, `s3.${props.secondaryRegion}.amazonaws.com`] } },
+      actions: ['kms:Decrypt', 'kms:Encrypt', 'kms:GenerateDataKey'],
+      resources: [
+        `arn:aws:kms:${props.primaryRegion}:${props.accountId}:key/${props.encryptionKeyId}`,
+        `arn:aws:kms:${props.secondaryRegion}:${props.accountId}:key/${props.encryptionKeyId}`,
+      ],
     }));
 
     // Custom resource Lambda for bidirectional CRR
@@ -95,6 +92,7 @@ export class GlobalRoutingStack extends cdk.Stack {
         PRIMARY_REGION: props.primaryRegion,
         SECONDARY_REGION: props.secondaryRegion,
         REPLICATION_ROLE_ARN: replicationRole.roleArn,
+        ENCRYPTION_KEY_ID: props.encryptionKeyId,
       },
     });
 

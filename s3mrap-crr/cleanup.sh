@@ -77,11 +77,16 @@ delete_parallel \
   "${PREFIX}-bucket-primary" "$PRIMARY_REGION" \
   "${PREFIX}-bucket-secondary" "$SECONDARY_REGION"
 
-echo "Step 5/5: Destroy bootstrap stack"
+echo "Step 5/7: Destroy KMS stacks (parallel)"
+delete_parallel \
+  "${PREFIX}-kms-replica" "$SECONDARY_REGION" \
+  "${PREFIX}-kms" "$PRIMARY_REGION"
+
+echo "Step 6/7: Destroy bootstrap stack"
 delete_stack "${PROJECT}-bootstrap" "$PRIMARY_REGION"
 
 echo ""
-echo "Step 6/6: Clean up orphaned S3 buckets"
+echo "Step 7/7: Clean up orphaned S3 buckets"
 for bucket in "${PROJECT}-${PRIMARY_REGION}-${ACCOUNT_ID}" "${PROJECT}-${SECONDARY_REGION}-${ACCOUNT_ID}" "${PROJECT}-codebuild-${ACCOUNT_ID}"; do
   if aws s3api head-bucket --bucket "$bucket" $PROFILE_ARG 2>/dev/null; then
     echo "  DEL: s3://$bucket (orphaned)"

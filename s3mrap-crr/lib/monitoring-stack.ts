@@ -23,6 +23,7 @@ export interface MonitoringStackProps extends cdk.StackProps {
   readonly secondaryRegion: string;
   readonly accountId: string;
   readonly mrapAlias: string;
+  readonly encryptionKeyArn: string;
 }
 
 export class MonitoringStack extends cdk.Stack {
@@ -33,7 +34,7 @@ export class MonitoringStack extends cdk.Stack {
     const alarmTopic = new sns.Topic(this, 'AlarmTopic', {
       topicName: `${props.project}-replication-alarms-${props.destRegionLabel}`,
       enforceSSL: true,
-      masterKey: kms.Alias.fromAliasName(this, 'SnsKey', 'alias/aws/sns'),
+      masterKey: kms.Key.fromKeyArn(this, 'SnsKey', props.encryptionKeyArn),
     });
 
     new cdk.CfnOutput(this, 'AlarmTopicArn', { value: alarmTopic.topicArn });

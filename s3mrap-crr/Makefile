@@ -33,15 +33,23 @@ bootstrap:
 	rm -rf cdk.out cdk.out.*
 	$(CDK) deploy $(PROJECT)-bootstrap $(CDK_CONTEXT) --require-approval never
 
+.PHONY: deploy-kms
+deploy-kms:
+	$(CDK) deploy $(PROJECT)-kms $(CDK_CONTEXT) -c stack=kms --require-approval never
+	$(eval ENCRYPTION_KEY_ID := $(shell aws cloudformation describe-stacks --stack-name $(PROJECT)-kms --region $(PRIMARY_REGION) --query "Stacks[0].Outputs[?OutputKey=='KeyId'].OutputValue" --output text))
+	$(CDK) deploy $(PROJECT)-kms-replica $(CDK_CONTEXT) -c stack=kms-replica -c encryptionKeyId=$(ENCRYPTION_KEY_ID) --require-approval never -o cdk.out.kmsr
+
 .PHONY: deploy-buckets
 deploy-buckets:
-	$(CDK) deploy $(PROJECT)-bucket-primary $(CDK_CONTEXT) -c stack=bucket-primary --require-approval never -o cdk.out.bp & p1=$$!; \
-	$(CDK) deploy $(PROJECT)-bucket-secondary $(CDK_CONTEXT) -c stack=bucket-secondary --require-approval never -o cdk.out.bs & p2=$$!; \
+	$(eval ENCRYPTION_KEY_ID := $(shell aws cloudformation describe-stacks --stack-name $(PROJECT)-kms --region $(PRIMARY_REGION) --query "Stacks[0].Outputs[?OutputKey=='KeyId'].OutputValue" --output text))
+	$(CDK) deploy $(PROJECT)-bucket-primary $(CDK_CONTEXT) -c stack=bucket-primary -c encryptionKeyId=$(ENCRYPTION_KEY_ID) --require-approval never -o cdk.out.bp & p1=$$!; \
+	$(CDK) deploy $(PROJECT)-bucket-secondary $(CDK_CONTEXT) -c stack=bucket-secondary -c encryptionKeyId=$(ENCRYPTION_KEY_ID) --require-approval never -o cdk.out.bs & p2=$$!; \
 	wait $$p1 && wait $$p2
 
 .PHONY: deploy-routing
 deploy-routing:
-	$(CDK) deploy $(PROJECT)-global-routing $(CDK_CONTEXT) -c stack=global-routing --require-approval never
+	$(eval ENCRYPTION_KEY_ID := $(shell aws cloudformation describe-stacks --stack-name $(PROJECT)-kms --region $(PRIMARY_REGION) --query "Stacks[0].Outputs[?OutputKey=='KeyId'].OutputValue" --output text))
+	$(CDK) deploy $(PROJECT)-global-routing $(CDK_CONTEXT) -c stack=global-routing -c encryptionKeyId=$(ENCRYPTION_KEY_ID) --require-approval never
 
 .PHONY: deploy-routing-lambdas
 deploy-routing-lambdas:
@@ -62,16 +70,17 @@ deploy-monitoring:
 	wait
 
 .PHONY: deploy
-deploy: deploy-buckets deploy-routing deploy-routing-lambdas deploy-failover-and-monitoring
+deploy: deploy-kms deploy-buckets deploy-routing deploy-routing-lambdas deploy-failover-and-monitoring
 	@echo "OK: All stacks deployed"
 
 .PHONY: deploy-failover-and-monitoring
 deploy-failover-and-monitoring:
 	$(eval MRAP_ALIAS := $(shell aws cloudformation describe-stacks --stack-name $(PROJECT)-global-routing --region $(PRIMARY_REGION) --query "Stacks[0].Outputs[?OutputKey=='MrapAlias'].OutputValue" --output text))
+	$(eval ENCRYPTION_KEY_ID := $(shell aws cloudformation describe-stacks --stack-name $(PROJECT)-kms --region $(PRIMARY_REGION) --query "Stacks[0].Outputs[?OutputKey=='KeyId'].OutputValue" --output text))
 	@echo "MRAP_ALIAS=$(MRAP_ALIAS)"
 	$(CDK) deploy $(PROJECT)-failover $(CDK_CONTEXT) -c stack=failover --require-approval never -o cdk.out.fo & p1=$$!; \
-	$(CDK) deploy $(PROJECT)-monitoring-primary $(CDK_CONTEXT) -c stack=monitoring-primary -c mrapAlias=$(MRAP_ALIAS) --require-approval never -o cdk.out.mp & p2=$$!; \
-	$(CDK) deploy $(PROJECT)-monitoring-secondary $(CDK_CONTEXT) -c stack=monitoring-secondary -c mrapAlias=$(MRAP_ALIAS) --require-approval never -o cdk.out.ms & p3=$$!; \
+	$(CDK) deploy $(PROJECT)-monitoring-primary $(CDK_CONTEXT) -c stack=monitoring-primary -c mrapAlias=$(MRAP_ALIAS) -c encryptionKeyId=$(ENCRYPTION_KEY_ID) --require-approval never -o cdk.out.mp & p2=$$!; \
+	$(CDK) deploy $(PROJECT)-monitoring-secondary $(CDK_CONTEXT) -c stack=monitoring-secondary -c mrapAlias=$(MRAP_ALIAS) -c encryptionKeyId=$(ENCRYPTION_KEY_ID) --require-approval never -o cdk.out.ms & p3=$$!; \
 	wait $$p1 && wait $$p2 && wait $$p3
 
 .PHONY: clean

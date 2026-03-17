@@ -4,7 +4,7 @@ import { RegionalBucketStack } from '../lib/regional-bucket-stack';
 
 const app = new cdk.App();
 const stack = new RegionalBucketStack(app, 'TestBucket', {
-  project: 's3mrap',
+  project: 's3mrap', encryptionKeyArn: 'arn:aws:kms:us-east-1:123456789012:key/test-key-id',
   env: { account: '123456789012', region: 'us-east-1' },
 });
 const template = Template.fromStack(stack);
