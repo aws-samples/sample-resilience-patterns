@@ -180,3 +180,9 @@ npm test    # 47 CDK assertion tests including cross-stack integration tests
 ```
 
 Run tests before committing changes to catch CloudFormation template errors, cross-stack naming mismatches, and IAM policy issues before deployment.
+
+### CDK Nag Compliance
+
+```bash
+npx cdk synth -c nag=true -c accountId=ACCOUNT_ID
+```
