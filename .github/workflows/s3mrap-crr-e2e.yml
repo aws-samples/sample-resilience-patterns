@@ -1,7 +1,6 @@
 name: "s3mrap-crr: e2e"
 on:
-  push:
-    branches: [main, S3MRAP]
+  pull_request:
     paths: ['s3mrap-crr/**']
   workflow_dispatch: {}
 
