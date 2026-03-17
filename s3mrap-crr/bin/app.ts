@@ -61,7 +61,6 @@ function addSuppressions(stack: cdk.Stack, extra: { id: string; reason: string }
 if (targetStack === 'bootstrap' || targetStack === 'all') {
   const s = new BootstrapStack(app, `${project}-bootstrap`, {
     project, primaryRegion, secondaryRegion,
-    encryptionKeyArn: encryptionKeyArnPrimary,
     env: { account: accountId, region: primaryRegion },
   });
   addSuppressions(s, [
