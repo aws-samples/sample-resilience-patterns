@@ -4,6 +4,7 @@ import * as cw_actions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as kms from 'aws-cdk-lib/aws-kms';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as path from 'path';
@@ -32,6 +33,7 @@ export class MonitoringStack extends cdk.Stack {
     const alarmTopic = new sns.Topic(this, 'AlarmTopic', {
       topicName: `${props.project}-replication-alarms-${props.destRegionLabel}`,
       enforceSSL: true,
+      masterKey: kms.Alias.fromAliasName(this, 'SnsKey', 'alias/aws/sns'),
     });
 
     new cdk.CfnOutput(this, 'AlarmTopicArn', { value: alarmTopic.topicArn });
@@ -184,6 +186,7 @@ export class MonitoringStack extends cdk.Stack {
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'mrap-monitor')),
       timeout: cdk.Duration.seconds(30),
+      reservedConcurrentExecutions: 5,
       environment: {
         ACCOUNT_ID: props.accountId,
         MRAP_ALIAS: props.mrapAlias,

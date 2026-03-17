@@ -21,7 +21,7 @@ test('Artifact bucket exists with encryption', () => {
   template.hasResourceProperties('AWS::S3::Bucket', {
     BucketEncryption: {
       ServerSideEncryptionConfiguration: [
-        { ServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } },
+        { ServerSideEncryptionByDefault: { SSEAlgorithm: 'aws:kms' } },
       ],
     },
   });
