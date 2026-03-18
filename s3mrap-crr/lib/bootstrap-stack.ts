@@ -53,8 +53,8 @@ export class BootstrapStack extends cdk.Stack {
     }));
 
     buildRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['cloudformation:DescribeStacks'],
-      resources: [`arn:aws:cloudformation:*:${this.account}:stack/${props.project}-*/*`],
+      actions: ['cloudformation:DescribeStacks', 'cloudformation:ListStacks'],
+      resources: ['*'],
     }));
 
     buildRole.addToPolicy(new iam.PolicyStatement({
