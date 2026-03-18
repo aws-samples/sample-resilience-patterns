@@ -1,0 +1,29 @@
+name: "s3mrap-crr: cleanup"
+on:
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: s3mrap-crr
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::190334034435:role/github-actions-aws-samples_sample-resilience-patterns
+          aws-region: us-east-1
+
+      - name: Cleanup
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          chmod +x cleanup.sh
+          ./cleanup.sh $ACCOUNT_ID || true
