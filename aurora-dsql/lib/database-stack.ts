@@ -65,6 +65,7 @@ export class DatabaseStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'GlobalClusterArn', {
       value: `arn:aws:rds::${this.account}:global-cluster:${props.globalClusterIdentifier}`,
     });
+    new cdk.CfnOutput(this, 'ClusterIdentifier', { value: this.cluster.clusterIdentifier });
     new cdk.CfnOutput(this, 'ClusterEndpoint', { value: this.cluster.clusterEndpoint.hostname });
     new cdk.CfnOutput(this, 'ClusterReaderEndpoint', { value: this.cluster.clusterReadEndpoint.hostname });
     new cdk.CfnOutput(this, 'SecretArn', { value: this.secret.secretArn });
