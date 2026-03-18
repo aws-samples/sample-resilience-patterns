@@ -26,8 +26,8 @@ deploy: deploy-vpc deploy-vpc-peering deploy-database deploy-dsql deploy-schema 
 
 deploy-vpc:
 	@echo "═══ Deploying VPCs ═══"
-	$(CDK) deploy $(PROJECT)-vpc-primary $(CDK_COMMON) -c stack=vpc-primary -o cdk.out.vpc-p --require-approval never &
-	$(CDK) deploy $(PROJECT)-vpc-secondary $(CDK_COMMON) -c stack=vpc-secondary -o cdk.out.vpc-s --require-approval never &
+	@$(CDK) deploy $(PROJECT)-vpc-primary $(CDK_COMMON) -c stack=vpc-primary -o cdk.out.vpc-p --require-approval never & \
+	$(CDK) deploy $(PROJECT)-vpc-secondary $(CDK_COMMON) -c stack=vpc-secondary -o cdk.out.vpc-s --require-approval never & \
 	wait
 
 deploy-vpc-peering: deploy-vpc
