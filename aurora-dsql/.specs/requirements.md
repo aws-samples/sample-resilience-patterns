@@ -275,26 +275,7 @@ Two separate applications, each behind its own Application Load Balancer:
 - Canary script tests: validate request construction and response parsing logic offline
 - Makefile dry-run validation: verify deployment ordering without actual AWS calls where feasible
 
-### FR-17: Post-Failover Reconciliation
-
-- SSM Automation Documents for post-failover data reconciliation
-- **Snapshot & Copy runbook** (deployed in primary region):
-  - Takes a snapshot of the old primary Aurora cluster before or after failover
-  - Copies the encrypted snapshot cross-region to the standby region
-  - Uses KMS key for cross-region snapshot encryption
-- **Restore & Reconcile runbook** (deployed in standby region):
-  - Restores the copied snapshot into a temporary reconciliation Aurora cluster
-  - Spins up a temporary DB instance on the reconciliation cluster
-  - Invokes a reconciliation Lambda that:
-    - Connects to both the restored snapshot cluster and the new primary (post-failover) cluster
-    - Compares row IDs across the orders table
-    - Produces a missing transaction report (rows in the old primary that didn't replicate before failover)
-  - Reconciliation cluster is temporary — operator deletes it after review
-- Reconciliation Lambda: VPC-deployed, Secrets Manager access, reserved concurrency 5
-- Triggerable via SSM console or CLI (`aws ssm start-automation-execution`)
-- IAM roles scoped to RDS snapshot/restore, cross-region copy, Lambda invoke
-
-### FR-18: Chaos Engineering (Amazon FIS)
+### FR-16: Chaos Engineering (Amazon FIS)
 
 - FIS experiment templates deployed in both regions
 - Experiment scenarios relevant to this architecture:
@@ -308,37 +289,10 @@ Two separate applications, each behind its own Application Load Balancer:
 - Configurable duration parameter (default: 20 minutes)
 - Experiments triggerable via CLI (`aws fis start-experiment`) or SSM Automation Document
 
-### FR-19: Load Generation
-
-- Load generation Lambda deployed in primary region
-- Generates sustained CRUD traffic against both Aurora Global DB and DSQL applications via ALB endpoints
-- Configurable parameters: requests per second, duration, operation mix (insert/update/delete/query ratios), target app (aurora/dsql/both)
-- SSM Automation Document for operator-friendly invocation with named parameters
-- Designed to run alongside FIS chaos experiments to validate resilience under load
-- Publishes load test metrics to CloudWatch: requests sent, errors, latency percentiles
-- VPC-deployed with access to ALB endpoints
-- Reserved concurrency: 10, timeout: 15 minutes
-
-### FR-20: Security Compliance (Open-Source Standards)
-
-- cdk-nag with AwsSolutionsChecks enabled (opt-in via `-c nag=true`)
-- All cdk-nag findings either resolved or suppressed with documented justifications
-- Suppression table documented in README (matching reference project pattern):
-  - AwsSolutions-IAM5: wildcard permissions justified per resource (FIS, CodeBuild)
-  - AwsSolutions-IAM4: AWS managed policies acceptable for demo
-  - AwsSolutions-RDS10: deletion protection configurable (disabled for E2E teardown)
-  - AwsSolutions-RDS11: default ports acceptable for demo
-  - AwsSolutions-SMG4: non-credential secrets (ARNs, endpoints) don't require rotation
-- Checkov configuration (`.checkov.yaml`) with skip rules and justifications
-- cfn_nag metadata on CloudFormation resources with inline suppression comments
-- Security scan suppressions documented in README Security section
-- MIT-0 license for open-source distribution
-- CONTRIBUTING.md and CODE_OF_CONDUCT.md included
-
 ## Out of Scope
 
 - **RDS Proxy** — connection pooling layer between Lambda and Aurora; not needed for demo-scale traffic
-- **Multi-AZ writer instances** — Aurora clusters use single writer instance per region to minimize cost
 - **Application-level connection pooling** — Lambda handles short-lived connections; no pgBouncer or similar
+- **Automated reconciliation** — no automated comparison of pre/post-failover data (manual inspection only)
 - **Custom domain with public DNS** — uses private hosted zone only; no Route 53 public zone or domain registration
 - **Multi-account deployment** — single AWS account assumed for both regions
