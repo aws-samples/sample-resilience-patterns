@@ -144,9 +144,9 @@ jobs:
             fi
           done
 
-      # --- Cleanup (always runs) ---
+      # --- Cleanup (only on success) ---
       - name: Cleanup
-        if: always()
+        if: success()
         run: |
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           chmod +x cleanup.sh
