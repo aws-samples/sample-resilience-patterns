@@ -53,13 +53,29 @@ export class BootstrapStack extends cdk.Stack {
     }));
 
     buildRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['cloudformation:DescribeStacks', 'cloudformation:ListStacks'],
+      actions: ['cloudformation:DescribeStacks', 'cloudformation:ListStacks',
+        'cloudformation:DescribeStackResources'],
       resources: ['*'],
     }));
 
     buildRole.addToPolicy(new iam.PolicyStatement({
       actions: ['ssm:GetParameter'],
       resources: [`arn:aws:ssm:*:${this.account}:parameter/cdk-bootstrap/*`],
+    }));
+
+    // Makefile needs these for VPC peering route setup and output capture
+    buildRole.addToPolicy(new iam.PolicyStatement({
+      actions: [
+        'ec2:DescribeRouteTables', 'ec2:CreateRoute',
+        'ec2:AcceptVpcPeeringConnection', 'ec2:DescribeVpcPeeringConnections',
+        'rds:DescribeDBClusters', 'rds:DescribeGlobalClusters',
+      ],
+      resources: ['*'],
+    }));
+
+    buildRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['arc-region-switch:ListRoute53HealthChecks', 'arc-region-switch:ListPlans'],
+      resources: ['*'],
     }));
 
     artifactBucket.grantRead(buildRole);
