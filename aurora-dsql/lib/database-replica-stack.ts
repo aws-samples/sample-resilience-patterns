@@ -1,0 +1,54 @@
+import * as cdk from 'aws-cdk-lib';
+import * as rds from 'aws-cdk-lib/aws-rds';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as kms from 'aws-cdk-lib/aws-kms';
+
+export interface DatabaseReplicaStackProps extends cdk.StackProps {
+  readonly project: string;
+  readonly vpc: ec2.IVpc;
+  readonly databaseSg: ec2.ISecurityGroup;
+  readonly globalClusterIdentifier: string;
+}
+
+export class DatabaseReplicaStack extends cdk.Stack {
+  public readonly cluster: rds.DatabaseCluster;
+  public readonly encryptionKey: kms.Key;
+
+  constructor(scope: cdk.App, id: string, props: DatabaseReplicaStackProps) {
+    super(scope, id, props);
+
+    this.encryptionKey = new kms.Key(this, 'DbEncryptionKey', {
+      alias: `${props.project}-db-secondary`,
+      enableKeyRotation: true,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    this.cluster = new rds.DatabaseCluster(this, 'SecondaryCluster', {
+      engine: rds.DatabaseClusterEngine.auroraPostgres({
+        version: rds.AuroraPostgresEngineVersion.VER_16_6,
+      }),
+      writer: rds.ClusterInstance.provisioned('Reader', {
+        instanceType: ec2.InstanceType.of(ec2.InstanceClass.T4G, ec2.InstanceSize.MEDIUM),
+      }),
+      vpc: props.vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      securityGroups: [props.databaseSg],
+      storageEncryptionKey: this.encryptionKey,
+      deletionProtection: false,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    // Attach to global cluster as secondary
+    const cfnCluster = this.cluster.node.defaultChild as rds.CfnDBCluster;
+    cfnCluster.globalClusterIdentifier = props.globalClusterIdentifier;
+
+    // Secondary clusters don't have credentials — they inherit from the global cluster
+    // Remove the master username/password that CDK adds by default
+    cfnCluster.addPropertyDeletionOverride('MasterUsername');
+    cfnCluster.addPropertyDeletionOverride('MasterUserPassword');
+    cfnCluster.addPropertyDeletionOverride('DatabaseName');
+
+    new cdk.CfnOutput(this, 'ClusterReaderEndpoint', { value: this.cluster.clusterReadEndpoint.hostname });
+    new cdk.CfnOutput(this, 'EncryptionKeyArn', { value: this.encryptionKey.keyArn });
+  }
+}
