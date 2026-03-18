@@ -3,6 +3,7 @@ import * as codebuild from 'aws-cdk-lib/aws-codebuild';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import * as path from 'path';
@@ -17,9 +18,16 @@ export class BootstrapStack extends cdk.Stack {
   constructor(scope: cdk.App, id: string, props: BootstrapStackProps) {
     super(scope, id, props);
 
+    const encryptionKey = new kms.Key(this, 'ArtifactKey', {
+      alias: `${props.project}-artifacts`,
+      enableKeyRotation: true,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
     const artifactBucket = new s3.Bucket(this, 'ArtifactBucket', {
       bucketName: `${props.project}-codebuild-${this.account}`,
-      encryption: s3.BucketEncryption.KMS_MANAGED,
+      encryption: s3.BucketEncryption.KMS,
+      encryptionKey,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
@@ -45,8 +53,8 @@ export class BootstrapStack extends cdk.Stack {
     }));
 
     buildRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['cloudformation:DescribeStacks'],
-      resources: [`arn:aws:cloudformation:*:${this.account}:stack/${props.project}-*/*`],
+      actions: ['cloudformation:DescribeStacks', 'cloudformation:ListStacks'],
+      resources: ['*'],
     }));
 
     buildRole.addToPolicy(new iam.PolicyStatement({

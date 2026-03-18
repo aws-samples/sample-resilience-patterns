@@ -31,29 +31,44 @@ def handler(event, context):
 def _put_replication(source_bucket, dest_bucket, dest_region, role_arn, rule_id):
     logger.info(f'Configuring replication: {source_bucket} -> {dest_bucket} ({dest_region})')
 
+    account_id = boto3.client('sts').get_caller_identity()['Account']
+    key_id = __import__('os').environ.get('ENCRYPTION_KEY_ID', '')
+
+    destination = {
+        'Bucket': f'arn:aws:s3:::{dest_bucket}',
+        'Metrics': {
+            'Status': 'Enabled',
+            'EventThreshold': {'Minutes': 15},
+        },
+        'ReplicationTime': {
+            'Status': 'Enabled',
+            'Time': {'Minutes': 15},
+        },
+    }
+
+    rule = {
+        'ID': rule_id,
+        'Status': 'Enabled',
+        'Filter': {'Prefix': ''},
+        'Destination': destination,
+        'DeleteMarkerReplication': {'Status': 'Enabled'},
+        'Priority': 1,
+    }
+
+    if key_id:
+        destination['EncryptionConfiguration'] = {
+            'ReplicaKmsKeyID': f'arn:aws:kms:{dest_region}:{account_id}:key/{key_id}',
+        }
+        rule['SourceSelectionCriteria'] = {
+            'SseKmsEncryptedObjects': {'Status': 'Enabled'},
+        }
+
     s3_regional = boto3.client('s3', region_name=_bucket_region(source_bucket))
     s3_regional.put_bucket_replication(
         Bucket=source_bucket,
         ReplicationConfiguration={
             'Role': role_arn,
-            'Rules': [{
-                'ID': rule_id,
-                'Status': 'Enabled',
-                'Filter': {'Prefix': ''},
-                'Destination': {
-                    'Bucket': f'arn:aws:s3:::{dest_bucket}',
-                    'Metrics': {
-                        'Status': 'Enabled',
-                        'EventThreshold': {'Minutes': 15},
-                    },
-                    'ReplicationTime': {
-                        'Status': 'Enabled',
-                        'Time': {'Minutes': 15},
-                    },
-                },
-                'DeleteMarkerReplication': {'Status': 'Enabled'},
-                'Priority': 1,
-            }],
+            'Rules': [rule],
         },
     )
 

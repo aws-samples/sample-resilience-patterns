@@ -9,7 +9,7 @@ const stack = new GlobalRoutingStack(app, 'TestRouting', {
   secondaryBucketName: 's3mrap-us-west-2-123456789012',
   primaryRegion: 'us-east-1',
   secondaryRegion: 'us-west-2',
-  accountId: '123456789012',
+  accountId: '123456789012', encryptionKeyId: 'test-key-id',
   env: { account: '123456789012', region: 'us-east-1' },
 });
 const template = Template.fromStack(stack);

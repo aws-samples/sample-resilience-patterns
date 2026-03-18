@@ -23,6 +23,8 @@ export interface MonitoringStackProps extends cdk.StackProps {
   readonly secondaryRegion: string;
   readonly accountId: string;
   readonly mrapAlias: string;
+  readonly encryptionKeyArn: string;
+  readonly createDashboard?: boolean;
 }
 
 export class MonitoringStack extends cdk.Stack {
@@ -33,7 +35,7 @@ export class MonitoringStack extends cdk.Stack {
     const alarmTopic = new sns.Topic(this, 'AlarmTopic', {
       topicName: `${props.project}-replication-alarms-${props.destRegionLabel}`,
       enforceSSL: true,
-      masterKey: kms.Alias.fromAliasName(this, 'SnsKey', 'alias/aws/sns'),
+      masterKey: kms.Key.fromKeyArn(this, 'SnsKey', props.encryptionKeyArn),
     });
 
     new cdk.CfnOutput(this, 'AlarmTopicArn', { value: alarmTopic.topicArn });
@@ -129,7 +131,8 @@ export class MonitoringStack extends cdk.Stack {
 
     const customNamespace = `${props.project}`;
 
-    const mrapDialPrimary = new cloudwatch.Metric({
+    if (props.createDashboard !== false) {
+      const mrapDialPrimary = new cloudwatch.Metric({
       namespace: customNamespace,
       metricName: 'MrapTrafficDial',
       dimensionsMap: { Region: props.primaryRegion },
@@ -145,9 +148,64 @@ export class MonitoringStack extends cdk.Stack {
       period: cdk.Duration.minutes(1),
     });
 
+    // --- Combined Dashboard (both replication directions) ---
+    // Uses cross-region metric references for secondary region metrics
+
+    const reverseReplicationLatency = new cloudwatch.Metric({
+      namespace: 'AWS/S3',
+      metricName: 'ReplicationLatency',
+      dimensionsMap: {
+        SourceBucket: props.reverseSourceBucketName,
+        DestinationBucket: props.reverseDestBucketName,
+        RuleId: props.reverseRuleId,
+      },
+      statistic: 'Maximum',
+      period: cdk.Duration.minutes(1),
+      region: props.primaryRegion,
+    });
+
+    const reverseBytesPending = new cloudwatch.Metric({
+      namespace: 'AWS/S3',
+      metricName: 'BytesPendingReplication',
+      dimensionsMap: {
+        SourceBucket: props.reverseSourceBucketName,
+        DestinationBucket: props.reverseDestBucketName,
+        RuleId: props.reverseRuleId,
+      },
+      statistic: 'Maximum',
+      period: cdk.Duration.minutes(1),
+      region: props.primaryRegion,
+    });
+
+    const reverseOpsPending = new cloudwatch.Metric({
+      namespace: 'AWS/S3',
+      metricName: 'OperationsPendingReplication',
+      dimensionsMap: {
+        SourceBucket: props.reverseSourceBucketName,
+        DestinationBucket: props.reverseDestBucketName,
+        RuleId: props.reverseRuleId,
+      },
+      statistic: 'Maximum',
+      period: cdk.Duration.minutes(5),
+      region: props.primaryRegion,
+    });
+
+    const reverseOpsFailed = new cloudwatch.Metric({
+      namespace: 'AWS/S3',
+      metricName: 'OperationsFailedReplication',
+      dimensionsMap: {
+        SourceBucket: props.reverseSourceBucketName,
+        DestinationBucket: props.reverseDestBucketName,
+        RuleId: props.reverseRuleId,
+      },
+      statistic: 'Sum',
+      period: cdk.Duration.minutes(1),
+      region: props.secondaryRegion,
+    });
+
     // Dashboard
     new cloudwatch.Dashboard(this, 'Dashboard', {
-      dashboardName: `${props.project}-replication-${props.sourceRegionLabel}-to-${props.destRegionLabel}`,
+      dashboardName: `${props.project}-replication`,
       widgets: [
         [
           new cloudwatch.SingleValueWidget({
@@ -157,27 +215,58 @@ export class MonitoringStack extends cdk.Stack {
           }),
         ],
         [
-          new cloudwatch.GraphWidget({
-            title: `Replication Latency (${props.sourceRegionLabel} → ${props.destRegionLabel})`,
-            left: [replicationLatency],
-            width: 12,
-          }),
-          new cloudwatch.GraphWidget({
-            title: `Bytes Pending Replication`,
-            left: [bytesPending],
-            width: 12,
+          new cloudwatch.TextWidget({
+            markdown: `## ${props.sourceRegionLabel} → ${props.destRegionLabel}`,
+            width: 24,
+            height: 1,
           }),
         ],
         [
           new cloudwatch.GraphWidget({
-            title: `Replication Operations`,
+            title: `Replication Latency`,
+            left: [replicationLatency],
+            width: 8,
+          }),
+          new cloudwatch.GraphWidget({
+            title: `Bytes Pending`,
+            left: [bytesPending],
+            width: 8,
+          }),
+          new cloudwatch.GraphWidget({
+            title: `Operations`,
             left: [opsPending],
             right: [opsFailed],
+            width: 8,
+          }),
+        ],
+        [
+          new cloudwatch.TextWidget({
+            markdown: `## ${props.destRegionLabel} → ${props.sourceRegionLabel}`,
             width: 24,
+            height: 1,
+          }),
+        ],
+        [
+          new cloudwatch.GraphWidget({
+            title: `Replication Latency`,
+            left: [reverseReplicationLatency],
+            width: 8,
+          }),
+          new cloudwatch.GraphWidget({
+            title: `Bytes Pending`,
+            left: [reverseBytesPending],
+            width: 8,
+          }),
+          new cloudwatch.GraphWidget({
+            title: `Operations`,
+            left: [reverseOpsPending],
+            right: [reverseOpsFailed],
+            width: 8,
           }),
         ],
       ],
     });
+    } // end createDashboard
 
     // MRAP Monitor Lambda — publishes traffic dial metric to this region
     const monitorFn = new lambda.Function(this, 'MrapMonitorFunction', {

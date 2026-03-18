@@ -24,17 +24,19 @@ const routingFnName = `${project}-mrap-routing`;
 
 const app = new cdk.App();
 
+const testKeyArn = `arn:aws:kms:${primaryRegion}:${accountId}:key/test-key-id`;
+
 const bucketPrimary = new RegionalBucketStack(app, 'IntBucketPrimary', {
-  project, env: { account: accountId, region: primaryRegion },
+  project, encryptionKeyArn: testKeyArn, env: { account: accountId, region: primaryRegion },
 });
 
 const bucketSecondary = new RegionalBucketStack(app, 'IntBucketSecondary', {
-  project, env: { account: accountId, region: secondaryRegion },
+  project, encryptionKeyArn: testKeyArn, env: { account: accountId, region: secondaryRegion },
 });
 
 const globalRouting = new GlobalRoutingStack(app, 'IntGlobalRouting', {
   project, primaryBucketName, secondaryBucketName,
-  primaryRegion, secondaryRegion, accountId,
+  primaryRegion, secondaryRegion, accountId, encryptionKeyId: 'test-key-id',
   env: { account: accountId, region: primaryRegion },
 });
 
@@ -128,6 +130,7 @@ test('MRAP monitor metric namespace matches monitoring dashboard namespace', () 
       replicationRuleId: 'to-primary', sourceRegionLabel: 'pdx', destRegionLabel: 'iad',
       reverseRuleId: 'to-secondary', reverseSourceBucketName: primaryBucketName, reverseDestBucketName: secondaryBucketName,
       primaryRegion, secondaryRegion, accountId, mrapAlias: 'test.mrap',
+      encryptionKeyArn: testKeyArn,
       env: { account: accountId, region: primaryRegion },
     })
   );
@@ -164,6 +167,7 @@ test('Monitor Lambda uses MRAP alias (not name) in env vars', () => {
       replicationRuleId: 'to-primary', sourceRegionLabel: 'pdx', destRegionLabel: 'iad',
       reverseRuleId: 'to-secondary', reverseSourceBucketName: primaryBucketName, reverseDestBucketName: secondaryBucketName,
       primaryRegion, secondaryRegion, accountId, mrapAlias: 'test.mrap',
+      encryptionKeyArn: testKeyArn,
       env: { account: accountId, region: primaryRegion },
     })
   );

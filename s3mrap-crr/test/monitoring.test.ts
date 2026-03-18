@@ -16,6 +16,7 @@ const stack = new MonitoringStack(app, 'TestMonitoring', {
   reverseSourceBucketName: 's3mrap-us-east-1-123456789012',
   reverseDestBucketName: 's3mrap-us-west-2-123456789012',
   primaryRegion: 'us-east-1', accountId: '123456789012', mrapAlias: 'test-alias.mrap',
+  encryptionKeyArn: 'arn:aws:kms:us-east-1:123456789012:key/test-key-id',
   secondaryRegion: 'us-west-2',
   env: { account: '123456789012', region: 'us-east-1' },
 });

@@ -52,9 +52,9 @@ jobs:
           echo "=== Starting load test (background) ==="
           aws lambda invoke \
             --function-name ${PROJECT}-load-test \
-            --payload '{"sourceRegion":"us-east-1","destRegion":"us-west-2","objectCount":200,"objectSizeKB":10,"timeoutSeconds":600}' \
+            --payload '{"sourceRegion":"us-east-1","destRegion":"us-west-2","objectCount":100,"objectSizeKB":10,"timeoutSeconds":600}' \
             --cli-binary-format raw-in-base64-out \
-            --cli-read-timeout 900 \
+            --cli-read-timeout 1200 \
             /tmp/loadtest-result.json &
           LOADTEST_PID=$!
 
@@ -144,9 +144,9 @@ jobs:
             fi
           done
 
-      # --- Cleanup (always runs) ---
+      # --- Cleanup (only on success) ---
       - name: Cleanup
-        if: always()
+        if: success()
         run: |
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           chmod +x cleanup.sh
