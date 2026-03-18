@@ -14,6 +14,7 @@ export interface FailoverStackProps extends cdk.StackProps {
   readonly mrapName: string;
   readonly primaryRoutingLambdaArn: string;
   readonly secondaryRoutingLambdaArn: string;
+  readonly encryptionKeyId?: string;
 }
 
 export class FailoverStack extends cdk.Stack {
@@ -45,6 +46,17 @@ export class FailoverStack extends cdk.Stack {
         `arn:aws:s3:::${props.secondaryBucketName}/*`,
       ],
     }));
+
+    // KMS permissions for writing to CMK-encrypted buckets
+    if (props.encryptionKeyId) {
+      loadTestFn.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['kms:GenerateDataKey', 'kms:Decrypt'],
+        resources: [
+          `arn:aws:kms:${props.primaryRegion}:${props.accountId}:key/${props.encryptionKeyId}`,
+          `arn:aws:kms:${props.secondaryRegion}:${props.accountId}:key/${props.encryptionKeyId}`,
+        ],
+      }));
+    }
 
     // --- SSM Automation Document for Load Test ---
     new ssm.CfnDocument(this, 'LoadTestDocument', {

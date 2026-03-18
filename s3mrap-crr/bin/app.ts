@@ -130,6 +130,7 @@ if (targetStack === 'failover' || targetStack === 'all') {
     project, primaryBucketName, secondaryBucketName,
     primaryRegion, secondaryRegion, accountId, mrapName,
     primaryRoutingLambdaArn, secondaryRoutingLambdaArn,
+    encryptionKeyId,
     env: { account: accountId, region: primaryRegion },
   }));
 }
