@@ -11,8 +11,8 @@ import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { NagSuppressions } from 'cdk-nag';
 import { Construct } from 'constructs';
 import { AppConfig, RegionConfig } from './utils/config';
-import { NetworkConstruct } from '@sample-resilience/shared-constructs/vpc-construct';
-import { VpcPeeringConstruct } from '@sample-resilience/shared-constructs/vpc-peering-construct';
+import { NetworkConstruct } from './constructs/vpc-construct';
+import { VpcPeeringConstruct } from './constructs/vpc-peering-construct';
 
 interface NetworkStackProps extends cdk.StackProps {
   readonly config: AppConfig;

@@ -204,7 +204,7 @@
           "exec": "npm install"
         },
         {
-          "exec": "npm update @types/jest @types/node aws-cdk esbuild jest jest-junit projen ts-jest ts-node typescript @sample-resilience/shared-constructs aws-cdk-lib cdk-nag constructs"
+          "exec": "npm update @types/jest @types/node aws-cdk esbuild jest jest-junit projen ts-jest ts-node typescript aws-cdk-lib cdk-nag constructs"
         },
         {
           "exec": "npx projen"

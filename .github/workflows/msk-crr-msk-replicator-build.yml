@@ -1,0 +1,20 @@
+name: "msk-crr-msk-replicator: build"
+on:
+  push:
+    branches-ignore: [main]
+    paths: ['msk-crr-msk-replicator/**']
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: msk-crr-msk-replicator
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - run: npx projen build

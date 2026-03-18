@@ -43,11 +43,6 @@
       "type": "build"
     },
     {
-      "name": "@sample-resilience/shared-constructs",
-      "version": "file:../shared-constructs",
-      "type": "runtime"
-    },
-    {
       "name": "aws-cdk-lib",
       "version": "^2.200.0",
       "type": "runtime"

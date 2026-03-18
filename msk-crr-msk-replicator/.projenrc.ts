@@ -9,7 +9,6 @@ const project = new awscdk.AwsCdkTypeScriptApp({
 
   deps: [
     'cdk-nag',
-    '@sample-resilience/shared-constructs@file:../shared-constructs',
   ],
 
   appEntrypoint: 'bin/app.ts',

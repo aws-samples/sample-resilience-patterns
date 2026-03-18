@@ -35,7 +35,6 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "@sample-resilience/shared-constructs": "file:../shared-constructs",
     "aws-cdk-lib": "^2.200.0",
     "cdk-nag": "^2.37.55",
     "constructs": "^10.5.1"

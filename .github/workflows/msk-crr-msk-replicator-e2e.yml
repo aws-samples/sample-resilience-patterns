@@ -1,0 +1,87 @@
+name: "msk-crr-msk-replicator: e2e"
+on:
+  pull_request:
+    paths: ['msk-crr-msk-replicator/**']
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  PROJECT: msk-crr
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: msk-crr-msk-replicator
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # --- Build & Test ---
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build and test
+        run: npx projen build
+
+      # --- Deploy ---
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.MSK_CRR_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: CDK Bootstrap (both regions)
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          npx cdk bootstrap aws://$ACCOUNT_ID/us-east-1
+          npx cdk bootstrap aws://$ACCOUNT_ID/us-west-2
+
+      - name: Deploy primary network stack
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          export AWS_ACCOUNT_ID=$ACCOUNT_ID
+          export APP_NAME=${PROJECT}
+          export ENV_NAME=e2e
+          npx cdk deploy ${PROJECT}-e2e-primary-network-stack --require-approval never
+
+      - name: Deploy secondary network stack (with peering)
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          export AWS_ACCOUNT_ID=$ACCOUNT_ID
+          export APP_NAME=${PROJECT}
+          export ENV_NAME=e2e
+          npx cdk deploy ${PROJECT}-e2e-secondary-network-stack --require-approval never
+
+      # --- Verify ---
+      - name: Verify VPC peering connection
+        run: |
+          PEERING=$(aws ec2 describe-vpc-peering-connections \
+            --filters "Name=tag:App,Values=${PROJECT}" \
+            --query 'VpcPeeringConnections[0].Status.Code' \
+            --output text --region us-east-1)
+          echo "Peering status: $PEERING"
+          if [ "$PEERING" != "active" ]; then
+            echo "FAIL: expected peering status 'active', got '$PEERING'"
+            exit 1
+          fi
+          echo "PASS: VPC peering is active"
+
+      # --- Cleanup (always runs) ---
+      - name: Cleanup
+        if: always()
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          export AWS_ACCOUNT_ID=$ACCOUNT_ID
+          export APP_NAME=${PROJECT}
+          export ENV_NAME=e2e
+          npx cdk destroy ${PROJECT}-e2e-secondary-network-stack --force || true
+          npx cdk destroy ${PROJECT}-e2e-primary-network-stack --force || true
