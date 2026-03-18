@@ -1,0 +1,12 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+    commands:
+      - npm ci
+      - npm install -g aws-cdk ts-node
+  build:
+    commands:
+      - make deploy
