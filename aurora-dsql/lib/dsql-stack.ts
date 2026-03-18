@@ -6,9 +6,6 @@ export interface DsqlStackProps extends cdk.StackProps {
 }
 
 export class DsqlStack extends cdk.Stack {
-  public readonly clusterArn: string;
-  public readonly endpoint: string;
-
   constructor(scope: cdk.App, id: string, props: DsqlStackProps) {
     super(scope, id, props);
 
@@ -23,10 +20,14 @@ export class DsqlStack extends cdk.Stack {
       },
     });
 
-    this.clusterArn = cluster.getAtt('Arn').toString();
-    this.endpoint = cluster.getAtt('Endpoint').toString();
+    // AWS::DSQL::Cluster returns ResourceIdentifier via Ref, not Arn via GetAtt
+    const clusterId = cluster.ref;
+    const endpoint = cluster.getAtt('Endpoint').toString();
 
-    new cdk.CfnOutput(this, 'ClusterArn', { value: this.clusterArn });
-    new cdk.CfnOutput(this, 'Endpoint', { value: this.endpoint });
+    new cdk.CfnOutput(this, 'ClusterId', { value: clusterId });
+    new cdk.CfnOutput(this, 'ClusterArn', {
+      value: `arn:aws:dsql:${this.region}:${this.account}:cluster/${clusterId}`,
+    });
+    new cdk.CfnOutput(this, 'Endpoint', { value: endpoint });
   }
 }
