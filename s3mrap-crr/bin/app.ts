@@ -142,6 +142,7 @@ if (targetStack === 'monitoring-primary' || targetStack === 'all') {
     reverseRuleId: 'to-secondary', reverseSourceBucketName: primaryBucketName, reverseDestBucketName: secondaryBucketName,
     primaryRegion, secondaryRegion, accountId, mrapAlias,
     encryptionKeyArn: encryptionKeyArnPrimary,
+    createDashboard: true,
     env: { account: accountId, region: primaryRegion },
   }));
 }
@@ -154,6 +155,7 @@ if (targetStack === 'monitoring-secondary' || targetStack === 'all') {
     reverseRuleId: 'to-primary', reverseSourceBucketName: secondaryBucketName, reverseDestBucketName: primaryBucketName,
     primaryRegion, secondaryRegion, accountId, mrapAlias,
     encryptionKeyArn: encryptionKeyArnSecondary,
+    createDashboard: false,
     env: { account: accountId, region: secondaryRegion },
   }));
 }

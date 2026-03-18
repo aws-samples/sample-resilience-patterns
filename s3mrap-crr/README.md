@@ -152,9 +152,8 @@ aws lambda invoke \
 
 ### 3. View Dashboards
 
-Open CloudWatch dashboards in each region:
-- `s3mrap-replication-iad-to-pdx` (us-west-2)
-- `s3mrap-replication-pdx-to-iad` (us-east-1)
+Open the CloudWatch dashboard in us-east-1:
+- `s3mrap-replication` — shows both replication directions and MRAP traffic dial
 
 ### 4. Trigger Failover
 
