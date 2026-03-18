@@ -48,6 +48,7 @@ export class DatabaseReplicaStack extends cdk.Stack {
     cfnCluster.addPropertyDeletionOverride('MasterUserPassword');
     cfnCluster.addPropertyDeletionOverride('DatabaseName');
 
+    new cdk.CfnOutput(this, 'ClusterIdentifier', { value: this.cluster.clusterIdentifier });
     new cdk.CfnOutput(this, 'ClusterReaderEndpoint', { value: this.cluster.clusterReadEndpoint.hostname });
     new cdk.CfnOutput(this, 'EncryptionKeyArn', { value: this.encryptionKey.keyArn });
   }

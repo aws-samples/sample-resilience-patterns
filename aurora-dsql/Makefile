@@ -47,12 +47,12 @@ deploy-vpc-peering: deploy-vpc
 deploy-database: deploy-vpc
 	@echo "═══ Deploying Aurora Global Database ═══"
 	@PRIMARY_VPC_ID=$(call so,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),VpcId) && \
-	PRIMARY_DB_SG=$(call sr,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),DatabaseSg) && \
+	PRIMARY_DB_SG=$(call so,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),DatabaseSgId) && \
 	$(CDK) deploy $(PROJECT)-db-primary $(CDK_COMMON) -c stack=db-primary \
 		-c primaryVpcId=$$PRIMARY_VPC_ID -c primaryDbSgId=$$PRIMARY_DB_SG \
 		--require-approval never && \
 	SECONDARY_VPC_ID=$(call so,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),VpcId) && \
-	SECONDARY_DB_SG=$(call sr,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),DatabaseSg) && \
+	SECONDARY_DB_SG=$(call so,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),DatabaseSgId) && \
 	$(CDK) deploy $(PROJECT)-db-secondary $(CDK_COMMON) -c stack=db-secondary \
 		-c secondaryVpcId=$$SECONDARY_VPC_ID -c secondaryDbSgId=$$SECONDARY_DB_SG \
 		--require-approval never -o cdk.out.db-s
@@ -70,7 +70,7 @@ deploy-dsql: deploy-vpc
 deploy-schema: deploy-database
 	@echo "═══ Deploying schema migration ═══"
 	@PRIMARY_VPC_ID=$(call so,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),VpcId) && \
-	PRIMARY_LAMBDA_SG=$(call sr,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),LambdaSg) && \
+	PRIMARY_LAMBDA_SG=$(call so,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),LambdaSgId) && \
 	SECRET_ARN=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),SecretArn) && \
 	ENC_KEY_ARN=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),EncryptionKeyArn) && \
 	$(CDK) deploy $(PROJECT)-schema $(CDK_COMMON) -c stack=schema \
@@ -82,10 +82,10 @@ deploy-aurora-app: deploy-schema
 	@echo "═══ Deploying Aurora app stacks ═══"
 	@export PRIMARY_VPC_ID=$(call so,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),VpcId) && \
 	export SECONDARY_VPC_ID=$(call so,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),VpcId) && \
-	export PRIMARY_LAMBDA_SG=$(call sr,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),LambdaSg) && \
-	export SECONDARY_LAMBDA_SG=$(call sr,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),LambdaSg) && \
-	export PRIMARY_ALB_SG=$(call sr,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),AlbSg) && \
-	export SECONDARY_ALB_SG=$(call sr,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),AlbSg) && \
+	export PRIMARY_LAMBDA_SG=$(call so,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),LambdaSgId) && \
+	export SECONDARY_LAMBDA_SG=$(call so,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),LambdaSgId) && \
+	export PRIMARY_ALB_SG=$(call so,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),AlbSgId) && \
+	export SECONDARY_ALB_SG=$(call so,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),AlbSgId) && \
 	export SECRET_ARN=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),SecretArn) && \
 	export ENC_KEY_ARN=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),EncryptionKeyArn) && \
 	$(CDK) deploy $(PROJECT)-aurora-app-primary $(CDK_COMMON) -c stack=aurora-app-primary \
@@ -102,10 +102,10 @@ deploy-dsql-app: deploy-dsql
 	@echo "═══ Deploying DSQL app stacks ═══"
 	@export PRIMARY_VPC_ID=$(call so,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),VpcId) && \
 	export SECONDARY_VPC_ID=$(call so,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),VpcId) && \
-	export PRIMARY_LAMBDA_SG=$(call sr,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),LambdaSg) && \
-	export SECONDARY_LAMBDA_SG=$(call sr,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),LambdaSg) && \
-	export PRIMARY_ALB_SG=$(call sr,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),AlbSg) && \
-	export SECONDARY_ALB_SG=$(call sr,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),AlbSg) && \
+	export PRIMARY_LAMBDA_SG=$(call so,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),LambdaSgId) && \
+	export SECONDARY_LAMBDA_SG=$(call so,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),LambdaSgId) && \
+	export PRIMARY_ALB_SG=$(call so,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),AlbSgId) && \
+	export SECONDARY_ALB_SG=$(call so,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),AlbSgId) && \
 	export DSQL_P_ENDPOINT=$(call so,$(PROJECT)-dsql-primary,$(PRIMARY_REGION),Endpoint) && \
 	export DSQL_S_ENDPOINT=$(call so,$(PROJECT)-dsql-secondary,$(SECONDARY_REGION),Endpoint) && \
 	$(CDK) deploy $(PROJECT)-dsql-app-primary $(CDK_COMMON) -c stack=dsql-app-primary \
@@ -174,8 +174,8 @@ deploy-dns-with-hc: deploy-failover-plan
 
 deploy-synthetics: deploy-dns-with-hc
 	@echo "═══ Deploying Synthetics canaries ═══"
-	@export P_SYNTH_SG=$(call sr,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),SyntheticsSg) && \
-	export S_SYNTH_SG=$(call sr,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),SyntheticsSg) && \
+	@export P_SYNTH_SG=$(call so,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),SyntheticsSgId) && \
+	export S_SYNTH_SG=$(call so,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),SyntheticsSgId) && \
 	export PRIMARY_VPC_ID=$(call so,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),VpcId) && \
 	export SECONDARY_VPC_ID=$(call so,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),VpcId) && \
 	export P_AURORA_ALB=$(call so,$(PROJECT)-aurora-app-primary,$(PRIMARY_REGION),AlbDnsName) && \
@@ -198,13 +198,13 @@ deploy-monitoring: deploy-database
 	@echo "═══ Deploying monitoring stacks ═══"
 	@export PRIMARY_VPC_ID=$(call so,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),VpcId) && \
 	export SECONDARY_VPC_ID=$(call so,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),VpcId) && \
-	export PRIMARY_LAMBDA_SG=$(call sr,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),LambdaSg) && \
-	export SECONDARY_LAMBDA_SG=$(call sr,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),LambdaSg) && \
+	export PRIMARY_LAMBDA_SG=$(call so,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),LambdaSgId) && \
+	export SECONDARY_LAMBDA_SG=$(call so,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),LambdaSgId) && \
 	export P_SECRET=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),SecretArn) && \
 	export P_KEY=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),EncryptionKeyArn) && \
 	export S_KEY=$(call so,$(PROJECT)-db-secondary,$(SECONDARY_REGION),EncryptionKeyArn) && \
-	export P_CLUSTER_ID=$(call sr,$(PROJECT)-db-primary,$(PRIMARY_REGION),PrimaryCluster) && \
-	export S_CLUSTER_ID=$(call sr,$(PROJECT)-db-secondary,$(SECONDARY_REGION),SecondaryCluster) && \
+	export P_CLUSTER_ID=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),ClusterIdentifier) && \
+	export S_CLUSTER_ID=$(call so,$(PROJECT)-db-secondary,$(SECONDARY_REGION),ClusterIdentifier) && \
 	$(CDK) deploy $(PROJECT)-monitoring-primary $(CDK_COMMON) -c stack=monitoring-primary \
 		-c primaryVpcId=$$PRIMARY_VPC_ID -c primaryLambdaSgId=$$PRIMARY_LAMBDA_SG \
 		-c dbClusterIdentifier=$$P_CLUSTER_ID -c secretArn=$$P_SECRET -c encryptionKeyArn=$$P_KEY \
@@ -221,8 +221,8 @@ deploy-reconciliation: deploy-database
 	@echo "═══ Deploying reconciliation stacks ═══"
 	@export PRIMARY_VPC_ID=$(call so,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),VpcId) && \
 	export SECONDARY_VPC_ID=$(call so,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),VpcId) && \
-	export PRIMARY_LAMBDA_SG=$(call sr,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),LambdaSg) && \
-	export SECONDARY_LAMBDA_SG=$(call sr,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),LambdaSg) && \
+	export PRIMARY_LAMBDA_SG=$(call so,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),LambdaSgId) && \
+	export SECONDARY_LAMBDA_SG=$(call so,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),LambdaSgId) && \
 	export P_SECRET=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),SecretArn) && \
 	export P_KEY=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),EncryptionKeyArn) && \
 	export S_KEY=$(call so,$(PROJECT)-db-secondary,$(SECONDARY_REGION),EncryptionKeyArn) && \
@@ -239,7 +239,7 @@ deploy-reconciliation: deploy-database
 deploy-loadgen: deploy-aurora-app deploy-dsql-app
 	@echo "═══ Deploying load generation ═══"
 	@PRIMARY_VPC_ID=$(call so,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),VpcId) && \
-	PRIMARY_LAMBDA_SG=$(call sr,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),LambdaSg) && \
+	PRIMARY_LAMBDA_SG=$(call so,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),LambdaSgId) && \
 	P_AURORA_ALB=$(call so,$(PROJECT)-aurora-app-primary,$(PRIMARY_REGION),AlbDnsName) && \
 	P_DSQL_ALB=$(call so,$(PROJECT)-dsql-app-primary,$(PRIMARY_REGION),AlbDnsName) && \
 	$(CDK) deploy $(PROJECT)-loadgen $(CDK_COMMON) -c stack=loadgen \
