@@ -49,7 +49,7 @@ describe('DatabaseStack', () => {
   test('creates writer DB instance', () => {
     template.resourceCountIs('AWS::RDS::DBInstance', 1);
     template.hasResourceProperties('AWS::RDS::DBInstance', {
-      DBInstanceClass: 'db.t4g.medium',
+      DBInstanceClass: 'db.r6g.large',
     });
   });
 

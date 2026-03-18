@@ -39,7 +39,7 @@ export class DatabaseStack extends cdk.Stack {
         version: rds.AuroraPostgresEngineVersion.VER_16_6,
       }),
       writer: rds.ClusterInstance.provisioned('Writer', {
-        instanceType: ec2.InstanceType.of(ec2.InstanceClass.T4G, ec2.InstanceSize.MEDIUM),
+        instanceType: ec2.InstanceType.of(ec2.InstanceClass.R6G, ec2.InstanceSize.LARGE),
       }),
       vpc: props.vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
