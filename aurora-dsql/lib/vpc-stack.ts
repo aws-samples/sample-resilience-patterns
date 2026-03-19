@@ -98,6 +98,12 @@ export class VpcStack extends cdk.Stack {
     // Outputs
     new cdk.CfnOutput(this, 'VpcId', { value: this.vpc.vpcId });
     new cdk.CfnOutput(this, 'VpcCidr', { value: props.cidr });
+    new cdk.CfnOutput(this, 'IsolatedSubnetIds', {
+      value: this.vpc.isolatedSubnets.map(s => s.subnetId).join(','),
+    });
+    new cdk.CfnOutput(this, 'AvailabilityZones', {
+      value: this.vpc.availabilityZones.join(','),
+    });
     new cdk.CfnOutput(this, 'AlbSgId', { value: this.albSg.securityGroupId });
     new cdk.CfnOutput(this, 'DatabaseSgId', { value: this.databaseSg.securityGroupId });
     new cdk.CfnOutput(this, 'LambdaSgId', { value: this.lambdaSg.securityGroupId });

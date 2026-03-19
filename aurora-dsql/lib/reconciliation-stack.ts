@@ -5,10 +5,12 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as path from 'path';
 
+import { importVpc, importSg, VpcImportProps } from './imports';
+
 export interface ReconciliationStackProps extends cdk.StackProps {
   readonly project: string;
-  readonly vpc: ec2.IVpc;
-  readonly lambdaSg: ec2.ISecurityGroup;
+  readonly vpcImport: VpcImportProps;
+  readonly lambdaSgId: string;
   readonly secretArn: string;
   readonly encryptionKeyArn: string;
   readonly globalClusterIdentifier: string;
@@ -20,14 +22,17 @@ export class ReconciliationStack extends cdk.Stack {
   constructor(scope: cdk.App, id: string, props: ReconciliationStackProps) {
     super(scope, id, props);
 
+    const vpc = importVpc(this, props.vpcImport);
+    const lambdaSg = importSg(this, 'LambdaSg', props.lambdaSgId);
+
     const reconcileFn = new lambda.Function(this, 'ReconcileFunction', {
       functionName: `${props.project}-reconcile-${this.region}`,
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: 'index.lambda_handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'reconciliation')),
-      vpc: props.vpc,
+      vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
-      securityGroups: [props.lambdaSg],
+      securityGroups: [lambdaSg],
       timeout: cdk.Duration.minutes(10),
       reservedConcurrentExecutions: 5,
       environment: {

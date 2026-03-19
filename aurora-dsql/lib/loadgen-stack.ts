@@ -5,10 +5,12 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as path from 'path';
 
+import { importVpc, importSg, VpcImportProps } from './imports';
+
 export interface LoadGenStackProps extends cdk.StackProps {
   readonly project: string;
-  readonly vpc: ec2.IVpc;
-  readonly lambdaSg: ec2.ISecurityGroup;
+  readonly vpcImport: VpcImportProps;
+  readonly lambdaSgId: string;
   readonly auroraAlbDns: string;
   readonly dsqlAlbDns: string;
 }
@@ -17,14 +19,17 @@ export class LoadGenStack extends cdk.Stack {
   constructor(scope: cdk.App, id: string, props: LoadGenStackProps) {
     super(scope, id, props);
 
+    const vpc = importVpc(this, props.vpcImport);
+    const lambdaSg = importSg(this, 'LambdaSg', props.lambdaSgId);
+
     const loadGenFn = new lambda.Function(this, 'LoadGenFunction', {
       functionName: `${props.project}-loadgen`,
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'loadgen')),
-      vpc: props.vpc,
+      vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
-      securityGroups: [props.lambdaSg],
+      securityGroups: [lambdaSg],
       timeout: cdk.Duration.minutes(15),
       memorySize: 512,
       reservedConcurrentExecutions: 10,

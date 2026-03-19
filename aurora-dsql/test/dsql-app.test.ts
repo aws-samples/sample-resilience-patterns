@@ -1,25 +1,14 @@
 import * as cdk from 'aws-cdk-lib';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import { DsqlAppStack } from '../lib/dsql-app-stack';
 
 function createStack() {
   const app = new cdk.App();
-  const vpcStack = new cdk.Stack(app, 'VpcStack', {
-    env: { account: '123456789012', region: 'us-east-1' },
-  });
-  const vpc = new ec2.Vpc(vpcStack, 'Vpc', {
-    maxAzs: 2, natGateways: 0,
-    subnetConfiguration: [{ name: 'Isolated', subnetType: ec2.SubnetType.PRIVATE_ISOLATED, cidrMask: 24 }],
-  });
-  const lambdaSg = new ec2.SecurityGroup(vpcStack, 'LambdaSg', { vpc });
-  const albSg = new ec2.SecurityGroup(vpcStack, 'AlbSg', { vpc });
-
   return Template.fromStack(new DsqlAppStack(app, 'TestDsqlApp', {
     project: 'test',
-    vpc,
-    lambdaSg,
-    albSg,
+    vpcImport: { vpcId: 'vpc-123', subnetIds: 'subnet-1,subnet-2', azs: 'us-east-1a,us-east-1b' },
+    lambdaSgId: 'sg-lambda',
+    albSgId: 'sg-alb',
     dsqlEndpoint: 'test-cluster.dsql.us-east-1.on.aws',
     env: { account: '123456789012', region: 'us-east-1' },
   }));

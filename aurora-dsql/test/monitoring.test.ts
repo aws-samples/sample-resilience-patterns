@@ -1,24 +1,16 @@
 import * as cdk from 'aws-cdk-lib';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import { MonitoringStack } from '../lib/monitoring-stack';
 
 function createStack() {
   const app = new cdk.App();
-  const vpcStack = new cdk.Stack(app, 'VpcStack', { env: { account: '123456789012', region: 'us-east-1' } });
-  const vpc = new ec2.Vpc(vpcStack, 'Vpc', {
-    maxAzs: 2, natGateways: 0,
-    subnetConfiguration: [{ name: 'Isolated', subnetType: ec2.SubnetType.PRIVATE_ISOLATED, cidrMask: 24 }],
-  });
-  const lambdaSg = new ec2.SecurityGroup(vpcStack, 'LambdaSg', { vpc });
-
   return Template.fromStack(new MonitoringStack(app, 'TestMonitoring', {
     project: 'test',
     primaryRegion: 'us-east-1',
     secondaryRegion: 'us-west-2',
     dbClusterIdentifier: 'test-cluster',
-    vpc,
-    lambdaSg,
+    vpcImport: { vpcId: 'vpc-123', subnetIds: 'subnet-1,subnet-2', azs: 'us-east-1a,us-east-1b' },
+    lambdaSgId: 'sg-lambda',
     secretArn: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:test-abc',
     encryptionKeyArn: 'arn:aws:kms:us-east-1:123456789012:key/test-key',
     remoteSecretArn: 'arn:aws:secretsmanager:us-west-2:123456789012:secret:test-abc',

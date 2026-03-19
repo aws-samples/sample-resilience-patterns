@@ -6,11 +6,13 @@ import * as targets from 'aws-cdk-lib/aws-elasticloadbalancingv2-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as path from 'path';
 
+import { importVpc, importSg, VpcImportProps } from './imports';
+
 export interface AuroraAppStackProps extends cdk.StackProps {
   readonly project: string;
-  readonly vpc: ec2.IVpc;
-  readonly lambdaSg: ec2.ISecurityGroup;
-  readonly albSg: ec2.ISecurityGroup;
+  readonly vpcImport: VpcImportProps;
+  readonly lambdaSgId: string;
+  readonly albSgId: string;
   readonly secretArn: string;
   readonly encryptionKeyArn: string;
 }
@@ -22,14 +24,18 @@ export class AuroraAppStack extends cdk.Stack {
   constructor(scope: cdk.App, id: string, props: AuroraAppStackProps) {
     super(scope, id, props);
 
+    const vpc = importVpc(this, props.vpcImport);
+    const lambdaSg = importSg(this, 'LambdaSg', props.lambdaSgId);
+    const albSg = importSg(this, 'AlbSg', props.albSgId);
+
     this.fn = new lambda.Function(this, 'AuroraAppFunction', {
       functionName: `${props.project}-aurora-app-${this.region}`,
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'aurora-app')),
-      vpc: props.vpc,
+      vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
-      securityGroups: [props.lambdaSg],
+      securityGroups: [lambdaSg],
       timeout: cdk.Duration.seconds(60),
       reservedConcurrentExecutions: 5,
       environment: {
@@ -49,10 +55,10 @@ export class AuroraAppStack extends cdk.Stack {
 
     this.alb = new elbv2.ApplicationLoadBalancer(this, 'Alb', {
       loadBalancerName: `${props.project}-aurora-${this.region}`,
-      vpc: props.vpc,
+      vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
       internetFacing: false,
-      securityGroup: props.albSg,
+      securityGroup: albSg,
     });
 
     const listener = this.alb.addListener('HttpListener', {

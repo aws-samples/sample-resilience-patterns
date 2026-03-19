@@ -3,10 +3,12 @@ import * as rds from 'aws-cdk-lib/aws-rds';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as kms from 'aws-cdk-lib/aws-kms';
 
+import { importVpc, importSg, VpcImportProps } from './imports';
+
 export interface DatabaseReplicaStackProps extends cdk.StackProps {
   readonly project: string;
-  readonly vpc: ec2.IVpc;
-  readonly databaseSg: ec2.ISecurityGroup;
+  readonly vpcImport: VpcImportProps;
+  readonly databaseSgId: string;
   readonly globalClusterIdentifier: string;
 }
 
@@ -16,6 +18,9 @@ export class DatabaseReplicaStack extends cdk.Stack {
 
   constructor(scope: cdk.App, id: string, props: DatabaseReplicaStackProps) {
     super(scope, id, props);
+
+    const vpc = importVpc(this, props.vpcImport);
+    const databaseSg = importSg(this, 'DatabaseSg', props.databaseSgId);
 
     this.encryptionKey = new kms.Key(this, 'DbEncryptionKey', {
       alias: `${props.project}-db-secondary`,
@@ -30,9 +35,9 @@ export class DatabaseReplicaStack extends cdk.Stack {
       writer: rds.ClusterInstance.provisioned('Reader', {
         instanceType: ec2.InstanceType.of(ec2.InstanceClass.R6G, ec2.InstanceSize.LARGE),
       }),
-      vpc: props.vpc,
+      vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
-      securityGroups: [props.databaseSg],
+      securityGroups: [databaseSg],
       storageEncryptionKey: this.encryptionKey,
       deletionProtection: false,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
@@ -43,7 +48,6 @@ export class DatabaseReplicaStack extends cdk.Stack {
     cfnCluster.globalClusterIdentifier = props.globalClusterIdentifier;
 
     // Secondary clusters don't have credentials — they inherit from the global cluster
-    // Remove the master username/password that CDK adds by default
     cfnCluster.addPropertyDeletionOverride('MasterUsername');
     cfnCluster.addPropertyDeletionOverride('MasterUserPassword');
     cfnCluster.addPropertyDeletionOverride('DatabaseName');
