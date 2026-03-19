@@ -82,7 +82,8 @@ deploy-dsql-app: deploy-dsql deploy-schema
 		--require-approval never -o cdk.out.dapp-s
 
 deploy-schema: deploy-database
-	@echo "═══ Deploying schema migration ═══"	@SECRET_ARN=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),SecretArn) && \
+	@echo "═══ Deploying schema migration ═══"
+	@SECRET_ARN=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),SecretArn) && \
 	ENC_KEY_ARN=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),EncryptionKeyArn) && \
 	$(CDK) deploy $(PROJECT)-schema $(CDK_COMMON) -c stack=schema \
 		$(call vpc_ctx,$(PROJECT)-vpc-primary,$(PRIMARY_REGION)) \
