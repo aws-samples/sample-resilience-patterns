@@ -15,6 +15,7 @@ export interface AuroraAppStackProps extends cdk.StackProps {
   readonly albSgId: string;
   readonly secretArn: string;
   readonly encryptionKeyArn: string;
+  readonly dbHostOverride?: string;
 }
 
 export class AuroraAppStack extends cdk.Stack {
@@ -40,6 +41,7 @@ export class AuroraAppStack extends cdk.Stack {
       reservedConcurrentExecutions: 5,
       environment: {
         DB_SECRET_ARN: `${props.project}/db-credentials`,
+        ...(props.dbHostOverride ? { DB_HOST_OVERRIDE: props.dbHostOverride } : {}),
       },
     });
 

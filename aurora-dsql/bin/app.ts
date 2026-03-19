@@ -94,7 +94,7 @@ if (target === 'aurora-app-primary') {
 }
 if (target === 'aurora-app-secondary') {
   suppress(new AuroraAppStack(app, `${project}-aurora-app-secondary`, {
-    project, vpcImport: vpcImport(), lambdaSgId: c('lambdaSgId'), albSgId: c('albSgId'), secretArn: c('secretArn'), encryptionKeyArn: c('encryptionKeyArn'), env: env(secondaryRegion),
+    project, vpcImport: vpcImport(), lambdaSgId: c('lambdaSgId'), albSgId: c('albSgId'), secretArn: c('secretArn'), encryptionKeyArn: c('encryptionKeyArn'), dbHostOverride: c('dbHostOverride'), env: env(secondaryRegion),
   }));
 }
 
