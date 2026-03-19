@@ -13,7 +13,8 @@ def get_db_credentials():
     secret_id = os.environ['DB_SECRET_ARN']
     sm = boto3.client('secretsmanager')
     secret = json.loads(sm.get_secret_value(SecretId=secret_id)['SecretString'])
-    return secret['host'], secret['port'], secret['username'], secret['password'], secret['dbname']
+    host = os.environ.get('DB_HOST_OVERRIDE', secret['host'])
+    return host, secret['port'], secret['username'], secret['password'], secret['dbname']
 
 
 def get_connection():

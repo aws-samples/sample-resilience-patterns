@@ -75,7 +75,7 @@ deploy-aurora-app: deploy-schema
 		--require-approval never -o cdk.out.aapp-p && \
 	$(CDK) deploy $(PROJECT)-aurora-app-secondary $(CDK_COMMON) -c stack=aurora-app-secondary \
 		$(call vpc_ctx,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION)) \
-		-c secretArn=$$SECRET_ARN -c encryptionKeyArn=$$ENC_KEY_ARN \
+		-c secretArn=$$SECRET_ARN -c encryptionKeyArn=$$ENC_KEY_ARN -c dbHostOverride=$$S_READER_ENDPOINT \
 		--require-approval never -o cdk.out.aapp-s
 
 deploy-dns: deploy-aurora-app
