@@ -26,7 +26,8 @@ define vpc_ctx
 endef
 
 deploy: deploy-vpc deploy-vpc-peering deploy-database deploy-dsql deploy-schema \
-	deploy-aurora-app deploy-dsql-app deploy-dns deploy-monitoring deploy-chaos
+	deploy-aurora-app deploy-dsql-app deploy-dns deploy-failover-plan deploy-dns-with-hc \
+	deploy-synthetics deploy-monitoring deploy-reconciliation deploy-loadgen deploy-chaos
 	@echo "✅ All stacks deployed"
 
 deploy-vpc:
@@ -154,8 +155,84 @@ deploy-chaos: deploy-vpc deploy-database
 		--require-approval never -o cdk.out.chaos-s & \
 	wait
 
+deploy-failover-plan: deploy-dns
+	@echo "═══ Deploying ARC Region Switch Plan ═══"
+	@HZ_ID=$(call so,$(PROJECT)-dns,$(PRIMARY_REGION),HostedZoneIdOutput) && \
+	P_CLUSTER_ARN=$$(aws rds describe-db-clusters --region $(PRIMARY_REGION) --query "DBClusters[?GlobalClusterIdentifier=='$(GLOBAL_CLUSTER_ID)'].DBClusterArn" --output text) && \
+	S_CLUSTER_ARN=$$(aws rds describe-db-clusters --region $(SECONDARY_REGION) --query "DBClusters[?GlobalClusterIdentifier=='$(GLOBAL_CLUSTER_ID)'].DBClusterArn" --output text) && \
+	$(CDK) deploy $(PROJECT)-failover-plan $(CDK_COMMON) -c stack=failover-plan \
+		-c hostedZoneId=$$HZ_ID \
+		-c primaryClusterArn=$$P_CLUSTER_ARN -c secondaryClusterArn=$$S_CLUSTER_ARN \
+		--require-approval never
+
+deploy-dns-with-hc: deploy-failover-plan
+	@echo "═══ Re-deploying DNS with ARC health check IDs ═══"
+	@PLAN_ARN=$(call so,$(PROJECT)-failover-plan,$(PRIMARY_REGION),PlanArn) && \
+	P_HC_ID=$$(aws arc-region-switch list-route53-health-checks --arn $$PLAN_ARN --region $(PRIMARY_REGION) --output json 2>/dev/null | jq -r '.healthChecks[] | select(.region == "$(PRIMARY_REGION)") | .healthCheckId' 2>/dev/null || echo "") && \
+	S_HC_ID=$$(aws arc-region-switch list-route53-health-checks --arn $$PLAN_ARN --region $(PRIMARY_REGION) --output json 2>/dev/null | jq -r '.healthChecks[] | select(.region == "$(SECONDARY_REGION)") | .healthCheckId' 2>/dev/null || echo "") && \
+	if [ -n "$$P_HC_ID" ] && [ -n "$$S_HC_ID" ]; then \
+		PRIMARY_VPC_ID=$(call so,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),VpcId) && \
+		SECONDARY_VPC_ID=$(call so,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),VpcId) && \
+		P_AURORA_ALB_DNS=$(call so,$(PROJECT)-aurora-app-primary,$(PRIMARY_REGION),AlbDnsName) && \
+		P_AURORA_ALB_HZ=$(call so,$(PROJECT)-aurora-app-primary,$(PRIMARY_REGION),AlbHostedZoneId) && \
+		S_AURORA_ALB_DNS=$(call so,$(PROJECT)-aurora-app-secondary,$(SECONDARY_REGION),AlbDnsName) && \
+		S_AURORA_ALB_HZ=$(call so,$(PROJECT)-aurora-app-secondary,$(SECONDARY_REGION),AlbHostedZoneId) && \
+		P_DSQL_ALB_DNS=$(call so,$(PROJECT)-dsql-app-primary,$(PRIMARY_REGION),AlbDnsName) && \
+		P_DSQL_ALB_HZ=$(call so,$(PROJECT)-dsql-app-primary,$(PRIMARY_REGION),AlbHostedZoneId) && \
+		S_DSQL_ALB_DNS=$(call so,$(PROJECT)-dsql-app-secondary,$(SECONDARY_REGION),AlbDnsName) && \
+		S_DSQL_ALB_HZ=$(call so,$(PROJECT)-dsql-app-secondary,$(SECONDARY_REGION),AlbHostedZoneId) && \
+		$(CDK) deploy $(PROJECT)-dns $(CDK_COMMON) -c stack=dns \
+			-c primaryVpcId=$$PRIMARY_VPC_ID -c secondaryVpcId=$$SECONDARY_VPC_ID \
+			-c primaryAuroraAlbDns=$$P_AURORA_ALB_DNS -c primaryAuroraAlbHostedZoneId=$$P_AURORA_ALB_HZ \
+			-c secondaryAuroraAlbDns=$$S_AURORA_ALB_DNS -c secondaryAuroraAlbHostedZoneId=$$S_AURORA_ALB_HZ \
+			-c primaryDsqlAlbDns=$$P_DSQL_ALB_DNS -c primaryDsqlAlbHostedZoneId=$$P_DSQL_ALB_HZ \
+			-c secondaryDsqlAlbDns=$$S_DSQL_ALB_DNS -c secondaryDsqlAlbHostedZoneId=$$S_DSQL_ALB_HZ \
+			-c primaryHealthCheckId=$$P_HC_ID -c secondaryHealthCheckId=$$S_HC_ID \
+			--require-approval never; \
+	else \
+		echo "No ARC health checks found — skipping DNS health check wiring"; \
+	fi
+
+deploy-synthetics: deploy-dns-with-hc
+	@echo "═══ Deploying Synthetics canaries ═══"
+	@P_AURORA_ALB=$(call so,$(PROJECT)-aurora-app-primary,$(PRIMARY_REGION),AlbDnsName) && \
+	S_AURORA_ALB=$(call so,$(PROJECT)-aurora-app-secondary,$(SECONDARY_REGION),AlbDnsName) && \
+	P_DSQL_ALB=$(call so,$(PROJECT)-dsql-app-primary,$(PRIMARY_REGION),AlbDnsName) && \
+	S_DSQL_ALB=$(call so,$(PROJECT)-dsql-app-secondary,$(SECONDARY_REGION),AlbDnsName) && \
+	$(CDK) deploy $(PROJECT)-synthetics-primary $(CDK_COMMON) -c stack=synthetics-primary \
+		$(call vpc_ctx,$(PROJECT)-vpc-primary,$(PRIMARY_REGION)) \
+		-c localAuroraAlbDns=$$P_AURORA_ALB -c localDsqlAlbDns=$$P_DSQL_ALB \
+		--require-approval never -o cdk.out.synth-p && \
+	$(CDK) deploy $(PROJECT)-synthetics-secondary $(CDK_COMMON) -c stack=synthetics-secondary \
+		$(call vpc_ctx,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION)) \
+		-c localAuroraAlbDns=$$S_AURORA_ALB -c localDsqlAlbDns=$$S_DSQL_ALB \
+		--require-approval never -o cdk.out.synth-s
+
+deploy-reconciliation: deploy-database
+	@echo "═══ Deploying reconciliation stacks ═══"
+	@P_SECRET=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),SecretArn) && \
+	P_KEY=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),EncryptionKeyArn) && \
+	S_KEY=$(call so,$(PROJECT)-db-secondary,$(SECONDARY_REGION),EncryptionKeyArn) && \
+	$(CDK) deploy $(PROJECT)-reconciliation-primary $(CDK_COMMON) -c stack=reconciliation-primary \
+		$(call vpc_ctx,$(PROJECT)-vpc-primary,$(PRIMARY_REGION)) \
+		-c secretArn=$$P_SECRET -c encryptionKeyArn=$$P_KEY \
+		--require-approval never -o cdk.out.recon-p && \
+	$(CDK) deploy $(PROJECT)-reconciliation-secondary $(CDK_COMMON) -c stack=reconciliation-secondary \
+		$(call vpc_ctx,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION)) \
+		-c secretArn=$$P_SECRET -c encryptionKeyArn=$$S_KEY \
+		--require-approval never -o cdk.out.recon-s
+
+deploy-loadgen: deploy-aurora-app deploy-dsql-app
+	@echo "═══ Deploying load generation ═══"
+	@P_AURORA_ALB=$(call so,$(PROJECT)-aurora-app-primary,$(PRIMARY_REGION),AlbDnsName) && \
+	P_DSQL_ALB=$(call so,$(PROJECT)-dsql-app-primary,$(PRIMARY_REGION),AlbDnsName) && \
+	$(CDK) deploy $(PROJECT)-loadgen $(CDK_COMMON) -c stack=loadgen \
+		$(call vpc_ctx,$(PROJECT)-vpc-primary,$(PRIMARY_REGION)) \
+		-c auroraAlbDns=$$P_AURORA_ALB -c dsqlAlbDns=$$P_DSQL_ALB \
+		--require-approval never
+
 clean:
 	./cleanup.sh
 
-.PHONY: deploy deploy-vpc deploy-vpc-peering deploy-database deploy-schema \
+.PHONY: deploy deploy-vpc deploy-vpc-peering deploy-database deploy-dsql deploy-dsql-app deploy-schema deploy-aurora-app deploy-dns deploy-failover-plan deploy-dns-with-hc deploy-synthetics deploy-monitoring deploy-reconciliation deploy-loadgen deploy-chaos clean
 	deploy-aurora-app deploy-dns deploy-monitoring deploy-chaos clean
