@@ -139,13 +139,12 @@ deploy-monitoring: deploy-database
 		$(call vpc_ctx,$(PROJECT)-vpc-primary,$(PRIMARY_REGION)) \
 		-c dbClusterIdentifier=$$P_CLUSTER_ID -c secretArn=$$P_SECRET -c encryptionKeyArn=$$P_KEY \
 		-c remoteSecretArn=$$P_SECRET -c remoteEncryptionKeyArn=$$S_KEY \
-		--require-approval never -o cdk.out.mon-p & \
+		--require-approval never -o cdk.out.mon-p && \
 	$(CDK) deploy $(PROJECT)-monitoring-secondary $(CDK_COMMON) -c stack=monitoring-secondary \
 		$(call vpc_ctx,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION)) \
 		-c dbClusterIdentifier=$$S_CLUSTER_ID -c secretArn=$$P_SECRET -c encryptionKeyArn=$$S_KEY \
 		-c remoteSecretArn=$$P_SECRET -c remoteEncryptionKeyArn=$$P_KEY \
-		--require-approval never -o cdk.out.mon-s & \
-	wait
+		--require-approval never -o cdk.out.mon-s
 
 deploy-chaos: deploy-vpc deploy-database
 	@echo "═══ Deploying chaos stacks ═══"
