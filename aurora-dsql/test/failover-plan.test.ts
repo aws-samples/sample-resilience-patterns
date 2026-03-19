@@ -23,7 +23,7 @@ describe('FailoverPlanStack', () => {
 
   test('creates ARC Region Switch Plan', () => {
     template.hasResourceProperties('AWS::ARCRegionSwitch::Plan', {
-      RecoveryApproach: 'activePassive',
+      RecoveryApproach: 'activeActive',
       PrimaryRegion: 'us-east-1',
       Regions: ['us-east-1', 'us-west-2'],
     });
