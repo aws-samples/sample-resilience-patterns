@@ -61,7 +61,7 @@ export class FailoverPlanStack extends cdk.Stack {
       properties: {
         Name: `${props.project}-region-switch`,
         ExecutionRole: executionRole.roleArn,
-        RecoveryApproach: 'activePassive',
+        RecoveryApproach: 'activeActive',
         PrimaryRegion: props.primaryRegion,
         Regions: [props.primaryRegion, props.secondaryRegion],
         Workflows: [
