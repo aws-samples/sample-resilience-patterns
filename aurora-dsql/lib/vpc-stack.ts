@@ -68,8 +68,10 @@ export class VpcStack extends cdk.Stack {
     // Synthetics SG: outbound 80 to local ALB + cross-region CIDR
     this.syntheticsSg.addEgressRule(this.albSg, ec2.Port.tcp(80), 'Synthetics to local ALB');
     this.syntheticsSg.addEgressRule(ec2.Peer.ipv4(props.peerCidr), ec2.Port.tcp(80), 'Synthetics to cross-region ALB');
-    // Synthetics also needs VPC endpoint access for CloudWatch/S3
+    // Synthetics also needs VPC endpoint access for CloudWatch/S3/Synthetics API
     this.syntheticsSg.addEgressRule(this.vpcEndpointSg, ec2.Port.tcp(443), 'Synthetics to VPC endpoints');
+    // S3 gateway endpoint uses prefix list — allow all HTTPS egress for S3 + AWS APIs
+    this.syntheticsSg.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Synthetics to S3 and AWS APIs');
 
     // VPC endpoints
     const isolatedSubnets = { subnets: this.vpc.isolatedSubnets };
