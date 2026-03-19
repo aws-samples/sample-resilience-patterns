@@ -131,11 +131,9 @@ deploy-synthetics: deploy-dns-with-hc
 	S_ALB=$(call so,$(PROJECT)-aurora-app-secondary,$(SECONDARY_REGION),AlbDnsName) && \
 	$(CDK) deploy $(PROJECT)-synthetics-primary $(CDK_COMMON) -c stack=synthetics-primary \
 		$(call vpc_ctx,$(PROJECT)-vpc-primary,$(PRIMARY_REGION)) \
-		-c localAuroraAlbDns=$$P_ALB -c crossRegionAuroraUrl=$$S_ALB \
 		--require-approval never -o cdk.out.synth-p && \
 	$(CDK) deploy $(PROJECT)-synthetics-secondary $(CDK_COMMON) -c stack=synthetics-secondary \
 		$(call vpc_ctx,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION)) \
-		-c localAuroraAlbDns=$$S_ALB -c crossRegionAuroraUrl=$$P_ALB \
 		--require-approval never -o cdk.out.synth-s
 
 deploy-monitoring: deploy-database
