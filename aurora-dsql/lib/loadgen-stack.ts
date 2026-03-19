@@ -73,12 +73,12 @@ export class LoadGenStack extends cdk.Stack {
             action: 'aws:invokeLambdaFunction',
             inputs: {
               FunctionName: loadGenFn.functionName,
-              InputPayload: JSON.stringify({
+              InputPayload: {
                 rps: '{{RequestsPerSecond}}',
                 duration: '{{DurationSeconds}}',
                 target: '{{TargetApp}}',
                 mix: '{{OperationMix}}',
-              }),
+              },
             },
           },
         ],
