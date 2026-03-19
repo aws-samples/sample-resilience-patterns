@@ -68,7 +68,7 @@ export class MonitoringStack extends cdk.Stack {
     // RPO Monitor Lambda
     const rpoMonitorFn = new lambda.Function(this, 'RpoMonitorFunction', {
       functionName: `${props.project}-rpo-monitor-${this.region}`,
-      runtime: lambda.Runtime.PYTHON_3_13,
+      runtime: lambda.Runtime.PYTHON_3_12,
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'rpo-monitor')),
       vpc: props.vpc,

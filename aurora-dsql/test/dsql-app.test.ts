@@ -52,7 +52,7 @@ describe('DsqlAppStack', () => {
 
   test('creates Lambda function with DSQL endpoint env var', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
-      Runtime: 'python3.13',
+      Runtime: 'python3.12',
       Timeout: 60,
       ReservedConcurrentExecutions: 5,
       Environment: {

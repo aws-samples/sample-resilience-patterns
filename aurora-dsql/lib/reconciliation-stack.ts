@@ -22,7 +22,7 @@ export class ReconciliationStack extends cdk.Stack {
 
     const reconcileFn = new lambda.Function(this, 'ReconcileFunction', {
       functionName: `${props.project}-reconcile-${this.region}`,
-      runtime: lambda.Runtime.PYTHON_3_13,
+      runtime: lambda.Runtime.PYTHON_3_12,
       handler: 'index.lambda_handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'reconciliation')),
       vpc: props.vpc,

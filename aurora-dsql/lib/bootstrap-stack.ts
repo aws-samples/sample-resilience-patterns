@@ -102,7 +102,7 @@ export class BootstrapStack extends cdk.Stack {
     });
 
     const triggerFn = new lambda.Function(this, 'BuildTriggerFunction', {
-      runtime: lambda.Runtime.PYTHON_3_13,
+      runtime: lambda.Runtime.PYTHON_3_12,
       handler: 'index.on_event',
       code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'build-trigger')),
       timeout: cdk.Duration.minutes(1),
@@ -114,7 +114,7 @@ export class BootstrapStack extends cdk.Stack {
     }));
 
     const isCompleteFn = new lambda.Function(this, 'BuildIsCompleteFunction', {
-      runtime: lambda.Runtime.PYTHON_3_13,
+      runtime: lambda.Runtime.PYTHON_3_12,
       handler: 'index.is_complete',
       code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'build-trigger')),
       timeout: cdk.Duration.seconds(30),

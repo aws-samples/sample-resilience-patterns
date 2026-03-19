@@ -50,7 +50,7 @@ describe('MonitoringStack', () => {
 
   test('creates RPO monitor Lambda', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
-      Runtime: 'python3.13',
+      Runtime: 'python3.12',
       ReservedConcurrentExecutions: 5,
     });
   });

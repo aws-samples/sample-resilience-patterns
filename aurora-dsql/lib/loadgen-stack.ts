@@ -19,7 +19,7 @@ export class LoadGenStack extends cdk.Stack {
 
     const loadGenFn = new lambda.Function(this, 'LoadGenFunction', {
       functionName: `${props.project}-loadgen`,
-      runtime: lambda.Runtime.PYTHON_3_13,
+      runtime: lambda.Runtime.PYTHON_3_12,
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'loadgen')),
       vpc: props.vpc,
