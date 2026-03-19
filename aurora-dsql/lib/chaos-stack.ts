@@ -104,7 +104,7 @@ export class ChaosStack extends cdk.Stack {
       stopConditions: [{ source: 'none' }],
       logConfiguration: {
         logSchemaVersion: 2,
-        cloudWatchLogsConfiguration: { logGroupArn: logGroup.logGroupArn },
+        cloudWatchLogsConfiguration: { LogGroupArn: logGroup.logGroupArn },
       },
       tags: { Name: `Cross-Region: Connectivity to ${props.targetRegion}`, Project: props.project },
       experimentOptions: { accountTargeting: 'single-account', emptyTargetResolutionMode: 'skip' },
@@ -130,7 +130,7 @@ export class ChaosStack extends cdk.Stack {
       stopConditions: [{ source: 'none' }],
       logConfiguration: {
         logSchemaVersion: 2,
-        cloudWatchLogsConfiguration: { logGroupArn: logGroup.logGroupArn },
+        cloudWatchLogsConfiguration: { LogGroupArn: logGroup.logGroupArn },
       },
       tags: { Name: 'Aurora Cluster Failover', Project: props.project },
       experimentOptions: { accountTargeting: 'single-account', emptyTargetResolutionMode: 'skip' },
