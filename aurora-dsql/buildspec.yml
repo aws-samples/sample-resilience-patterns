@@ -9,4 +9,11 @@ phases:
       - npm install -g aws-cdk ts-node
   build:
     commands:
+      - |
+        for dir in lambda/schema-migration lambda/aurora-app lambda/dsql-app lambda/rpo-monitor lambda/reconciliation lambda/loadgen; do
+          if [ -f "$dir/requirements.txt" ]; then
+            echo "Installing deps for $dir..."
+            pip install -r "$dir/requirements.txt" -t "$dir/" --quiet
+          fi
+        done
       - make deploy
