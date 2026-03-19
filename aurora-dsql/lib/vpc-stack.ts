@@ -61,8 +61,9 @@ export class VpcStack extends cdk.Stack {
     this.lambdaSg.addEgressRule(this.databaseSg, ec2.Port.tcp(5432), 'Lambda to DB');
     this.lambdaSg.addEgressRule(this.vpcEndpointSg, ec2.Port.tcp(443), 'Lambda to VPC endpoints');
 
-    // VPC Endpoint SG: inbound 443 from Lambda
+    // VPC Endpoint SG: inbound 443 from Lambda and Synthetics
     this.vpcEndpointSg.addIngressRule(this.lambdaSg, ec2.Port.tcp(443), 'Lambda to endpoints');
+    this.vpcEndpointSg.addIngressRule(this.syntheticsSg, ec2.Port.tcp(443), 'Synthetics to endpoints');
 
     // Synthetics SG: outbound 80 to local ALB + cross-region CIDR
     this.syntheticsSg.addEgressRule(this.albSg, ec2.Port.tcp(80), 'Synthetics to local ALB');
