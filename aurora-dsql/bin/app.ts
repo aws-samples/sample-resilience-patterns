@@ -126,7 +126,6 @@ if (target === 'synthetics-primary' || target === 'synthetics-secondary') {
   suppress(new SyntheticsStack(app, `${project}-${target}`, {
     project, vpcImport: vpcImport(), syntheticsSgId: c('syntheticsSgId'),
     localAuroraAlbDns: c('localAuroraAlbDns'),
-    crossRegionAuroraUrl: c('crossRegionAuroraUrl'),
     env: env(region),
   }));
 }
