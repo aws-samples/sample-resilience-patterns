@@ -12,10 +12,6 @@ export interface DnsStackProps extends cdk.StackProps {
   readonly primaryAuroraAlbHostedZoneId: string;
   readonly secondaryAuroraAlbDns: string;
   readonly secondaryAuroraAlbHostedZoneId: string;
-  readonly primaryDsqlAlbDns: string;
-  readonly primaryDsqlAlbHostedZoneId: string;
-  readonly secondaryDsqlAlbDns: string;
-  readonly secondaryDsqlAlbHostedZoneId: string;
   readonly primaryHealthCheckId?: string;
   readonly secondaryHealthCheckId?: string;
 }
@@ -41,12 +37,6 @@ export class DnsStack extends cdk.Stack {
       props.primaryAuroraAlbDns, props.primaryAuroraAlbHostedZoneId, 'PrimaryRegion', props.primaryHealthCheckId);
     this.addLatencyRecord('AuroraSecondary', `aurora-app.${props.domainName}`, props.secondaryRegion,
       props.secondaryAuroraAlbDns, props.secondaryAuroraAlbHostedZoneId, 'StandbyRegion', props.secondaryHealthCheckId);
-
-    // DSQL app: latency-based records
-    this.addLatencyRecord('DsqlPrimary', `dsql-app.${props.domainName}`, props.primaryRegion,
-      props.primaryDsqlAlbDns, props.primaryDsqlAlbHostedZoneId, 'PrimaryRegion', props.primaryHealthCheckId);
-    this.addLatencyRecord('DsqlSecondary', `dsql-app.${props.domainName}`, props.secondaryRegion,
-      props.secondaryDsqlAlbDns, props.secondaryDsqlAlbHostedZoneId, 'StandbyRegion', props.secondaryHealthCheckId);
 
     new cdk.CfnOutput(this, 'HostedZoneIdOutput', { value: this.hostedZoneId });
   }

@@ -54,13 +54,10 @@ def handler(event, context):
     mix = [int(x) for x in event.get('mix', '50,20,10,20').split(',')]
 
     aurora_host = os.environ.get('AURORA_ALB_DNS', '')
-    dsql_host = os.environ.get('DSQL_ALB_DNS', '')
 
     hosts = []
-    if target in ('aurora', 'both') and aurora_host:
+    if aurora_host:
         hosts.append(('aurora', aurora_host))
-    if target in ('dsql', 'both') and dsql_host:
-        hosts.append(('dsql', dsql_host))
 
     ops = []
     for pct, op in zip(mix, ['insert', 'query', 'update', 'delete']):

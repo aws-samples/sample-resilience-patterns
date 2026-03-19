@@ -1,4 +1,3 @@
-# Design: Aurora Global Database + Aurora DSQL — Multi-Region Resilience Demo
 
 ## Architecture
 
@@ -8,14 +7,11 @@ GitHub Actions                             AWS
 Push to non-main branch ──► Build workflow (compile + test + synth)
 Pull Request ──────────────► E2E workflow:
                                ├─ Build + test
-                               ├─ cdk deploy aurora-dsql-bootstrap ──► CodeBuild (make deploy)
                                │    ├─ deploy-vpc            (us-east-1 + us-west-2, parallel)
                                │    ├─ deploy-vpc-peering    (sequential)
                                │    ├─ deploy-database       (us-east-1 primary, then us-west-2 secondary)
-                               │    ├─ deploy-dsql           (us-east-1 + us-west-2)
                                │    ├─ deploy-schema         (us-east-1, runs migration)
                                │    ├─ deploy-aurora-app     (us-east-1 + us-west-2, parallel)
-                               │    ├─ deploy-dsql-app       (us-east-1 + us-west-2, parallel)
                                │    ├─ deploy-dns            (sequential, no health checks)
                                │    ├─ deploy-failover-plan  (sequential, captures health check IDs)
                                │    ├─ deploy-dns-with-hc    (sequential, wires health checks)
@@ -32,11 +28,9 @@ Manual trigger ────────────► Cleanup workflow (cleanup
 │                        GLOBAL RESOURCES                         │
 │  Aurora Global Database (PostgreSQL)                             │
 │    └─► Primary Cluster (us-east-1) + Secondary Cluster (us-west-2) │
-│  Aurora DSQL                                                     │
 │    └─► Multi-region active-active (us-east-1 + us-west-2)      │
 │  Route 53 Private Hosted Zone (demo.internal)                    │
 │    └─► aurora-app.demo.internal → active-region ALB             │
-│    └─► dsql-app.demo.internal → active-region ALB               │
 │  ARC Region Switch Plan (activePassive)                          │
 │    └─► AuroraGlobalDatabase block + Route53HealthCheck block     │
 └─────────────────────────────────────────────────────────────────┘
@@ -50,10 +44,8 @@ Manual trigger ────────────► Cleanup workflow (cleanup
 │    Lambda (isolated) ──►          │  │    Lambda (isolated) ──►          │
 │    Aurora Primary (writer)        │  │    Aurora Secondary (reader)      │
 │                                   │  │                                   │
-│  DSQL App:                        │  │  DSQL App:                        │
 │    ALB (internal, HTTP) ──►      │  │    ALB (internal, HTTP) ──►      │
 │    Lambda (isolated) ──►          │  │    Lambda (isolated) ──►          │
-│    Aurora DSQL Endpoint           │  │    Aurora DSQL Endpoint           │
 │                                   │  │                                   │
 │  Synthetics Canaries ──► ALBs     │  │  Synthetics Canaries ──► ALBs     │
 │    (local + cross-region DNS)     │  │    (local + cross-region DNS)     │
@@ -69,7 +61,6 @@ Manual trigger ────────────► Cleanup workflow (cleanup
 
 ## CDK Stacks
 
-### 1. BootstrapStack (`aurora-dsql-bootstrap`, us-east-1)
 - CodeBuild project (aws/codebuild/standard:7.0 image)
 - S3 artifact bucket encrypted with local CMK
 - IAM role scoped to: sts:AssumeRole on cdk-*, cloudformation:DescribeStacks/ListStacks, ssm:GetParameter on cdk-bootstrap/*, artifact bucket read
@@ -81,7 +72,6 @@ Manual trigger ────────────► Cleanup workflow (cleanup
   - 30-second poll interval, 30-minute total timeout
 - buildspec.yml: npm ci, ts-node install, make deploy
 
-### 2. VpcStack (`aurora-dsql-vpc-{region}`, per region)
 - VPC with 2 AZs, isolated subnets only (no public, no private, no IGW, no NAT)
 - Non-overlapping CIDRs: us-east-1 = 10.0.0.0/23, us-west-2 = 10.0.2.0/23
 - Isolated subnets: ALBs, Lambdas, Aurora clusters (single tier — no internet route exists)
@@ -95,14 +85,12 @@ Manual trigger ────────────► Cleanup workflow (cleanup
   - Synthetics SG: outbound 80 to local ALB SG + cross-region ALB CIDR
 - Outputs: VpcId, VpcCidr, IsolatedSubnetIds, SecurityGroupIds
 
-### 3. VpcPeeringStack (`aurora-dsql-vpc-peering`, us-east-1)
 - VPC peering connection between us-east-1 and us-west-2 VPCs
 - Peering accepter in us-west-2 (cross-region peering)
 - Route table entries in both VPCs: cross-region CIDR → peering connection
 - Depends on both VpcStacks
 - Outputs: PeeringConnectionId
 
-### 4. DatabaseStack (`aurora-dsql-db-primary`, us-east-1)
 - Aurora Global Database cluster (PostgreSQL engine)
 - Primary Aurora cluster with one writer instance
 - Customer-managed KMS key for encryption
@@ -112,20 +100,15 @@ Manual trigger ────────────► Cleanup workflow (cleanup
 - Deletion protection (configurable)
 - Outputs: GlobalClusterArn, ClusterEndpoint, ClusterReaderEndpoint, SecretArn
 
-### 5. DatabaseReplicaStack (`aurora-dsql-db-secondary`, us-west-2)
 - Secondary Aurora cluster joined to Global Database
 - One reader instance
 - Regional KMS key for encryption
 - Subnet group using isolated subnets from VpcStack
 - Outputs: ClusterReaderEndpoint
 
-### 6. DsqlStack (`aurora-dsql-dsql`, us-east-1 + us-west-2)
-- Aurora DSQL cluster configuration
 - Multi-region linked clusters
 - IAM authentication setup
-- Outputs: DsqlEndpoints
 
-### 7. SchemaStack (`aurora-dsql-schema`, us-east-1)
 - Lambda-backed custom resource for database schema migration
 - Creates orders table, replication_tracking table
 - Creates stored procedures: sp_insert_order, sp_update_order_status, sp_delete_order, sp_query_orders
@@ -133,7 +116,6 @@ Manual trigger ────────────► Cleanup workflow (cleanup
 - Runs on stack create/update
 - Idempotent (CREATE OR REPLACE for procedures, IF NOT EXISTS for tables)
 
-### 8. AuroraAppStack (`aurora-dsql-aurora-app-{region}`, per region)
 - Internal ALB in isolated subnets with HTTP listener
 - Lambda target group for Aurora Global Database application
 - Routes: POST /orders, PUT /orders/{id}/status, DELETE /orders/{id}, GET /orders, GET /health
@@ -146,27 +128,20 @@ Manual trigger ────────────► Cleanup workflow (cleanup
 - All AWS API calls routed through VPC endpoints
 - Outputs: ALB DNS name, ALB ARN
 
-### 9. DsqlAppStack (`aurora-dsql-dsql-app-{region}`, per region)
 - Internal ALB in isolated subnets with HTTP listener
-- Lambda target group for Aurora DSQL application
 - Routes: POST /orders, PUT /orders/{id}/status, DELETE /orders/{id}, GET /orders, GET /health
-- Lambda (Python, isolated subnets) connects to Aurora DSQL endpoint
-- IAM authentication for DSQL (no stored secrets)
 - Security group allows inbound from ALB SG, outbound to Database SG + VPC Endpoint SG
 - Reserved concurrency: 5, timeout: 60s
 - All AWS API calls routed through VPC endpoints
 - Outputs: ALB DNS name, ALB ARN
 
-### 10. DnsStack (`aurora-dsql-dns`, us-east-1)
 - Route 53 private hosted zone: `demo.internal`
 - Associated with both regional VPCs (us-east-1 + us-west-2)
 - Latency-based routing A-alias records (two per app, one per region):
   - `aurora-app.demo.internal` → primary ALB (SetIdentifier: PrimaryRegion) + secondary ALB (SetIdentifier: StandbyRegion)
-  - `dsql-app.demo.internal` → primary ALB (SetIdentifier: PrimaryRegion) + secondary ALB (SetIdentifier: StandbyRegion)
 - ARC-managed health check IDs attached in second deployment pass (after plan creation)
 - Outputs: HostedZoneId, record names
 
-### 11. FailoverPlanStack (`aurora-dsql-failover-plan`, us-east-1)
 - AWS::ARCRegionSwitch::Plan with activePassive recovery
 - Execution role for arc-region-switch.amazonaws.com with permissions:
   - rds: FailoverGlobalCluster, SwitchoverGlobalCluster, DescribeGlobalClusters, DescribeDBClusters
@@ -180,12 +155,9 @@ Manual trigger ────────────► Cleanup workflow (cleanup
 - Two-phase deployment: Makefile deploys DNS stack first, then plan, then re-deploys DNS with ARC health check IDs
 - Outputs: PlanArn, ARC-managed health check IDs
 
-### 12. SyntheticsStack (`aurora-dsql-synthetics-{region}`, per region)
 - Four CloudWatch Synthetics canaries per region:
   - aurora-local: calls same-region Aurora app ALB directly
   - aurora-cross: calls `aurora-app.demo.internal` (resolves to active-region ALB via private hosted zone)
-  - dsql-local: calls same-region DSQL app ALB directly
-  - dsql-cross: calls `dsql-app.demo.internal` (resolves to active-region ALB via private hosted zone)
 - Canary scripts exercise all CRUD endpoints and validate HTTP responses
 - Configurable schedule (default: every 5 minutes)
 - Canary artifact S3 bucket (KMS encrypted)
@@ -193,7 +165,6 @@ Manual trigger ────────────► Cleanup workflow (cleanup
 - Deployed in VPC with Synthetics SG (outbound 80 to local ALB SG + cross-region CIDR)
 - Cross-region ALB DNS names passed as props from opposite-region AppStacks
 
-### 13. MonitoringStack (`aurora-dsql-monitoring-{region}`, per region)
 - CloudWatch Alarms:
   - AuroraReplicaLag (threshold: 1000ms)
   - AuroraReplicaLagMaximum (threshold: 2000ms)
@@ -221,7 +192,6 @@ Manual trigger ────────────► Cleanup workflow (cleanup
   - Publishes CatalogRPOHeartbeat metric (value=1)
   - VPC-deployed, cross-region DB connectivity, reserved concurrency 5
 
-### 14. ReconciliationStack (`aurora-dsql-reconciliation`, deployed in both regions)
 - **Snapshot & Copy SSM Document** (primary region):
   - Takes Aurora cluster snapshot, copies cross-region with KMS encryption
   - IAM role for SSM Automation with RDS snapshot + cross-region copy permissions
@@ -236,16 +206,13 @@ Manual trigger ────────────► Cleanup workflow (cleanup
 - IAM roles scoped to RDS snapshot/restore/describe, KMS, Lambda invoke
 - Outputs: SSM Document names
 
-### 15. LoadGenStack (`aurora-dsql-loadgen`, us-east-1)
 - Load generation Lambda (Python, 15-min timeout, 512MB, reserved concurrency 10)
-- Generates CRUD traffic against Aurora and DSQL app ALB endpoints
 - Configurable: RPS, duration, operation mix, target app
 - Publishes CloudWatch metrics: requests sent, errors, latency (avg/p50/p99)
 - SSM Automation Document with named String parameters for operator invocation
 - VPC-deployed with access to ALB endpoints
 - Outputs: Lambda ARN, SSM Document name
 
-### 16. ChaosStack (`aurora-dsql-chaos-{region}`, per region)- FIS experiment templates:
   - Cross-region network disruption: `aws:network:route-table-disrupt-cross-region-connectivity` on subnets
   - Aurora cluster failover: `aws:rds:failover-db-cluster` on Aurora DB cluster
 - FIS experiment IAM role with scoped policies (route table manipulation, RDS failover, tag resolution)
@@ -263,13 +230,11 @@ deploy-vpc-peering          (sequential: peering connection + routes in both VPC
     │
 deploy-database             (sequential: db-primary, then db-secondary joins global cluster)
     │
-deploy-dsql                 (sequential or parallel depending on DSQL linking requirements)
     │
 deploy-schema               (sequential: schema migration against primary writer)
     │
 deploy-aurora-app           (parallel: aurora-app-primary + aurora-app-secondary)
     │
-deploy-dsql-app             (parallel: dsql-app-primary + dsql-app-secondary)
     │
 deploy-dns                  (sequential: private hosted zone + latency-based records, no health checks yet)
     │
@@ -298,8 +263,6 @@ Shell variables captured via `aws cloudformation describe-stacks` and exported f
 - Database endpoints: CloudFormation outputs from DatabaseStack
 - Secret ARN: CloudFormation output from DatabaseStack, passed to AuroraAppStack and SchemaStack
 - KMS key ARNs: CloudFormation outputs, passed to dependent stacks
-- DSQL endpoints: CloudFormation outputs from DsqlStack, passed to DsqlAppStack
-- ALB DNS names + ALB hosted zone IDs: CloudFormation outputs from AuroraAppStack/DsqlAppStack, passed to DnsStack and SyntheticsStack
 - Hosted zone ID: CloudFormation output from DnsStack, passed to FailoverPlanStack
 - ARC health check IDs: retrieved from ARC plan via `arc-region-switch list-route53-health-checks`, passed back to DnsStack on second deploy
 - Global cluster identifier: convention-based, referenced by FailoverPlanStack
@@ -399,9 +362,6 @@ $$ LANGUAGE plpgsql;
 
 | Workflow | Trigger | What it does |
 |----------|---------|-------------|
-| `aurora-dsql: build` | Push to non-main branches (`aurora-dsql/**`) | compile + tests + synth |
-| `aurora-dsql: e2e` | Pull requests + manual | Deploy → run Synthetics canaries → verify replication + metrics → cleanup on success |
-| `aurora-dsql: cleanup` | Manual only | Run cleanup.sh |
 
 - AWS OIDC authentication via `aws-actions/configure-aws-credentials`
 - CDK bootstrap is a prerequisite (one-time manual setup per account/region)
@@ -434,10 +394,8 @@ Standalone `cleanup.sh` script:
 3. Destroy synthetics stacks (parallel)
 4. Destroy failover plan stack
 5. Destroy DNS stack
-7. Destroy DSQL app stacks (parallel)
 8. Destroy Aurora app stacks (parallel)
 9. Destroy schema stack
-10. Destroy DSQL stack
 11. Destroy database secondary (must leave global cluster before deletion)
 12. Destroy database primary + global cluster
 13. Destroy VPC peering stack
@@ -449,7 +407,6 @@ Standalone `cleanup.sh` script:
 ## Project Structure
 
 ```
-aurora-dsql/
 ├── .projenrc.ts                  # Projen project configuration
 ├── .projen/                      # Projen-managed files
 ├── .specs/
@@ -464,11 +421,9 @@ aurora-dsql/
 │   ├── vpc-peering-stack.ts      # Cross-region VPC peering + routes
 │   ├── database-stack.ts         # Aurora Global DB primary cluster
 │   ├── database-replica-stack.ts # Aurora Global DB secondary cluster
-│   ├── dsql-stack.ts             # Aurora DSQL multi-region
 │   ├── schema-stack.ts           # Schema migration custom resource
 │   ├── app-stack.ts              # Test application Lambda
 │   ├── aurora-app-stack.ts        # Aurora Global DB app: ALB + Lambda
-│   ├── dsql-app-stack.ts          # Aurora DSQL app: ALB + Lambda
 │   ├── dns-stack.ts               # Private hosted zone + latency-based DNS records
 │   ├── failover-plan-stack.ts     # ARC Region Switch Plan (native Aurora + Route53 blocks)
 │   ├── synthetics-stack.ts        # CloudWatch Synthetics canaries (both apps)
@@ -480,22 +435,18 @@ aurora-dsql/
 │   ├── build-trigger/index.py     # CodeBuild start + poll for completion
 │   ├── schema-migration/index.py  # Database schema + stored procedures
 │   ├── aurora-app/index.py        # Aurora Global DB CRUD handler (ALB target)
-│   ├── dsql-app/index.py          # Aurora DSQL CRUD handler (ALB target)
 │   ├── rpo-monitor/index.py       # RPO monitor: cross-region row comparison + heartbeat
 │   ├── reconciliation/index.py    # Post-failover: compare rows, produce missing txn report
 │   └── loadgen/index.py           # Load generation: sustained CRUD traffic via ALB
 ├── canaries/
 │   ├── aurora-canary/index.py     # Synthetics canary: Aurora Global DB ALB endpoints
-│   └── dsql-canary/index.py       # Synthetics canary: DSQL ALB endpoints
 ├── test/
 │   ├── bootstrap.test.ts
 │   ├── vpc.test.ts
 │   ├── vpc-peering.test.ts
 │   ├── database.test.ts
-│   ├── dsql.test.ts
 │   ├── schema.test.ts
 │   ├── aurora-app.test.ts
-│   ├── dsql-app.test.ts
 │   ├── dns.test.ts
 │   ├── failover-plan.test.ts
 │   ├── synthetics.test.ts

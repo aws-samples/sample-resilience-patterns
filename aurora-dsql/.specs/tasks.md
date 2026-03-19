@@ -1,4 +1,3 @@
-# Tasks: Aurora Global Database + Aurora DSQL — Multi-Region Resilience Demo
 
 **RULE: No phase is complete until its tests pass.** Every phase that produces a CDK stack or Lambda handler
 must have corresponding tests written and passing (`npx projen test`) before moving to the next phase.
@@ -47,13 +46,7 @@ Tests are written inline with implementation, not deferred to a later phase.
 - [ ] 4.7 Wire DatabaseStack + DatabaseReplicaStack in bin/app.ts
 - [ ] ✅ Tests pass: database.test.ts
 
-## Phase 5: Aurora DSQL Stack
 
-- [ ] 6.1 Create lib/dsql-stack.ts — Aurora DSQL multi-region cluster configuration
-- [ ] 6.2 IAM authentication setup for DSQL
-- [ ] 6.3 Export DSQL endpoints as stack outputs
-- [ ] 6.4 Wire DsqlStack in bin/app.ts
-- [ ] ✅ Tests pass: dsql.test.ts
 
 ## Phase 6: Schema Migration Stack
 
@@ -76,16 +69,10 @@ Tests are written inline with implementation, not deferred to a later phase.
 - [ ] 7.8 Wire AuroraAppStack (x2 regions) in bin/app.ts
 - [ ] ✅ Tests pass: aurora-app.test.ts + aurora-app handler unit tests
 
-## Phase 7a: Aurora DSQL Application Stack (Per Region)
 
-- [ ] 7a.1 Create lambda/dsql-app/index.py — CRUD handler (ALB target) calling DSQL stored procedures
 - [ ] 7a.2 Routes: POST /orders, PUT /orders/{id}/status, DELETE /orders/{id}, GET /orders, GET /health
-- [ ] 7a.3 Aurora DSQL connectivity with IAM authentication (no stored secrets)
-- [ ] 7a.4 Create lib/dsql-app-stack.ts — internal ALB (HTTP, isolated subnets) + Lambda target group (isolated subnets)
 - [ ] 7a.5 Security group: inbound from ALB SG, outbound to Database SG + VPC Endpoint SG
 - [ ] 7a.6 Reserved concurrency: 5, timeout: 60s
-- [ ] 7a.7 Wire DsqlAppStack (x2 regions) in bin/app.ts
-- [ ] ✅ Tests pass: dsql-app.test.ts + dsql-app handler unit tests
 
 ## Phase 7b: DNS Stack
 
@@ -109,8 +96,6 @@ Tests are written inline with implementation, not deferred to a later phase.
 ## Phase 7d: CloudWatch Synthetics Stack (Per Region)
 
 - [ ] 7d.1 Create canaries/aurora-canary/index.py — Synthetics canary calling Aurora app ALB HTTP endpoints, validates all CRUD responses
-- [ ] 7d.2 Create canaries/dsql-canary/index.py — Synthetics canary calling DSQL app ALB HTTP endpoints, validates all CRUD responses
-- [ ] 7d.3 Create lib/synthetics-stack.ts — four canaries per region: local canaries hit same-region ALB directly, cross-region canaries hit DNS names (aurora-app.demo.internal, dsql-app.demo.internal)
 - [ ] 7d.4 Cross-region canaries validate failover behavior — DNS resolves to active-region ALB
 - [ ] 7d.5 CloudWatch alarm on canary SuccessPercent per canary (threshold: 100%)
 - [ ] 7d.6 Canaries deployed in VPC with Synthetics SG (outbound 80 to local ALB SG + cross-region CIDR)
@@ -142,7 +127,6 @@ Tests are written inline with implementation, not deferred to a later phase.
 
 - [ ] 8c.1 Create lambda/loadgen/index.py — generates sustained CRUD traffic against ALB endpoints, publishes CloudWatch metrics (requests, errors, latency)
 - [ ] 8c.2 Create lib/loadgen-stack.ts — Lambda (15-min timeout, 512MB, reserved concurrency 10), VPC-deployed
-- [ ] 8c.3 SSM Automation Document with named parameters: RPS, duration, operation mix, target app (aurora/dsql/both)
 - [ ] 8c.4 Wire LoadGenStack in bin/app.ts
 - [ ] ✅ Tests pass: loadgen.test.ts + loadgen handler unit tests
 
@@ -159,7 +143,6 @@ Tests are written inline with implementation, not deferred to a later phase.
 
 ## Phase 9: Makefile Orchestration
 - [ ] 9.1 Create Makefile with parallel deploy targets using separate cdk.out directories
-- [ ] 9.2 Deployment order: vpc → vpc-peering → database → dsql → schema → aurora-app → dsql-app → dns → failover-plan → dns-with-healthchecks → synthetics → monitoring → reconciliation → loadgen → chaos
 - [ ] 9.3 PID-based wait for parallel failure propagation
 - [ ] 9.4 Shell-based variable capture for sequential steps
 - [ ] 9.5 Create cleanup.sh for reliable teardown (reverse order, global cluster detach before delete)
@@ -175,10 +158,8 @@ A phase is NOT complete unless all its tests pass via `npx projen test`.
 - [ ] 10.4 Test VpcPeeringStack — peering connection, route table entries for cross-region CIDR
 - [ ] 10.5 Test DatabaseStack — global cluster, primary cluster, KMS, Secrets Manager
 - [ ] 10.6 Test DatabaseReplicaStack — secondary cluster, global cluster membership
-- [ ] 10.7 Test DsqlStack — DSQL cluster, IAM auth
 - [ ] 10.8 Test SchemaStack — custom resource Lambda, VPC deployment
 - [ ] 10.9 Test AuroraAppStack — internal ALB, HTTP listener, Lambda target group, IAM permissions
-- [ ] 10.10 Test DsqlAppStack — internal ALB, HTTP listener, Lambda target group, IAM auth
 - [ ] 10.11 Test DnsStack — private hosted zone, VPC associations, latency-based records, conditional health checks
 - [ ] 10.12 Test FailoverPlanStack — ARC plan, activePassive, AuroraGlobalDatabase block, Route53HealthCheck block, execution role
 - [ ] 10.13 Test MonitoringStack — alarms, dashboard, SNS
@@ -187,7 +168,6 @@ A phase is NOT complete unless all its tests pass via `npx projen test`.
 - [ ] 10.16 Test ReconciliationStack — SSM documents, reconciliation Lambda, IAM roles
 - [ ] 10.17 Test LoadGenStack — Lambda, SSM document, IAM permissions, VPC deployment
 - [ ] 10.16 Integration tests — cross-stack endpoint consistency, security group references, ALB → Lambda → DB chain, VPC peering routes, DNS → ALB mapping
-- [ ] 10.17 Lambda unit tests — mock AWS SDK/DB connections, test CRUD routing, error handling, metric publishing for: aurora-app, dsql-app, schema-migration, rpo-monitor, build-trigger
 - [ ] 10.18 Canary script tests — validate request construction and response parsing logic offline
 - [ ] 10.19 All tests pass via `npx projen test`
 
@@ -210,7 +190,6 @@ A phase is NOT complete unless all its tests pass via `npx projen test`.
 
 ## Phase 12: GitHub Actions CI/CD
 
-- [ ] 12.1 Build workflow — push to non-main branches (path: aurora-dsql/**), compile + test + synth
 - [ ] 12.2 E2E workflow — PRs + manual, deploy + run Synthetics canaries + verify replication + cleanup on success
 - [ ] 12.3 Cleanup workflow — manual trigger only
 - [ ] 12.4 AWS OIDC authentication (no long-lived credentials)

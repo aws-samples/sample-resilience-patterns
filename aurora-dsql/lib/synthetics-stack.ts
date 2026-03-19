@@ -12,9 +12,7 @@ export interface SyntheticsStackProps extends cdk.StackProps {
   readonly vpcImport: VpcImportProps;
   readonly syntheticsSgId: string;
   readonly localAuroraAlbDns: string;
-  readonly localDsqlAlbDns: string;
   readonly crossRegionAuroraUrl: string;
-  readonly crossRegionDsqlUrl: string;
 }
 
 export class SyntheticsStack extends cdk.Stack {
@@ -84,8 +82,6 @@ def handler(event, context):
     const canaryConfigs: [string, string][] = [
       [`${props.project}-al-${this.region.replace(/-/g, '').slice(-4)}`, props.localAuroraAlbDns],
       [`${props.project}-ax-${this.region.replace(/-/g, '').slice(-4)}`, props.crossRegionAuroraUrl],
-      [`${props.project}-dl-${this.region.replace(/-/g, '').slice(-4)}`, props.localDsqlAlbDns],
-      [`${props.project}-dx-${this.region.replace(/-/g, '').slice(-4)}`, props.crossRegionDsqlUrl],
     ];
 
     for (const [name, url] of canaryConfigs) {
