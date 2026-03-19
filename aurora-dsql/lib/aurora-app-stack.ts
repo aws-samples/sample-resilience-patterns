@@ -24,7 +24,7 @@ export class AuroraAppStack extends cdk.Stack {
 
     this.fn = new lambda.Function(this, 'AuroraAppFunction', {
       functionName: `${props.project}-aurora-app-${this.region}`,
-      runtime: lambda.Runtime.PYTHON_3_13,
+      runtime: lambda.Runtime.PYTHON_3_12,
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'aurora-app')),
       vpc: props.vpc,

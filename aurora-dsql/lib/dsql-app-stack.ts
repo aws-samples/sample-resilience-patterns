@@ -23,7 +23,7 @@ export class DsqlAppStack extends cdk.Stack {
 
     this.fn = new lambda.Function(this, 'DsqlAppFunction', {
       functionName: `${props.project}-dsql-app-${this.region}`,
-      runtime: lambda.Runtime.PYTHON_3_13,
+      runtime: lambda.Runtime.PYTHON_3_12,
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'dsql-app')),
       vpc: props.vpc,

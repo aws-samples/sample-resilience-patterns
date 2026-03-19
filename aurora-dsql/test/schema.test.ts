@@ -30,7 +30,7 @@ describe('SchemaStack', () => {
   test('creates migration Lambda function', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
       Handler: 'index.on_event',
-      Runtime: 'python3.13',
+      Runtime: 'python3.12',
       Timeout: 300,
       ReservedConcurrentExecutions: 1,
     });

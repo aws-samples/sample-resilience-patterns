@@ -53,7 +53,7 @@ describe('AuroraAppStack', () => {
 
   test('creates Lambda function with correct config', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
-      Runtime: 'python3.13',
+      Runtime: 'python3.12',
       Timeout: 60,
       ReservedConcurrentExecutions: 5,
     });

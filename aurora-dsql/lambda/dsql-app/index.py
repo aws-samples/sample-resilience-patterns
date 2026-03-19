@@ -2,8 +2,8 @@ import json
 import logging
 import os
 import boto3
-import psycopg
-import psycopg.extras
+import psycopg2
+import psycopg2.extras
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -19,7 +19,7 @@ def get_dsql_token():
 def get_connection():
     endpoint = os.environ['DSQL_ENDPOINT']
     token = get_dsql_token()
-    return psycopg.connect(
+    return psycopg2.connect(
         host=endpoint, port=5432, user='admin',
         password=token, dbname='postgres',
         sslmode='require',

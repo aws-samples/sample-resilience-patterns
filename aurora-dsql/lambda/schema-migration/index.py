@@ -2,7 +2,7 @@ import json
 import logging
 import os
 import boto3
-import psycopg
+import psycopg2
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -100,7 +100,7 @@ def on_event(event, context):
         return {'PhysicalResourceId': 'schema-migration'}
 
     host, port, user, password, dbname = get_db_credentials()
-    conn = psycopg.connect(host=host, port=port, user=user, password=password, dbname=dbname)
+    conn = psycopg2.connect(host=host, port=port, user=user, password=password, dbname=dbname)
     try:
         conn.autocommit = True
         with conn.cursor() as cur:

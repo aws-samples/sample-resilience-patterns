@@ -27,7 +27,7 @@ describe('LoadGenStack', () => {
 
   test('creates load gen Lambda with correct config', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
-      Runtime: 'python3.13',
+      Runtime: 'python3.12',
       Timeout: 900,
       MemorySize: 512,
       ReservedConcurrentExecutions: 10,

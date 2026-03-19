@@ -21,7 +21,7 @@ export class SchemaStack extends cdk.Stack {
     const encryptionKey = kms.Key.fromKeyArn(this, 'EncryptionKey', props.encryptionKeyArn);
 
     const migrationFn = new lambda.Function(this, 'MigrationFunction', {
-      runtime: lambda.Runtime.PYTHON_3_13,
+      runtime: lambda.Runtime.PYTHON_3_12,
       handler: 'index.on_event',
       code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'schema-migration')),
       vpc: props.vpc,

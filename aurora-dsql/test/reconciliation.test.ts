@@ -30,7 +30,7 @@ describe('ReconciliationStack', () => {
 
   test('creates reconciliation Lambda', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
-      Runtime: 'python3.13',
+      Runtime: 'python3.12',
       Timeout: 600,
       ReservedConcurrentExecutions: 5,
     });

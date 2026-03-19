@@ -2,8 +2,8 @@ import json
 import logging
 import os
 import boto3
-import psycopg
-import psycopg.extras
+import psycopg2
+import psycopg2.extras
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -18,7 +18,7 @@ def get_db_credentials():
 
 def get_connection():
     host, port, user, password, dbname = get_db_credentials()
-    return psycopg.connect(host=host, port=port, user=user, password=password, dbname=dbname)
+    return psycopg2.connect(host=host, port=port, user=user, password=password, dbname=dbname)
 
 
 def handler(event, context):
