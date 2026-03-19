@@ -37,7 +37,7 @@ def handler(event, context):
         conn = get_connection()
         try:
             conn.autocommit = True
-            with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 if path == '/orders' and method == 'POST':
                     cur.execute("SELECT sp_insert_order(%s, %s, %s) AS id",
                                 (body.get('region', os.environ.get('AWS_REGION')),
