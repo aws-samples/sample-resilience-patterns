@@ -60,18 +60,17 @@ deploy-database: deploy-vpc
 
 deploy-dsql: deploy-vpc
 	@echo "═══ Deploying DSQL clusters ═══"
-	@$(CDK) deploy $(PROJECT)-dsql-primary $(CDK_COMMON) -c stack=dsql-primary --require-approval never -o cdk.out.dsql-p && \
-	$(CDK) deploy $(PROJECT)-dsql-secondary $(CDK_COMMON) -c stack=dsql-secondary --require-approval never -o cdk.out.dsql-s && \
-	DSQL_P_ARN=$(call so,$(PROJECT)-dsql-primary,$(PRIMARY_REGION),ClusterArn) && \
-	DSQL_S_ARN=$(call so,$(PROJECT)-dsql-secondary,$(SECONDARY_REGION),ClusterArn) && \
-	DSQL_P_ID=$(call so,$(PROJECT)-dsql-primary,$(PRIMARY_REGION),ClusterId) && \
-	LINKED=$$(aws dsql get-cluster --identifier $$DSQL_P_ID --region $(PRIMARY_REGION) --query "multiRegionProperties.linkedRegions" --output text 2>/dev/null || echo "NONE") && \
-	if [ "$$LINKED" = "NONE" ] || [ -z "$$LINKED" ]; then \
+	@EXISTING_P=$$(aws cloudformation describe-stacks --stack-name $(PROJECT)-dsql-primary --region $(PRIMARY_REGION) --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "NONE") && \
+	if echo "$$EXISTING_P" | grep -q "COMPLETE"; then \
+		echo "DSQL stacks already exist — skipping"; \
+	else \
+		$(CDK) deploy $(PROJECT)-dsql-primary $(CDK_COMMON) -c stack=dsql-primary --require-approval never -o cdk.out.dsql-p && \
+		$(CDK) deploy $(PROJECT)-dsql-secondary $(CDK_COMMON) -c stack=dsql-secondary --require-approval never -o cdk.out.dsql-s && \
+		DSQL_P_ARN=$(call so,$(PROJECT)-dsql-primary,$(PRIMARY_REGION),ClusterArn) && \
+		DSQL_S_ARN=$(call so,$(PROJECT)-dsql-secondary,$(SECONDARY_REGION),ClusterArn) && \
 		echo "Linking DSQL clusters..." && \
 		$(CDK) deploy $(PROJECT)-dsql-primary $(CDK_COMMON) -c stack=dsql-primary -c "dsqlPeerArns=$$DSQL_P_ARN,$$DSQL_S_ARN" --require-approval never -o cdk.out.dsql-p2 && \
 		$(CDK) deploy $(PROJECT)-dsql-secondary $(CDK_COMMON) -c stack=dsql-secondary -c "dsqlPeerArns=$$DSQL_P_ARN,$$DSQL_S_ARN" --require-approval never -o cdk.out.dsql-s2; \
-	else \
-		echo "DSQL clusters already linked — skipping"; \
 	fi
 
 deploy-dsql-app: deploy-dsql deploy-schema
