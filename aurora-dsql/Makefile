@@ -68,6 +68,7 @@ deploy-schema: deploy-database
 deploy-aurora-app: deploy-schema
 	@echo "═══ Deploying Aurora app stacks ═══"
 	@SECRET_ARN=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),SecretArn) && \
+	S_READER_ENDPOINT=$(call so,$(PROJECT)-db-secondary,$(SECONDARY_REGION),ClusterReaderEndpoint) && \
 	ENC_KEY_ARN=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),EncryptionKeyArn) && \
 	$(CDK) deploy $(PROJECT)-aurora-app-primary $(CDK_COMMON) -c stack=aurora-app-primary \
 		$(call vpc_ctx,$(PROJECT)-vpc-primary,$(PRIMARY_REGION)) \
