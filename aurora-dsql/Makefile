@@ -116,6 +116,10 @@ deploy-dns: deploy-aurora-app deploy-dsql-app
 	P_AURORA_ALB_HZ=$(call so,$(PROJECT)-aurora-app-primary,$(PRIMARY_REGION),AlbHostedZoneId) && \
 	S_AURORA_ALB_DNS=$(call so,$(PROJECT)-aurora-app-secondary,$(SECONDARY_REGION),AlbDnsName) && \
 	S_AURORA_ALB_HZ=$(call so,$(PROJECT)-aurora-app-secondary,$(SECONDARY_REGION),AlbHostedZoneId) && \
+	P_DSQL_ALB_DNS=$(call so,$(PROJECT)-dsql-app-primary,$(PRIMARY_REGION),AlbDnsName) && \
+	P_DSQL_ALB_HZ=$(call so,$(PROJECT)-dsql-app-primary,$(PRIMARY_REGION),AlbHostedZoneId) && \
+	S_DSQL_ALB_DNS=$(call so,$(PROJECT)-dsql-app-secondary,$(SECONDARY_REGION),AlbDnsName) && \
+	S_DSQL_ALB_HZ=$(call so,$(PROJECT)-dsql-app-secondary,$(SECONDARY_REGION),AlbHostedZoneId) && \
 	$(CDK) deploy $(PROJECT)-dns $(CDK_COMMON) -c stack=dns \
 		-c primaryVpcId=$$PRIMARY_VPC_ID -c secondaryVpcId=$$SECONDARY_VPC_ID \
 		-c primaryAuroraAlbDns=$$P_AURORA_ALB_DNS -c primaryAuroraAlbHostedZoneId=$$P_AURORA_ALB_HZ \
