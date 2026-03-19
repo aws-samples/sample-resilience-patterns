@@ -98,7 +98,7 @@ def handler(event, context):
       const canaryName = name.slice(0, 21);
       const canary = new synthetics.Canary(this, canaryName, {
         canaryName,
-        runtime: synthetics.Runtime.SYNTHETICS_PYTHON_SELENIUM_4_1,
+        runtime: synthetics.Runtime.SYNTHETICS_PYTHON_SELENIUM_7_0,
         test: synthetics.Test.custom({ code: canaryCode(url), handler: 'index.handler' }),
         schedule: synthetics.Schedule.rate(cdk.Duration.minutes(5)),
         artifactsBucketLocation: { bucket: artifactBucket },
