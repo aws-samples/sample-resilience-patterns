@@ -25,9 +25,9 @@ define vpc_ctx
 -c syntheticsSgId=$(call so,$(1),$(2),SyntheticsSgId)
 endef
 
-deploy: deploy-vpc deploy-vpc-peering deploy-database deploy-schema \
-	deploy-aurora-app deploy-dns deploy-monitoring deploy-chaos
-	@echo "✅ Core stacks deployed"
+deploy: deploy-vpc deploy-vpc-peering deploy-database deploy-dsql deploy-schema \
+	deploy-aurora-app deploy-dsql-app deploy-dns deploy-monitoring deploy-chaos
+	@echo "✅ All stacks deployed"
 
 deploy-vpc:
 	@echo "═══ Deploying VPCs ═══"
@@ -58,9 +58,31 @@ deploy-database: deploy-vpc
 		$(call vpc_ctx,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION)) \
 		--require-approval never -o cdk.out.db-s
 
+deploy-dsql: deploy-vpc
+	@echo "═══ Deploying DSQL clusters ═══"
+	@$(CDK) deploy $(PROJECT)-dsql-primary $(CDK_COMMON) -c stack=dsql-primary --require-approval never -o cdk.out.dsql-p && \
+	$(CDK) deploy $(PROJECT)-dsql-secondary $(CDK_COMMON) -c stack=dsql-secondary --require-approval never -o cdk.out.dsql-s && \
+	echo "Linking DSQL clusters..." && \
+	DSQL_P_ARN=$(call so,$(PROJECT)-dsql-primary,$(PRIMARY_REGION),ClusterArn) && \
+	DSQL_S_ARN=$(call so,$(PROJECT)-dsql-secondary,$(SECONDARY_REGION),ClusterArn) && \
+	$(CDK) deploy $(PROJECT)-dsql-primary $(CDK_COMMON) -c stack=dsql-primary -c "dsqlPeerArns=$$DSQL_P_ARN,$$DSQL_S_ARN" --require-approval never -o cdk.out.dsql-p2 && \
+	$(CDK) deploy $(PROJECT)-dsql-secondary $(CDK_COMMON) -c stack=dsql-secondary -c "dsqlPeerArns=$$DSQL_P_ARN,$$DSQL_S_ARN" --require-approval never -o cdk.out.dsql-s2
+
+deploy-dsql-app: deploy-dsql deploy-schema
+	@echo "═══ Deploying DSQL app stacks ═══"
+	@DSQL_P_ENDPOINT=$(call so,$(PROJECT)-dsql-primary,$(PRIMARY_REGION),Endpoint) && \
+	DSQL_S_ENDPOINT=$(call so,$(PROJECT)-dsql-secondary,$(SECONDARY_REGION),Endpoint) && \
+	$(CDK) deploy $(PROJECT)-dsql-app-primary $(CDK_COMMON) -c stack=dsql-app-primary \
+		$(call vpc_ctx,$(PROJECT)-vpc-primary,$(PRIMARY_REGION)) \
+		-c dsqlEndpoint=$$DSQL_P_ENDPOINT \
+		--require-approval never -o cdk.out.dapp-p && \
+	$(CDK) deploy $(PROJECT)-dsql-app-secondary $(CDK_COMMON) -c stack=dsql-app-secondary \
+		$(call vpc_ctx,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION)) \
+		-c dsqlEndpoint=$$DSQL_S_ENDPOINT \
+		--require-approval never -o cdk.out.dapp-s
+
 deploy-schema: deploy-database
-	@echo "═══ Deploying schema migration ═══"
-	@SECRET_ARN=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),SecretArn) && \
+	@echo "═══ Deploying schema migration ═══"	@SECRET_ARN=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),SecretArn) && \
 	ENC_KEY_ARN=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),EncryptionKeyArn) && \
 	$(CDK) deploy $(PROJECT)-schema $(CDK_COMMON) -c stack=schema \
 		$(call vpc_ctx,$(PROJECT)-vpc-primary,$(PRIMARY_REGION)) \
@@ -80,7 +102,7 @@ deploy-aurora-app: deploy-schema
 		-c secretArn=$$SECRET_ARN -c encryptionKeyArn=$$ENC_KEY_ARN \
 		--require-approval never -o cdk.out.aapp-s
 
-deploy-dns: deploy-aurora-app
+deploy-dns: deploy-aurora-app deploy-dsql-app
 	@echo "═══ Deploying DNS ═══"
 	@PRIMARY_VPC_ID=$(call so,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),VpcId) && \
 	SECONDARY_VPC_ID=$(call so,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),VpcId) && \
@@ -92,8 +114,8 @@ deploy-dns: deploy-aurora-app
 		-c primaryVpcId=$$PRIMARY_VPC_ID -c secondaryVpcId=$$SECONDARY_VPC_ID \
 		-c primaryAuroraAlbDns=$$P_AURORA_ALB_DNS -c primaryAuroraAlbHostedZoneId=$$P_AURORA_ALB_HZ \
 		-c secondaryAuroraAlbDns=$$S_AURORA_ALB_DNS -c secondaryAuroraAlbHostedZoneId=$$S_AURORA_ALB_HZ \
-		-c primaryDsqlAlbDns=$$P_AURORA_ALB_DNS -c primaryDsqlAlbHostedZoneId=$$P_AURORA_ALB_HZ \
-		-c secondaryDsqlAlbDns=$$S_AURORA_ALB_DNS -c secondaryDsqlAlbHostedZoneId=$$S_AURORA_ALB_HZ \
+		-c primaryDsqlAlbDns=$$P_DSQL_ALB_DNS -c primaryDsqlAlbHostedZoneId=$$P_DSQL_ALB_HZ \
+		-c secondaryDsqlAlbDns=$$S_DSQL_ALB_DNS -c secondaryDsqlAlbHostedZoneId=$$S_DSQL_ALB_HZ \
 		--require-approval never
 
 deploy-monitoring: deploy-database
