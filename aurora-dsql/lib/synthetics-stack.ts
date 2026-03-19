@@ -51,32 +51,26 @@ ALB_URL = "${albUrl}"
 
 def verify_request(method, url, body=None, expected_status=None):
     parsed = urllib.parse.urlparse(url)
-    conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80)
+    conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=10)
     headers = {"Content-Type": "application/json", "User-Agent": str(syn_webdriver.get_canary_user_agent_string())}
     conn.request(method, parsed.path or "/", body, headers)
     resp = conn.getresponse()
     data = resp.read().decode()
-    logger.info(f"{method} {url} -> {resp.status}: {data}")
+    logger.info(f"{method} {url} -> {resp.status}: {data[:200]}")
     ok = resp.status == expected_status if expected_status else 200 <= resp.status <= 299
     conn.close()
     if not ok:
-        raise Exception(f"Failed: {resp.status} {data}")
+        raise Exception(f"Failed: {resp.status} {data[:200]}")
     return json.loads(data) if data else {}
 
 def handler(event, context):
     base = f"http://{ALB_URL}"
-    # Health check
     verify_request("GET", f"{base}/health")
-    # Insert
-    result = verify_request("POST", f"{base}/orders", json.dumps({"region": "canary-test", "status": "PENDING", "payload": {"test": True}}), 201)
+    result = verify_request("POST", f"{base}/orders", json.dumps({"region": "canary", "status": "PENDING", "payload": {"test": True}}), 201)
     order_id = result.get("id")
-    # Query
-    verify_request("GET", f"{base}/orders?region=canary-test")
-    # Update
+    verify_request("GET", f"{base}/orders?region=canary")
     if order_id:
-        verify_request("PUT", f"{base}/orders/{order_id}/status", json.dumps({"status": "COMPLETED"}))
-    # Delete
-    if order_id:
+        verify_request("PUT", f"{base}/orders/{order_id}/status", json.dumps({"status": "DONE"}))
         verify_request("DELETE", f"{base}/orders/{order_id}")
     logger.info("All CRUD operations passed")
 `);
@@ -98,7 +92,7 @@ def handler(event, context):
       const canaryName = name.slice(0, 21);
       const canary = new synthetics.Canary(this, canaryName, {
         canaryName,
-        runtime: synthetics.Runtime.SYNTHETICS_PYTHON_SELENIUM_7_0,
+        runtime: new synthetics.Runtime('syn-python-selenium-10.0', synthetics.RuntimeFamily.PYTHON),
         test: synthetics.Test.custom({ code: canaryCode(url), handler: 'index.handler' }),
         schedule: synthetics.Schedule.rate(cdk.Duration.minutes(5)),
         artifactsBucketLocation: { bucket: artifactBucket },
