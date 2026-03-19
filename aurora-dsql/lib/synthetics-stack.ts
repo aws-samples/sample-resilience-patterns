@@ -38,14 +38,14 @@ export class SyntheticsStack extends cdk.Stack {
       autoDeleteObjects: true,
     });
 
-    const canaryCode = (albUrl: string) => synthetics.Code.fromInline(`
+    const crudCanaryCode = (url: string) => synthetics.Code.fromInline(`
 import http.client
 import json
 import urllib.parse
 from aws_synthetics.selenium import synthetics_webdriver as syn_webdriver
 from aws_synthetics.common import synthetics_logger as logger
 
-ALB_URL = "${albUrl}"
+ALB_URL = "${url}"
 
 def verify_request(method, url, body=None, expected_status=None):
     parsed = urllib.parse.urlparse(url)
@@ -73,23 +73,55 @@ def handler(event, context):
     logger.info("All CRUD operations passed")
 `);
 
+    const readOnlyCanaryCode = (url: string) => synthetics.Code.fromInline(`
+import http.client
+import json
+import urllib.parse
+from aws_synthetics.selenium import synthetics_webdriver as syn_webdriver
+from aws_synthetics.common import synthetics_logger as logger
+
+ALB_URL = "${url}"
+
+def verify_request(method, url, body=None, expected_status=None):
+    parsed = urllib.parse.urlparse(url)
+    conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=10)
+    headers = {"Content-Type": "application/json", "User-Agent": str(syn_webdriver.get_canary_user_agent_string())}
+    conn.request(method, parsed.path or "/", body, headers)
+    resp = conn.getresponse()
+    data = resp.read().decode()
+    logger.info(f"{method} {url} -> {resp.status}: {data[:200]}")
+    ok = resp.status == expected_status if expected_status else 200 <= resp.status <= 299
+    conn.close()
+    if not ok:
+        raise Exception(f"Failed: {resp.status} {data[:200]}")
+    return json.loads(data) if data else {}
+
+def handler(event, context):
+    base = f"http://{ALB_URL}"
+    verify_request("GET", f"{base}/health")
+    verify_request("GET", f"{base}/orders?region=canary")
+    logger.info("All read-only operations passed")
+`);
+
     const vpcConfig: synthetics.CfnCanary.VPCConfigProperty = {
       vpcId: vpc.vpcId,
       subnetIds: vpc.isolatedSubnets.map(s => s.subnetId),
       securityGroupIds: [syntheticsSg.securityGroupId],
     };
 
-    const canaryConfigs: [string, string][] = [
-      [`${props.project}-al-${this.region.replace(/-/g, '').slice(-4)}`, props.localAuroraAlbDns],
-      [`${props.project}-ax-${this.region.replace(/-/g, '').slice(-4)}`, props.crossRegionAuroraUrl],
+    const regionSuffix = this.region.replace(/-/g, '').slice(-4);
+    const canaryConfigs: [string, string, boolean][] = [
+      [`${props.project}-al-${regionSuffix}`, props.localAuroraAlbDns, false],
+      [`${props.project}-ax-${regionSuffix}`, props.crossRegionAuroraUrl, true],
     ];
 
-    for (const [name, url] of canaryConfigs) {
+    for (const [name, url, isCrud] of canaryConfigs) {
       const canaryName = name.slice(0, 21);
+      const code = isCrud ? crudCanaryCode(url) : readOnlyCanaryCode(url);
       const canary = new synthetics.Canary(this, canaryName, {
         canaryName,
         runtime: new synthetics.Runtime('syn-python-selenium-10.0', synthetics.RuntimeFamily.PYTHON),
-        test: synthetics.Test.custom({ code: canaryCode(url), handler: 'index.handler' }),
+        test: synthetics.Test.custom({ code, handler: 'index.handler' }),
         schedule: synthetics.Schedule.rate(cdk.Duration.minutes(5)),
         artifactsBucketLocation: { bucket: artifactBucket },
         startAfterCreation: true,
