@@ -75,5 +75,116 @@ if (target === 'db-primary') {
     project, vpcImport: vpcImport(), databaseSgId: c('dbSgId'), globalClusterIdentifier: globalClusterId, env: env(primaryRegion),
   }));
 }
+if (target === 'db-secondary') {
+  suppress(new DatabaseReplicaStack(app, `${project}-db-secondary`, {
+    project, vpcImport: vpcImport(), databaseSgId: c('dbSgId'), globalClusterIdentifier: globalClusterId, env: env(secondaryRegion),
+  }));
+}
+
+// ─── DSQL ───
+if (target === 'dsql-primary') suppress(new DsqlStack(app, `${project}-dsql-primary`, { project, peerClusterArns: c('dsqlPeerArns', '').split(',').filter(Boolean), env: env(primaryRegion) }));
+if (target === 'dsql-secondary') suppress(new DsqlStack(app, `${project}-dsql-secondary`, { project, peerClusterArns: c('dsqlPeerArns', '').split(',').filter(Boolean), env: env(secondaryRegion) }));
+
+// ─── Schema ───
+if (target === 'schema') {
+  suppress(new SchemaStack(app, `${project}-schema`, {
+    project, vpcImport: vpcImport(), lambdaSgId: c('lambdaSgId'), secretArn: c('secretArn'), encryptionKeyArn: c('encryptionKeyArn'), env: env(primaryRegion),
+  }));
+}
+
+// ─── Aurora App ───
+if (target === 'aurora-app-primary') {
+  suppress(new AuroraAppStack(app, `${project}-aurora-app-primary`, {
+    project, vpcImport: vpcImport(), lambdaSgId: c('lambdaSgId'), albSgId: c('albSgId'), secretArn: c('secretArn'), encryptionKeyArn: c('encryptionKeyArn'), env: env(primaryRegion),
+  }));
+}
+if (target === 'aurora-app-secondary') {
+  suppress(new AuroraAppStack(app, `${project}-aurora-app-secondary`, {
+    project, vpcImport: vpcImport(), lambdaSgId: c('lambdaSgId'), albSgId: c('albSgId'), secretArn: c('secretArn'), encryptionKeyArn: c('encryptionKeyArn'), env: env(secondaryRegion),
+  }));
+}
+
+// ─── DSQL App ───
+if (target === 'dsql-app-primary') {
+  suppress(new DsqlAppStack(app, `${project}-dsql-app-primary`, {
+    project, vpcImport: vpcImport(), lambdaSgId: c('lambdaSgId'), albSgId: c('albSgId'), dsqlEndpoint: c('dsqlEndpoint'), env: env(primaryRegion),
+  }));
+}
+if (target === 'dsql-app-secondary') {
+  suppress(new DsqlAppStack(app, `${project}-dsql-app-secondary`, {
+    project, vpcImport: vpcImport(), lambdaSgId: c('lambdaSgId'), albSgId: c('albSgId'), dsqlEndpoint: c('dsqlEndpoint'), env: env(secondaryRegion),
+  }));
+}
+
+// ─── DNS ───
+if (target === 'dns') {
+  suppress(new DnsStack(app, `${project}-dns`, {
+    project, domainName: domain, primaryVpcId: c('primaryVpcId'), secondaryVpcId: c('secondaryVpcId'),
+    primaryRegion, secondaryRegion,
+    primaryAuroraAlbDns: c('primaryAuroraAlbDns'), primaryAuroraAlbHostedZoneId: c('primaryAuroraAlbHostedZoneId'),
+    secondaryAuroraAlbDns: c('secondaryAuroraAlbDns'), secondaryAuroraAlbHostedZoneId: c('secondaryAuroraAlbHostedZoneId'),
+    primaryDsqlAlbDns: c('primaryDsqlAlbDns'), primaryDsqlAlbHostedZoneId: c('primaryDsqlAlbHostedZoneId'),
+    secondaryDsqlAlbDns: c('secondaryDsqlAlbDns'), secondaryDsqlAlbHostedZoneId: c('secondaryDsqlAlbHostedZoneId'),
+    primaryHealthCheckId: c('primaryHealthCheckId', ''), secondaryHealthCheckId: c('secondaryHealthCheckId', ''),
+    env: env(primaryRegion),
+  }));
+}
+
+// ─── Failover Plan ───
+if (target === 'failover-plan') {
+  suppress(new FailoverPlanStack(app, `${project}-failover-plan`, {
+    project, primaryRegion, secondaryRegion, globalClusterIdentifier: globalClusterId,
+    primaryClusterArn: c('primaryClusterArn'), secondaryClusterArn: c('secondaryClusterArn'),
+    hostedZoneId: c('hostedZoneId'), auroraRecordName: `aurora-app.${domain}`, dsqlRecordName: `dsql-app.${domain}`,
+    env: env(primaryRegion),
+  }));
+}
+
+// ─── Synthetics ───
+if (target === 'synthetics-primary' || target === 'synthetics-secondary') {
+  const region = target === 'synthetics-primary' ? primaryRegion : secondaryRegion;
+  suppress(new SyntheticsStack(app, `${project}-${target}`, {
+    project, vpcImport: vpcImport(), syntheticsSgId: c('syntheticsSgId'),
+    localAuroraAlbDns: c('localAuroraAlbDns'), localDsqlAlbDns: c('localDsqlAlbDns'),
+    crossRegionAuroraUrl: `aurora-app.${domain}`, crossRegionDsqlUrl: `dsql-app.${domain}`,
+    env: env(region),
+  }));
+}
+
+// ─── Monitoring ───
+if (target === 'monitoring-primary' || target === 'monitoring-secondary') {
+  const region = target === 'monitoring-primary' ? primaryRegion : secondaryRegion;
+  suppress(new MonitoringStack(app, `${project}-${target}`, {
+    project, primaryRegion, secondaryRegion, dbClusterIdentifier: c('dbClusterIdentifier'),
+    vpcImport: vpcImport(), lambdaSgId: c('lambdaSgId'),
+    secretArn: c('secretArn'), encryptionKeyArn: c('encryptionKeyArn'),
+    remoteSecretArn: c('remoteSecretArn'), remoteEncryptionKeyArn: c('remoteEncryptionKeyArn'),
+    env: env(region),
+  }));
+}
+
+// ─── Reconciliation ───
+if (target === 'reconciliation-primary' || target === 'reconciliation-secondary') {
+  const region = target === 'reconciliation-primary' ? primaryRegion : secondaryRegion;
+  suppress(new ReconciliationStack(app, `${project}-${target}`, {
+    project, vpcImport: vpcImport(), lambdaSgId: c('lambdaSgId'),
+    secretArn: c('secretArn'), encryptionKeyArn: c('encryptionKeyArn'),
+    globalClusterIdentifier: globalClusterId, primaryRegion, secondaryRegion,
+    env: env(region),
+  }));
+}
+
+// ─── Load Gen ───
+if (target === 'loadgen') {
+  suppress(new LoadGenStack(app, `${project}-loadgen`, {
+    project, vpcImport: vpcImport(), lambdaSgId: c('lambdaSgId'),
+    auroraAlbDns: c('auroraAlbDns'), dsqlAlbDns: c('dsqlAlbDns'),
+    env: env(primaryRegion),
+  }));
+}
+
+// ─── Chaos ───
+if (target === 'chaos-primary') suppress(new ChaosStack(app, `${project}-chaos-primary`, { project, targetRegion: secondaryRegion, env: env(primaryRegion) }));
+if (target === 'chaos-secondary') suppress(new ChaosStack(app, `${project}-chaos-secondary`, { project, targetRegion: primaryRegion, env: env(secondaryRegion) }));
 
 app.synth();
