@@ -85,6 +85,7 @@ export class VpcStack extends cdk.Stack {
       ['SecretsManager', ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER],
       ['Sts', ec2.InterfaceVpcEndpointAwsService.STS],
       ['Lambda', ec2.InterfaceVpcEndpointAwsService.LAMBDA],
+      ['Synthetics', new ec2.InterfaceVpcEndpointAwsService('synthetics')],
     ];
 
     for (const [name, service] of interfaceEndpoints) {
