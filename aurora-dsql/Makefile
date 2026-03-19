@@ -19,10 +19,9 @@ define sr
 $$(aws cloudformation describe-stack-resources --stack-name $(1) --region $(2) --query "StackResources[?LogicalResourceId=='$(3)'].PhysicalResourceId" --output text)
 endef
 
-deploy: deploy-vpc deploy-vpc-peering deploy-database deploy-dsql deploy-schema \
-	deploy-aurora-app deploy-dsql-app deploy-dns deploy-failover-plan deploy-dns-with-hc \
-	deploy-synthetics deploy-monitoring deploy-reconciliation deploy-loadgen deploy-chaos
-	@echo "✅ All stacks deployed"
+deploy: deploy-vpc deploy-vpc-peering deploy-database deploy-schema \
+	deploy-aurora-app deploy-dns deploy-monitoring deploy-chaos
+	@echo "✅ Core stacks deployed (DSQL, synthetics, failover, reconciliation, loadgen pending DSQL linking investigation)"
 
 deploy-vpc:
 	@echo "═══ Deploying VPCs ═══"
@@ -118,8 +117,8 @@ deploy-dsql-app: deploy-dsql
 		--require-approval never -o cdk.out.dapp-s & \
 	wait
 
-deploy-dns: deploy-aurora-app deploy-dsql-app
-	@echo "═══ Deploying DNS (phase 1 — no health checks) ═══"
+deploy-dns: deploy-aurora-app
+	@echo "═══ Deploying DNS (phase 1 — Aurora app only, no health checks) ═══"
 	@PRIMARY_VPC_ID=$(call so,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),VpcId) && \
 	SECONDARY_VPC_ID=$(call so,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),VpcId) && \
 	P_AURORA_ALB_DNS=$(call so,$(PROJECT)-aurora-app-primary,$(PRIMARY_REGION),AlbDnsName) && \
