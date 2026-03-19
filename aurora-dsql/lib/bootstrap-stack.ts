@@ -69,6 +69,7 @@ export class BootstrapStack extends cdk.Stack {
         'ec2:DescribeRouteTables', 'ec2:CreateRoute',
         'ec2:AcceptVpcPeeringConnection', 'ec2:DescribeVpcPeeringConnections',
         'rds:DescribeDBClusters', 'rds:DescribeGlobalClusters',
+        'dsql:GetCluster',
       ],
       resources: ['*'],
     }));
