@@ -1,26 +1,13 @@
 import * as cdk from 'aws-cdk-lib';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import { DatabaseReplicaStack } from '../lib/database-replica-stack';
 
 function createStack() {
   const app = new cdk.App();
-  const vpcStack = new cdk.Stack(app, 'VpcStack', {
-    env: { account: '123456789012', region: 'us-west-2' },
-  });
-  const vpc = new ec2.Vpc(vpcStack, 'Vpc', {
-    maxAzs: 2,
-    natGateways: 0,
-    subnetConfiguration: [
-      { name: 'Isolated', subnetType: ec2.SubnetType.PRIVATE_ISOLATED, cidrMask: 24 },
-    ],
-  });
-  const dbSg = new ec2.SecurityGroup(vpcStack, 'DbSg', { vpc });
-
   const stack = new DatabaseReplicaStack(app, 'TestDbReplica', {
     project: 'test',
-    vpc,
-    databaseSg: dbSg,
+    vpcImport: { vpcId: 'vpc-123', subnetIds: 'subnet-1,subnet-2', azs: 'us-west-2a,us-west-2b' },
+    databaseSgId: 'sg-db',
     globalClusterIdentifier: 'test-global-cluster',
     env: { account: '123456789012', region: 'us-west-2' },
   });

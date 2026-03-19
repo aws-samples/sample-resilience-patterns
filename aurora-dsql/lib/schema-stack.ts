@@ -6,10 +6,12 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as path from 'path';
 
+import { importVpc, importSg, VpcImportProps } from './imports';
+
 export interface SchemaStackProps extends cdk.StackProps {
   readonly project: string;
-  readonly vpc: ec2.IVpc;
-  readonly lambdaSg: ec2.ISecurityGroup;
+  readonly vpcImport: VpcImportProps;
+  readonly lambdaSgId: string;
   readonly secretArn: string;
   readonly encryptionKeyArn: string;
 }
@@ -18,15 +20,17 @@ export class SchemaStack extends cdk.Stack {
   constructor(scope: cdk.App, id: string, props: SchemaStackProps) {
     super(scope, id, props);
 
+    const vpc = importVpc(this, props.vpcImport);
+    const lambdaSg = importSg(this, 'LambdaSg', props.lambdaSgId);
     const encryptionKey = kms.Key.fromKeyArn(this, 'EncryptionKey', props.encryptionKeyArn);
 
     const migrationFn = new lambda.Function(this, 'MigrationFunction', {
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: 'index.on_event',
       code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'schema-migration')),
-      vpc: props.vpc,
+      vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
-      securityGroups: [props.lambdaSg],
+      securityGroups: [lambdaSg],
       timeout: cdk.Duration.minutes(5),
       reservedConcurrentExecutions: 1,
       environment: {
@@ -51,7 +55,6 @@ export class SchemaStack extends cdk.Stack {
     new cdk.CustomResource(this, 'SchemaMigration', {
       serviceToken: provider.serviceToken,
       properties: {
-        // Change to force re-run on update
         Version: '1',
       },
     });

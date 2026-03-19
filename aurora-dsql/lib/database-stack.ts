@@ -4,10 +4,12 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 
+import { importVpc, importSg, VpcImportProps } from './imports';
+
 export interface DatabaseStackProps extends cdk.StackProps {
   readonly project: string;
-  readonly vpc: ec2.IVpc;
-  readonly databaseSg: ec2.ISecurityGroup;
+  readonly vpcImport: VpcImportProps;
+  readonly databaseSgId: string;
   readonly globalClusterIdentifier: string;
 }
 
@@ -19,6 +21,9 @@ export class DatabaseStack extends cdk.Stack {
 
   constructor(scope: cdk.App, id: string, props: DatabaseStackProps) {
     super(scope, id, props);
+
+    const vpc = importVpc(this, props.vpcImport);
+    const databaseSg = importSg(this, 'DatabaseSg', props.databaseSgId);
 
     this.encryptionKey = new kms.Key(this, 'DbEncryptionKey', {
       alias: `${props.project}-db-primary`,
@@ -41,9 +46,9 @@ export class DatabaseStack extends cdk.Stack {
       writer: rds.ClusterInstance.provisioned('Writer', {
         instanceType: ec2.InstanceType.of(ec2.InstanceClass.R6G, ec2.InstanceSize.LARGE),
       }),
-      vpc: props.vpc,
+      vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
-      securityGroups: [props.databaseSg],
+      securityGroups: [databaseSg],
       storageEncryptionKey: this.encryptionKey,
       credentials: rds.Credentials.fromGeneratedSecret('dbadmin', {
         secretName: `${props.project}/db-credentials`,

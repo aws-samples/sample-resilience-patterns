@@ -10,13 +10,15 @@ import * as events from 'aws-cdk-lib/aws-events';
 import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
 import * as path from 'path';
 
+import { importVpc, importSg, VpcImportProps } from './imports';
+
 export interface MonitoringStackProps extends cdk.StackProps {
   readonly project: string;
   readonly primaryRegion: string;
   readonly secondaryRegion: string;
   readonly dbClusterIdentifier: string;
-  readonly vpc: ec2.IVpc;
-  readonly lambdaSg: ec2.ISecurityGroup;
+  readonly vpcImport: VpcImportProps;
+  readonly lambdaSgId: string;
   readonly secretArn: string;
   readonly encryptionKeyArn: string;
   readonly remoteSecretArn: string;
@@ -26,6 +28,9 @@ export interface MonitoringStackProps extends cdk.StackProps {
 export class MonitoringStack extends cdk.Stack {
   constructor(scope: cdk.App, id: string, props: MonitoringStackProps) {
     super(scope, id, props);
+
+    const vpc = importVpc(this, props.vpcImport);
+    const lambdaSg = importSg(this, 'LambdaSg', props.lambdaSgId);
 
     const snsKey = new kms.Key(this, 'SnsKey', {
       alias: `${props.project}-alarm-${this.region}`,
@@ -71,9 +76,9 @@ export class MonitoringStack extends cdk.Stack {
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'rpo-monitor')),
-      vpc: props.vpc,
+      vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
-      securityGroups: [props.lambdaSg],
+      securityGroups: [lambdaSg],
       timeout: cdk.Duration.minutes(2),
       reservedConcurrentExecutions: 5,
       environment: {

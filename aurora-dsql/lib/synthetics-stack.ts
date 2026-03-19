@@ -5,10 +5,12 @@ import * as kms from 'aws-cdk-lib/aws-kms';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 
+import { importVpc, importSg, VpcImportProps } from './imports';
+
 export interface SyntheticsStackProps extends cdk.StackProps {
   readonly project: string;
-  readonly vpc: ec2.IVpc;
-  readonly syntheticsSg: ec2.ISecurityGroup;
+  readonly vpcImport: VpcImportProps;
+  readonly syntheticsSgId: string;
   readonly localAuroraAlbDns: string;
   readonly localDsqlAlbDns: string;
   readonly crossRegionAuroraUrl: string;
@@ -18,6 +20,9 @@ export interface SyntheticsStackProps extends cdk.StackProps {
 export class SyntheticsStack extends cdk.Stack {
   constructor(scope: cdk.App, id: string, props: SyntheticsStackProps) {
     super(scope, id, props);
+
+    const vpc = importVpc(this, props.vpcImport);
+    const syntheticsSg = importSg(this, 'SyntheticsSg', props.syntheticsSgId);
 
     const encryptionKey = new kms.Key(this, 'CanaryArtifactKey', {
       alias: `${props.project}-canary-${this.region}`,
@@ -77,9 +82,9 @@ def handler(event, context):
 `);
 
     const vpcConfig: synthetics.CfnCanary.VPCConfigProperty = {
-      vpcId: props.vpc.vpcId,
-      subnetIds: props.vpc.isolatedSubnets.map(s => s.subnetId),
-      securityGroupIds: [props.syntheticsSg.securityGroupId],
+      vpcId: vpc.vpcId,
+      subnetIds: vpc.isolatedSubnets.map(s => s.subnetId),
+      securityGroupIds: [syntheticsSg.securityGroupId],
     };
 
     const canaryConfigs: [string, string][] = [
@@ -90,7 +95,6 @@ def handler(event, context):
     ];
 
     for (const [name, url] of canaryConfigs) {
-      // Canary names max 21 chars
       const canaryName = name.slice(0, 21);
       const canary = new synthetics.Canary(this, canaryName, {
         canaryName,
@@ -99,9 +103,9 @@ def handler(event, context):
         schedule: synthetics.Schedule.rate(cdk.Duration.minutes(5)),
         artifactsBucketLocation: { bucket: artifactBucket },
         startAfterCreation: true,
-        vpc: props.vpc,
+        vpc,
         vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
-        securityGroups: [props.syntheticsSg],
+        securityGroups: [syntheticsSg],
       });
 
       new cloudwatch.Alarm(this, `${canaryName}-alarm`, {
