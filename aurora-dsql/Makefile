@@ -69,17 +69,16 @@ deploy-schema: deploy-database
 
 deploy-aurora-app: deploy-schema
 	@echo "═══ Deploying Aurora app stacks ═══"
-	@export SECRET_ARN=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),SecretArn) && \
-	export ENC_KEY_ARN=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),EncryptionKeyArn) && \
+	@SECRET_ARN=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),SecretArn) && \
+	ENC_KEY_ARN=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),EncryptionKeyArn) && \
 	$(CDK) deploy $(PROJECT)-aurora-app-primary $(CDK_COMMON) -c stack=aurora-app-primary \
 		$(call vpc_ctx,$(PROJECT)-vpc-primary,$(PRIMARY_REGION)) \
 		-c secretArn=$$SECRET_ARN -c encryptionKeyArn=$$ENC_KEY_ARN \
-		--require-approval never -o cdk.out.aapp-p & \
+		--require-approval never -o cdk.out.aapp-p && \
 	$(CDK) deploy $(PROJECT)-aurora-app-secondary $(CDK_COMMON) -c stack=aurora-app-secondary \
 		$(call vpc_ctx,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION)) \
 		-c secretArn=$$SECRET_ARN -c encryptionKeyArn=$$ENC_KEY_ARN \
-		--require-approval never -o cdk.out.aapp-s & \
-	wait
+		--require-approval never -o cdk.out.aapp-s
 
 deploy-dns: deploy-aurora-app
 	@echo "═══ Deploying DNS ═══"
