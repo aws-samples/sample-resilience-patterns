@@ -70,7 +70,7 @@ if (target === 'vpc-peering') {
 // ─── Database ───
 if (target === 'db-primary') {
   suppress(new DatabaseStack(app, `${project}-db-primary`, {
-    project, vpcImport: vpcImport(), databaseSgId: c('dbSgId'), globalClusterIdentifier: globalClusterId, env: env(primaryRegion),
+    project, vpcImport: vpcImport(), databaseSgId: c('dbSgId'), globalClusterIdentifier: globalClusterId, secondaryRegion, env: env(primaryRegion),
   }));
 }
 if (target === 'db-secondary') {

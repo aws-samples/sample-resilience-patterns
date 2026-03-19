@@ -11,6 +11,7 @@ export interface DatabaseStackProps extends cdk.StackProps {
   readonly vpcImport: VpcImportProps;
   readonly databaseSgId: string;
   readonly globalClusterIdentifier: string;
+  readonly secondaryRegion: string;
 }
 
 export class DatabaseStack extends cdk.Stack {
@@ -66,6 +67,12 @@ export class DatabaseStack extends cdk.Stack {
     cfnCluster.addDependency(this.globalCluster);
 
     this.secret = this.cluster.secret!;
+
+    // Replicate credentials to secondary region for cross-region app access
+    const cfnSecret = this.secret.node.defaultChild as secretsmanager.CfnSecret;
+    cfnSecret.addPropertyOverride('ReplicaRegions', [
+      { Region: props.secondaryRegion },
+    ]);
 
     new cdk.CfnOutput(this, 'GlobalClusterArn', {
       value: `arn:aws:rds::${this.account}:global-cluster:${props.globalClusterIdentifier}`,

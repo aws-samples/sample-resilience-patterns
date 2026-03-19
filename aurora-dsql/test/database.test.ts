@@ -8,7 +8,7 @@ function createStack() {
     project: 'test',
     vpcImport: { vpcId: 'vpc-123', subnetIds: 'subnet-1,subnet-2', azs: 'us-east-1a,us-east-1b' },
     databaseSgId: 'sg-db',
-    globalClusterIdentifier: 'test-global-cluster',
+    globalClusterIdentifier: 'test-global-cluster', secondaryRegion: 'us-west-2',
     env: { account: '123456789012', region: 'us-east-1' },
   });
   return Template.fromStack(stack);
