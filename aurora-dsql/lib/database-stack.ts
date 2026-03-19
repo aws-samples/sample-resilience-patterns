@@ -69,10 +69,15 @@ export class DatabaseStack extends cdk.Stack {
     this.secret = this.cluster.secret!;
 
     // Replicate credentials to secondary region for cross-region app access
-    const cfnSecret = this.secret.node.defaultChild as secretsmanager.CfnSecret;
-    cfnSecret.addPropertyOverride('ReplicaRegions', [
-      { Region: props.secondaryRegion },
-    ]);
+    // The secret is created by RDS — find the CfnSecret and add replication
+    const secretConstruct = this.cluster.node.findAll().find(
+      c => (c as any).cfnResourceType === 'AWS::SecretsManager::Secret'
+    ) as secretsmanager.CfnSecret | undefined;
+    if (secretConstruct) {
+      secretConstruct.addPropertyOverride('ReplicaRegions', [
+        { Region: props.secondaryRegion },
+      ]);
+    }
 
     new cdk.CfnOutput(this, 'GlobalClusterArn', {
       value: `arn:aws:rds::${this.account}:global-cluster:${props.globalClusterIdentifier}`,
