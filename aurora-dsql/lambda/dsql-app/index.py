@@ -2,8 +2,8 @@ import json
 import logging
 import os
 import boto3
-import psycopg2
-import psycopg2.extras
+import psycopg
+import psycopg.extras
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -19,7 +19,7 @@ def get_dsql_token():
 def get_connection():
     endpoint = os.environ['DSQL_ENDPOINT']
     token = get_dsql_token()
-    return psycopg2.connect(
+    return psycopg.connect(
         host=endpoint, port=5432, user='admin',
         password=token, dbname='postgres',
         sslmode='require',
@@ -42,7 +42,7 @@ def handler(event, context):
         conn = get_connection()
         try:
             conn.autocommit = True
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
                 if path == '/orders' and method == 'POST':
                     cur.execute("SELECT sp_insert_order(%s, %s, %s) AS id",
                                 (body.get('region', os.environ.get('AWS_REGION')),
