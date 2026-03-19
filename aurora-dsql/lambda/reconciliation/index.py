@@ -2,7 +2,7 @@ import json
 import logging
 import os
 import boto3
-import psycopg2
+import psycopg
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -16,7 +16,7 @@ def get_db_credentials():
 
 
 def get_order_ids(host, user, password, dbname='orders'):
-    conn = psycopg2.connect(host=host, port=5432, user=user, password=password, dbname=dbname)
+    conn = psycopg.connect(host=host, port=5432, user=user, password=password, dbname=dbname)
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT id FROM orders ORDER BY id")

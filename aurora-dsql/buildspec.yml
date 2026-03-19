@@ -13,7 +13,7 @@ phases:
         for dir in lambda/schema-migration lambda/aurora-app lambda/dsql-app lambda/rpo-monitor lambda/reconciliation lambda/loadgen; do
           if [ -f "$dir/requirements.txt" ]; then
             echo "Installing deps for $dir..."
-            pip install -r "$dir/requirements.txt" -t "$dir/" --quiet
+            pip install -r "$dir/requirements.txt" -t "$dir/" --platform manylinux2014_x86_64 --only-binary=:all: --quiet
           fi
         done
       - make deploy
