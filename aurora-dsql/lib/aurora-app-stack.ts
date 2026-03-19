@@ -39,13 +39,17 @@ export class AuroraAppStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(60),
       reservedConcurrentExecutions: 5,
       environment: {
-        DB_SECRET_ARN: props.secretArn,
+        DB_SECRET_ARN: `${props.project}/db-credentials`,
       },
     });
 
     this.fn.addToRolePolicy(new iam.PolicyStatement({
       actions: ['secretsmanager:GetSecretValue'],
-      resources: [props.secretArn],
+      resources: [
+        props.secretArn,
+        // Also allow access to replicated secret in this region
+        `arn:aws:secretsmanager:${this.region}:${this.account}:secret:${props.project}/db-credentials-*`,
+      ],
     }));
 
     this.fn.addToRolePolicy(new iam.PolicyStatement({
