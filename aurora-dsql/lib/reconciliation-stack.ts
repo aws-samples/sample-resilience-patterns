@@ -83,7 +83,7 @@ export class ReconciliationStack extends cdk.Stack {
         description: 'Snapshot Aurora cluster and copy cross-region',
         assumeRole: automationRole.roleArn,
         parameters: {
-          SourceSnapshotArn: { type: 'String', description: 'ARN of the source snapshot to copy' },
+          SourceSnapshotArn: { type: 'String', description: 'ARN of the source snapshot to copy', default: '' },
         },
         mainSteps: [
           {
@@ -121,8 +121,8 @@ def handler(event, context):
         description: 'Restore snapshot to temp cluster and run reconciliation',
         assumeRole: automationRole.roleArn,
         parameters: {
-          SnapshotArn: { type: 'String', description: 'ARN of the snapshot to restore' },
-          TargetDbEndpoint: { type: 'String', description: 'Endpoint of the new primary DB to compare against' },
+          SnapshotArn: { type: 'String', description: 'ARN of the snapshot to restore', default: '' },
+          TargetDbEndpoint: { type: 'String', default: '', description: 'Endpoint of the new primary DB to compare against' },
         },
         mainSteps: [
           {
@@ -180,10 +180,10 @@ def handler(event, context):
             action: 'aws:invokeLambdaFunction',
             inputs: {
               FunctionName: reconcileFn.functionName,
-              InputPayload: JSON.stringify({
+              InputPayload: {
                 source_db_endpoint: '{{RestoreCluster.ClusterEndpoint}}',
                 target_db_endpoint: '{{TargetDbEndpoint}}',
-              }),
+              },
             },
           },
         ],
