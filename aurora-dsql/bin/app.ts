@@ -6,10 +6,8 @@ import { VpcStack } from '../lib/vpc-stack';
 import { VpcPeeringStack } from '../lib/vpc-peering-stack';
 import { DatabaseStack } from '../lib/database-stack';
 import { DatabaseReplicaStack } from '../lib/database-replica-stack';
-import { DsqlStack } from '../lib/dsql-stack';
 import { SchemaStack } from '../lib/schema-stack';
 import { AuroraAppStack } from '../lib/aurora-app-stack';
-import { DsqlAppStack } from '../lib/dsql-app-stack';
 import { DnsStack } from '../lib/dns-stack';
 import { FailoverPlanStack } from '../lib/failover-plan-stack';
 import { SyntheticsStack } from '../lib/synthetics-stack';
@@ -81,10 +79,6 @@ if (target === 'db-secondary') {
   }));
 }
 
-// ─── DSQL ───
-if (target === 'dsql-primary') suppress(new DsqlStack(app, `${project}-dsql-primary`, { project, peerClusterArns: c('dsqlPeerArns', '').split(',').filter(Boolean), env: env(primaryRegion) }));
-if (target === 'dsql-secondary') suppress(new DsqlStack(app, `${project}-dsql-secondary`, { project, peerClusterArns: c('dsqlPeerArns', '').split(',').filter(Boolean), env: env(secondaryRegion) }));
-
 // ─── Schema ───
 if (target === 'schema') {
   suppress(new SchemaStack(app, `${project}-schema`, {
@@ -104,18 +98,6 @@ if (target === 'aurora-app-secondary') {
   }));
 }
 
-// ─── DSQL App ───
-if (target === 'dsql-app-primary') {
-  suppress(new DsqlAppStack(app, `${project}-dsql-app-primary`, {
-    project, vpcImport: vpcImport(), lambdaSgId: c('lambdaSgId'), albSgId: c('albSgId'), dsqlEndpoint: c('dsqlEndpoint'), env: env(primaryRegion),
-  }));
-}
-if (target === 'dsql-app-secondary') {
-  suppress(new DsqlAppStack(app, `${project}-dsql-app-secondary`, {
-    project, vpcImport: vpcImport(), lambdaSgId: c('lambdaSgId'), albSgId: c('albSgId'), dsqlEndpoint: c('dsqlEndpoint'), env: env(secondaryRegion),
-  }));
-}
-
 // ─── DNS ───
 if (target === 'dns') {
   suppress(new DnsStack(app, `${project}-dns`, {
@@ -123,8 +105,6 @@ if (target === 'dns') {
     primaryRegion, secondaryRegion,
     primaryAuroraAlbDns: c('primaryAuroraAlbDns'), primaryAuroraAlbHostedZoneId: c('primaryAuroraAlbHostedZoneId'),
     secondaryAuroraAlbDns: c('secondaryAuroraAlbDns'), secondaryAuroraAlbHostedZoneId: c('secondaryAuroraAlbHostedZoneId'),
-    primaryDsqlAlbDns: c('primaryDsqlAlbDns'), primaryDsqlAlbHostedZoneId: c('primaryDsqlAlbHostedZoneId'),
-    secondaryDsqlAlbDns: c('secondaryDsqlAlbDns'), secondaryDsqlAlbHostedZoneId: c('secondaryDsqlAlbHostedZoneId'),
     primaryHealthCheckId: c('primaryHealthCheckId', ''), secondaryHealthCheckId: c('secondaryHealthCheckId', ''),
     env: env(primaryRegion),
   }));
@@ -135,7 +115,7 @@ if (target === 'failover-plan') {
   suppress(new FailoverPlanStack(app, `${project}-failover-plan`, {
     project, primaryRegion, secondaryRegion, globalClusterIdentifier: globalClusterId,
     primaryClusterArn: c('primaryClusterArn'), secondaryClusterArn: c('secondaryClusterArn'),
-    hostedZoneId: c('hostedZoneId'), auroraRecordName: `aurora-app.${domain}`, dsqlRecordName: `dsql-app.${domain}`,
+    hostedZoneId: c('hostedZoneId'), auroraRecordName: `aurora-app.${domain}`,
     env: env(primaryRegion),
   }));
 }
@@ -145,8 +125,8 @@ if (target === 'synthetics-primary' || target === 'synthetics-secondary') {
   const region = target === 'synthetics-primary' ? primaryRegion : secondaryRegion;
   suppress(new SyntheticsStack(app, `${project}-${target}`, {
     project, vpcImport: vpcImport(), syntheticsSgId: c('syntheticsSgId'),
-    localAuroraAlbDns: c('localAuroraAlbDns'), localDsqlAlbDns: c('localDsqlAlbDns'),
-    crossRegionAuroraUrl: `aurora-app.${domain}`, crossRegionDsqlUrl: `dsql-app.${domain}`,
+    localAuroraAlbDns: c('localAuroraAlbDns'),
+    crossRegionAuroraUrl: `aurora-app.${domain}`,
     env: env(region),
   }));
 }
@@ -178,7 +158,7 @@ if (target === 'reconciliation-primary' || target === 'reconciliation-secondary'
 if (target === 'loadgen') {
   suppress(new LoadGenStack(app, `${project}-loadgen`, {
     project, vpcImport: vpcImport(), lambdaSgId: c('lambdaSgId'),
-    auroraAlbDns: c('auroraAlbDns'), dsqlAlbDns: c('dsqlAlbDns'),
+    auroraAlbDns: c('auroraAlbDns'),
     env: env(primaryRegion),
   }));
 }

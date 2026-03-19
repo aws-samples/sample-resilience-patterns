@@ -1,6 +1,4 @@
-# Aurora Global Database + Aurora DSQL — Multi-Region Resilience Demo
 
-A multi-region resilience sample demonstrating Aurora Global Database and Aurora DSQL with ARC Region Switch failover, CloudWatch Synthetics, RPO monitoring, post-failover reconciliation, FIS chaos testing, and load generation.
 
 ## Architecture
 
@@ -8,7 +6,6 @@ A multi-region resilience sample demonstrating Aurora Global Database and Aurora
 ┌─────────────────────────────────────────────────────────────────┐
 │                        GLOBAL RESOURCES                         │
 │  Aurora Global Database (PostgreSQL 16.6)                       │
-│  Aurora DSQL (multi-region linked clusters)                     │
 │  Route 53 Private Hosted Zone (demo.internal)                   │
 │  ARC Region Switch Plan (activeActive)                          │
 │  VPC Peering (cross-region)                                     │
@@ -20,8 +17,6 @@ A multi-region resilience sample demonstrating Aurora Global Database and Aurora
 │  Aurora Global DB App:            │  │  Aurora Global DB App:            │
 │    ALB (HTTP) → Lambda → Aurora   │  │    ALB (HTTP) → Lambda → Aurora   │
 │                                   │  │                                   │
-│  DSQL App:                        │  │  DSQL App:                        │
-│    ALB (HTTP) → Lambda → DSQL     │  │    ALB (HTTP) → Lambda → DSQL     │
 │                                   │  │                                   │
 │  Synthetics (4 canaries)          │  │  Synthetics (4 canaries)          │
 │  Monitoring + RPO Monitor         │  │  Monitoring + RPO Monitor         │
@@ -41,10 +36,8 @@ A multi-region resilience sample demonstrating Aurora Global Database and Aurora
 | VPC Peering | us-east-1 | Cross-region peering with routes |
 | Database Primary | us-east-1 | Aurora Global Cluster + writer instance (db.r6g.large) |
 | Database Secondary | us-west-2 | Aurora reader instance joined to global cluster |
-| DSQL (x2) | both | Linked multi-region DSQL clusters |
 | Schema | us-east-1 | Tables, indexes, 4 stored procedures via Lambda custom resource |
 | Aurora App (x2) | both | Internal ALB → Lambda → Aurora (CRUD via stored procedures) |
-| DSQL App (x2) | both | Internal ALB → Lambda → DSQL (CRUD via IAM auth) |
 | DNS | us-east-1 | Private hosted zone with latency-based routing for both apps |
 | Failover Plan | us-east-1 | ARC Region Switch with Aurora failover + DNS health check toggle |
 | Synthetics (x2) | both | 4 canaries per region (local + cross-region, per app) |
@@ -63,11 +56,8 @@ A multi-region resilience sample demonstrating Aurora Global Database and Aurora
 ## Deployment
 
 ```bash
-cd aurora-dsql
 npm ci
-npx cdk deploy aurora-dsql-bootstrap \
   -c stack=bootstrap \
-  -c project=aurora-dsql \
   -c primaryRegion=us-east-1 \
   -c secondaryRegion=us-west-2 \
   -c accountId=YOUR_ACCOUNT_ID \
@@ -86,7 +76,6 @@ npx projen test    # 87 CDK assertion tests
 ### Run Load Test
 ```bash
 aws ssm start-automation-execution \
-  --document-name aurora-dsql-load-test \
   --parameters '{"RequestsPerSecond":["10"],"DurationSeconds":["300"],"TargetApp":["both"]}' \
   --region us-east-1
 ```

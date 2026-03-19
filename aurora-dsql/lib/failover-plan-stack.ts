@@ -10,7 +10,6 @@ export interface FailoverPlanStackProps extends cdk.StackProps {
   readonly secondaryClusterArn: string;
   readonly hostedZoneId: string;
   readonly auroraRecordName: string;
-  readonly dsqlRecordName: string;
 }
 
 export class FailoverPlanStack extends cdk.Stack {
@@ -26,31 +25,25 @@ export class FailoverPlanStack extends cdk.Stack {
       actions: ['arc-region-switch:GetPlan', 'arc-region-switch:GetPlanExecution', 'arc-region-switch:ListPlanExecutions'],
       resources: ['*'],
     }));
-
     executionRole.addToPolicy(new iam.PolicyStatement({
       actions: ['rds:DescribeGlobalClusters', 'rds:DescribeDBClusters'],
       resources: ['*'],
     }));
-
     executionRole.addToPolicy(new iam.PolicyStatement({
       actions: ['rds:FailoverGlobalCluster', 'rds:SwitchoverGlobalCluster'],
       resources: [
         `arn:aws:rds::${this.account}:global-cluster:${props.globalClusterIdentifier}`,
-        props.primaryClusterArn,
-        props.secondaryClusterArn,
+        props.primaryClusterArn, props.secondaryClusterArn,
       ],
     }));
-
     executionRole.addToPolicy(new iam.PolicyStatement({
       actions: ['route53:ChangeResourceRecordSets', 'route53:GetHostedZone', 'route53:ListResourceRecordSets'],
       resources: [`arn:aws:route53:::hostedzone/${props.hostedZoneId}`],
     }));
-
     executionRole.addToPolicy(new iam.PolicyStatement({
       actions: ['route53:GetHealthCheck', 'route53:UpdateHealthCheck'],
       resources: ['arn:aws:route53:::healthcheck/*'],
     }));
-
     executionRole.addToPolicy(new iam.PolicyStatement({
       actions: ['cloudwatch:DescribeAlarms', 'cloudwatch:DescribeAlarmHistory', 'cloudwatch:GetMetricStatistics'],
       resources: ['*'],
@@ -97,21 +90,6 @@ export class FailoverPlanStack extends cdk.Stack {
                   },
                 },
               },
-              {
-                Name: 'shift-dns-dsql',
-                ExecutionBlockType: 'Route53HealthCheck',
-                ExecutionBlockConfiguration: {
-                  Route53HealthCheckConfig: {
-                    HostedZoneId: props.hostedZoneId,
-                    RecordName: props.dsqlRecordName,
-                    RecordSets: [
-                      { RecordSetIdentifier: 'PrimaryRegion', Region: props.primaryRegion },
-                      { RecordSetIdentifier: 'StandbyRegion', Region: props.secondaryRegion },
-                    ],
-                    TimeoutMinutes: 5,
-                  },
-                },
-              },
             ],
           },
           {
@@ -125,21 +103,6 @@ export class FailoverPlanStack extends cdk.Stack {
                   Route53HealthCheckConfig: {
                     HostedZoneId: props.hostedZoneId,
                     RecordName: props.auroraRecordName,
-                    RecordSets: [
-                      { RecordSetIdentifier: 'PrimaryRegion', Region: props.primaryRegion },
-                      { RecordSetIdentifier: 'StandbyRegion', Region: props.secondaryRegion },
-                    ],
-                    TimeoutMinutes: 5,
-                  },
-                },
-              },
-              {
-                Name: 'restore-dns-dsql',
-                ExecutionBlockType: 'Route53HealthCheck',
-                ExecutionBlockConfiguration: {
-                  Route53HealthCheckConfig: {
-                    HostedZoneId: props.hostedZoneId,
-                    RecordName: props.dsqlRecordName,
                     RecordSets: [
                       { RecordSetIdentifier: 'PrimaryRegion', Region: props.primaryRegion },
                       { RecordSetIdentifier: 'StandbyRegion', Region: props.secondaryRegion },

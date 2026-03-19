@@ -1,8 +1,6 @@
-# Requirements: Aurora Global Database + Aurora DSQL — Multi-Region Resilience Demo
 
 ## Purpose
 
-Demonstrate Aurora Global Database and Aurora DSQL multi-region resilience patterns — deployed via CDK (TypeScript) with GitHub Actions CI/CD, CloudWatch observability, RPO monitoring, and a test application that exercises stored procedures for CRUD operations.
 
 ## Functional Requirements
 
@@ -16,9 +14,7 @@ Demonstrate Aurora Global Database and Aurora DSQL multi-region resilience patte
 - Deletion protection enabled (configurable for E2E teardown)
 - Automated backups with configurable retention
 
-### FR-2: Aurora DSQL
 
-- Aurora DSQL cluster in us-east-1 (primary) and us-west-2 (witness/linked)
 - Multi-region active-active configuration
 - Automatic conflict resolution
 - IAM-based authentication (no static database credentials)
@@ -42,27 +38,22 @@ Two separate applications, each behind its own Application Load Balancer:
 - Connects to Aurora Global Database (primary writer, secondary reader)
 - Deployed in isolated subnets, accesses AWS services via VPC endpoints only
 
-#### Aurora DSQL Application
 - Lambda functions deployed in both regions behind a separate internal ALB
 - ALB with HTTP listener in isolated subnets
 - Target group with Lambda integration
-- Private hosted zone DNS record (e.g., `dsql-app.demo.internal`) pointing to active-region ALB
 - Endpoints:
   - `POST /orders` — calls `sp_insert_order`
   - `PUT /orders/{id}/status` — calls `sp_update_order_status`
   - `DELETE /orders/{id}` — calls `sp_delete_order`
   - `GET /orders` — calls `sp_query_orders` (query params: region, status, since)
   - `GET /health` — connectivity check
-- Connects to Aurora DSQL endpoint with IAM authentication (no stored secrets)
 - Deployed in isolated subnets, accesses AWS services via VPC endpoints only
 
 ### FR-3a: CloudWatch Synthetics Testing
 
 - CloudWatch Synthetics canaries deployed in both regions
-- Separate canary per application (Aurora Global DB canary, DSQL canary)
 - Local canaries: call same-region ALB HTTP endpoints
 - Cross-region canaries: call opposite-region ALB HTTP endpoints (us-east-1 canary → us-west-2 ALB, and vice versa)
-- Four canaries per region: aurora-local, aurora-cross, dsql-local, dsql-cross
 - Canary scripts exercise all CRUD endpoints and validate HTTP response codes and payloads
 - Runs on configurable schedule (e.g., every 5 minutes)
 - Canary artifacts (logs, screenshots, HAR files) stored in S3 (KMS encrypted)
@@ -146,14 +137,12 @@ Two separate applications, each behind its own Application Load Balancer:
 - Secret encrypted with regional KMS key
 - Secret rotation enabled (30-day interval)
 - Lambda functions retrieve credentials from Secrets Manager at runtime
-- DSQL uses IAM authentication (no stored secrets)
 
 ### FR-10: Private Hosted Zone and DNS Routing
 
 - Route 53 private hosted zone (`demo.internal`) associated with both regional VPCs
 - Latency-based routing records for each application:
   - `aurora-app.demo.internal` — latency-based A-alias records pointing to each region's Aurora app ALB
-  - `dsql-app.demo.internal` — latency-based A-alias records pointing to each region's DSQL app ALB
 - Each record set has a SetIdentifier (PrimaryRegion, StandbyRegion) and Region attribute
 - ARC-managed Route 53 health checks attached to records after ARC plan creation (two-phase deployment)
 - Canaries resolve DNS names; latency routing + health checks direct traffic to healthy region
@@ -190,7 +179,6 @@ Two separate applications, each behind its own Application Load Balancer:
 
 ### FR-13: GitHub Actions CI/CD
 
-- Build workflow: triggers on push to non-main branches (path filter: `aurora-dsql/**`), runs compile + test + synth
 - E2E workflow: triggers on PRs + manual, deploys all stacks, runs Synthetics canaries, verifies replication and metrics, cleans up on success
 - Cleanup workflow: manual trigger only, runs cleanup.sh
 - AWS OIDC authentication (no long-lived credentials)
@@ -250,7 +238,6 @@ Two separate applications, each behind its own Application Load Balancer:
 - Use latest stable CDK version
 - Lambda runtime: Python 3.13 (or latest available)
 - Aurora PostgreSQL: latest supported engine version
-- Aurora DSQL: latest available
 - CodeBuild image: aws/codebuild/standard:7.0 (or latest)
 - Synthetics runtime: latest available (syn-python-selenium-*)
 - Node.js: latest LTS for CDK toolchain

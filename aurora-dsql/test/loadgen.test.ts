@@ -9,7 +9,6 @@ function createStack() {
     vpcImport: { vpcId: 'vpc-123', subnetIds: 'subnet-1,subnet-2', azs: 'us-east-1a,us-east-1b' },
     lambdaSgId: 'sg-lambda',
     auroraAlbDns: 'aurora.elb.amazonaws.com',
-    dsqlAlbDns: 'dsql.elb.amazonaws.com',
     env: { account: '123456789012', region: 'us-east-1' },
   }));
 }
@@ -31,7 +30,6 @@ describe('LoadGenStack', () => {
       Environment: {
         Variables: Match.objectLike({
           AURORA_ALB_DNS: 'aurora.elb.amazonaws.com',
-          DSQL_ALB_DNS: 'dsql.elb.amazonaws.com',
         }),
       },
     });

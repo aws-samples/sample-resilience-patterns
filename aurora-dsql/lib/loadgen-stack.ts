@@ -12,7 +12,6 @@ export interface LoadGenStackProps extends cdk.StackProps {
   readonly vpcImport: VpcImportProps;
   readonly lambdaSgId: string;
   readonly auroraAlbDns: string;
-  readonly dsqlAlbDns: string;
 }
 
 export class LoadGenStack extends cdk.Stack {
@@ -35,7 +34,6 @@ export class LoadGenStack extends cdk.Stack {
       reservedConcurrentExecutions: 10,
       environment: {
         AURORA_ALB_DNS: props.auroraAlbDns,
-        DSQL_ALB_DNS: props.dsqlAlbDns,
       },
     });
 
@@ -59,12 +57,12 @@ export class LoadGenStack extends cdk.Stack {
       name: `${props.project}-load-test`,
       content: {
         schemaVersion: '0.3',
-        description: 'Generate sustained CRUD load against Aurora and DSQL apps',
+        description: 'Generate sustained CRUD load against Aurora app',
         assumeRole: automationRole.roleArn,
         parameters: {
           RequestsPerSecond: { type: 'String', default: '10', description: 'Target RPS' },
           DurationSeconds: { type: 'String', default: '300', description: 'Test duration in seconds' },
-          TargetApp: { type: 'String', default: 'both', description: 'aurora, dsql, or both' },
+          TargetApp: { type: 'String', default: 'aurora', description: 'Target application' },
           OperationMix: { type: 'String', default: '50,20,10,20', description: 'insert,update,delete,query percentages' },
         },
         mainSteps: [
