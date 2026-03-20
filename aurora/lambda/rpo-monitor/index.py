@@ -69,3 +69,39 @@ def handler(event, context):
     except Exception as e:
         logger.error(f'RPO monitor error: {e}')
         raise
+
+    finally:
+        # Engine version check (runs even if RPO check fails)
+        try:
+            _check_engine_versions(local_region, remote_region, namespace)
+        except Exception as e:
+            logger.error(f'Engine version check error: {e}')
+
+
+def _check_engine_versions(local_region, remote_region, namespace):
+    global_cluster_id = os.environ.get('GLOBAL_CLUSTER_ID')
+    if not global_cluster_id:
+        return
+
+    def get_engine_version(region):
+        rds = boto3.client('rds', region_name=region)
+        clusters = rds.describe_db_clusters()['DBClusters']
+        for c in clusters:
+            if c.get('GlobalClusterIdentifier') == global_cluster_id:
+                return c['EngineVersion']
+        return None
+
+    local_ver = get_engine_version(local_region)
+    remote_ver = get_engine_version(remote_region)
+    mismatch = 0 if (local_ver and remote_ver and local_ver == remote_ver) else 1
+
+    logger.info(f'Engine versions — local: {local_ver}, remote: {remote_ver}, mismatch: {mismatch}')
+
+    cloudwatch.put_metric_data(
+        Namespace=namespace,
+        MetricData=[{
+            'MetricName': 'AuroraEngineVersionMismatch',
+            'Value': mismatch,
+            'Unit': 'Count',
+        }],
+    )

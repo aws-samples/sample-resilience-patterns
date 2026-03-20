@@ -23,6 +23,7 @@ export interface MonitoringStackProps extends cdk.StackProps {
   readonly encryptionKeyArn: string;
   readonly remoteSecretArn: string;
   readonly remoteEncryptionKeyArn: string;
+  readonly globalClusterIdentifier: string;
 }
 
 export class MonitoringStack extends cdk.Stack {
@@ -85,6 +86,7 @@ export class MonitoringStack extends cdk.Stack {
         LOCAL_SECRET_ARN: props.secretArn,
         REMOTE_SECRET_ARN: props.remoteSecretArn,
         REMOTE_REGION: this.region === props.primaryRegion ? props.secondaryRegion : props.primaryRegion,
+        GLOBAL_CLUSTER_ID: props.globalClusterIdentifier,
       },
     });
 
@@ -100,6 +102,11 @@ export class MonitoringStack extends cdk.Stack {
 
     rpoMonitorFn.addToRolePolicy(new iam.PolicyStatement({
       actions: ['cloudwatch:PutMetricData'],
+      resources: ['*'],
+    }));
+
+    rpoMonitorFn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['rds:DescribeDBClusters'],
       resources: ['*'],
     }));
 
@@ -127,6 +134,15 @@ export class MonitoringStack extends cdk.Stack {
       evaluationPeriods: 2,
       comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
       treatMissingData: cloudwatch.TreatMissingData.BREACHING,
+    });
+
+    new cloudwatch.Alarm(this, 'EngineVersionMismatchAlarm', {
+      alarmName: `${props.project}-engine-version-mismatch-${this.region}`,
+      metric: new cloudwatch.Metric({ namespace: rpoNamespace, metricName: 'AuroraEngineVersionMismatch', statistic: 'Maximum', period: cdk.Duration.minutes(5) }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.IGNORE,
     });
 
     // Dashboard
@@ -187,6 +203,14 @@ export class MonitoringStack extends cdk.Stack {
         title: 'Freeable Memory (bytes)',
         left: [new cloudwatch.Metric({ namespace, metricName: 'FreeableMemory', dimensionsMap: dimensions, statistic: 'Average' })],
         width: 8,
+      }),
+    );
+
+    dashboard.addWidgets(
+      new cloudwatch.SingleValueWidget({
+        title: 'Aurora Engine Version Alignment',
+        metrics: [new cloudwatch.Metric({ namespace: rpoNamespace, metricName: 'AuroraEngineVersionMismatch', statistic: 'Maximum' })],
+        width: 6,
       }),
     );
   }

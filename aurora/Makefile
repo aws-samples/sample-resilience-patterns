@@ -131,11 +131,15 @@ deploy-synthetics: deploy-dns-with-hc
 	S_ALB=$(call so,$(PROJECT)-aurora-app-secondary,$(SECONDARY_REGION),AlbDnsName) && \
 	$(CDK) deploy $(PROJECT)-synthetics-primary $(CDK_COMMON) -c stack=synthetics-primary \
 		$(call vpc_ctx,$(PROJECT)-vpc-primary,$(PRIMARY_REGION)) \
-		-c localAuroraAlbDns=$$P_ALB \
+		-c localRecordName=aurora-app-use1.demo.internal \
+		-c remoteRecordName=aurora-app-usw2.demo.internal \
+		-c dnsRecordName=aurora-app.demo.internal \
 		--require-approval never -o cdk.out.synth-p && \
 	$(CDK) deploy $(PROJECT)-synthetics-secondary $(CDK_COMMON) -c stack=synthetics-secondary \
 		$(call vpc_ctx,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION)) \
-		-c localAuroraAlbDns=$$S_ALB \
+		-c localRecordName=aurora-app-usw2.demo.internal \
+		-c remoteRecordName=aurora-app-use1.demo.internal \
+		-c dnsRecordName=aurora-app.demo.internal \
 		--require-approval never -o cdk.out.synth-s
 
 deploy-monitoring: deploy-database
@@ -147,12 +151,12 @@ deploy-monitoring: deploy-database
 	S_CLUSTER_ID=$(call so,$(PROJECT)-db-secondary,$(SECONDARY_REGION),ClusterIdentifier) && \
 	$(CDK) deploy $(PROJECT)-monitoring-primary $(CDK_COMMON) -c stack=monitoring-primary \
 		$(call vpc_ctx,$(PROJECT)-vpc-primary,$(PRIMARY_REGION)) \
-		-c dbClusterIdentifier=$$P_CLUSTER_ID -c secretArn=$$P_SECRET -c encryptionKeyArn=$$P_KEY \
+		-c dbClusterIdentifier=$$P_CLUSTER_ID -c globalClusterIdentifier=$(GLOBAL_CLUSTER_ID) -c secretArn=$$P_SECRET -c encryptionKeyArn=$$P_KEY \
 		-c remoteSecretArn=$$P_SECRET -c remoteEncryptionKeyArn=$$S_KEY \
 		--require-approval never -o cdk.out.mon-p && \
 	$(CDK) deploy $(PROJECT)-monitoring-secondary $(CDK_COMMON) -c stack=monitoring-secondary \
 		$(call vpc_ctx,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION)) \
-		-c dbClusterIdentifier=$$S_CLUSTER_ID -c secretArn=$$P_SECRET -c encryptionKeyArn=$$S_KEY \
+		-c dbClusterIdentifier=$$S_CLUSTER_ID -c globalClusterIdentifier=$(GLOBAL_CLUSTER_ID) -c secretArn=$$P_SECRET -c encryptionKeyArn=$$S_KEY \
 		-c remoteSecretArn=$$P_SECRET -c remoteEncryptionKeyArn=$$P_KEY \
 		--require-approval never -o cdk.out.mon-s
 
