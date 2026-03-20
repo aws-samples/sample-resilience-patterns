@@ -91,6 +91,7 @@ export class VpcStack extends cdk.Stack {
       ['Sts', ec2.InterfaceVpcEndpointAwsService.STS],
       ['Lambda', ec2.InterfaceVpcEndpointAwsService.LAMBDA],
       ['Synthetics', new ec2.InterfaceVpcEndpointAwsService('synthetics')],
+      ['Rds', ec2.InterfaceVpcEndpointAwsService.RDS],
     ];
 
     for (const [name, service] of interfaceEndpoints) {
