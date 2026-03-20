@@ -103,7 +103,7 @@ export class SyntheticsStack extends cdk.Stack {
     const canaries: { suffix: string; code: string }[] = [
       { suffix: 'al', code: readOnlyCode(props.localRecordName) },
       { suffix: 'ar', code: crudCode(props.remoteRecordName) },
-      { suffix: 'ad', code: crudCode(props.dnsRecordName) },
+      { suffix: 'ad', code: readOnlyCode(props.dnsRecordName) },
     ];
 
     for (const { suffix, code } of canaries) {
