@@ -152,7 +152,7 @@ export class MonitoringStack extends cdk.Stack {
     const rdsMetric = (metricName: string, stat: string, region: string, dims: Record<string, string>) =>
       new cloudwatch.Metric({ namespace, metricName, dimensionsMap: dims, statistic: stat, region });
     const rpoMetric = (metricName: string, stat: string, dimRegion: string) =>
-      new cloudwatch.Metric({ namespace: rpoNamespace, metricName, dimensionsMap: { Region: dimRegion }, statistic: stat, region: dimRegion });
+      new cloudwatch.Metric({ namespace: rpoNamespace, metricName, dimensionsMap: { Region: dimRegion }, statistic: stat });
 
     const dashboard = new cloudwatch.Dashboard(this, 'Dashboard', {
       dashboardName: `${props.project}-combined`,
