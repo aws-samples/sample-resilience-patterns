@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-PROJECT="${PROJECT:-aurora-dsql}"
+PROJECT="${PROJECT:-aurora}"
 PRIMARY_REGION="${PRIMARY_REGION:-us-east-1}"
 SECONDARY_REGION="${SECONDARY_REGION:-us-west-2}"
 

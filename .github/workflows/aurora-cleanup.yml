@@ -1,4 +1,4 @@
-name: 'aurora-dsql: cleanup'
+name: 'aurora: cleanup'
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ permissions:
 
 defaults:
   run:
-    working-directory: aurora-dsql
+    working-directory: aurora
 
 jobs:
   cleanup:

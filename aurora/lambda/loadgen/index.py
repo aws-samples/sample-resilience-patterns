@@ -100,7 +100,7 @@ def handler(event, context):
 
     logger.info(f'Load test complete: {json.dumps(summary)}')
 
-    namespace = f'{os.environ.get("PROJECT", "aurora-dsql")}/LoadTest'
+    namespace = f'{os.environ.get("PROJECT", "aurora")}/LoadTest'
     cloudwatch.put_metric_data(Namespace=namespace, MetricData=[
         {'MetricName': 'RequestsSent', 'Value': results['total'], 'Unit': 'Count'},
         {'MetricName': 'Errors', 'Value': results['errors'], 'Unit': 'Count'},

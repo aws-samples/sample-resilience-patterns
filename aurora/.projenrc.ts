@@ -1,7 +1,7 @@
 import { awscdk, javascript } from 'projen';
 
 const project = new awscdk.AwsCdkTypeScriptApp({
-  name: 'aurora-dsql',
+  name: 'aurora',
   cdkVersion: '2.200.0',
   defaultReleaseBranch: 'main',
   projenrcTs: true,
