@@ -71,6 +71,6 @@ describe('VpcStack', () => {
       },
     });
     // CloudWatch Logs, CloudWatch Monitoring, Secrets Manager, STS, Lambda
-    expect(Object.keys(endpoints).length).toBe(6);
+    expect(Object.keys(endpoints).length).toBe(7);
   });
 });
