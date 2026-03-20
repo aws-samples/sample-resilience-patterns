@@ -137,6 +137,7 @@ if (target === 'monitoring-primary' || target === 'monitoring-secondary') {
   const region = target === 'monitoring-primary' ? primaryRegion : secondaryRegion;
   suppress(new MonitoringStack(app, `${project}-${target}`, {
     project, primaryRegion, secondaryRegion, dbClusterIdentifier: c('dbClusterIdentifier'),
+    remoteDbClusterIdentifier: c('remoteDbClusterIdentifier'),
     vpcImport: vpcImport(), lambdaSgId: c('lambdaSgId'),
     secretArn: c('secretArn'), encryptionKeyArn: c('encryptionKeyArn'),
     remoteSecretArn: c('remoteSecretArn'), remoteEncryptionKeyArn: c('remoteEncryptionKeyArn'),
