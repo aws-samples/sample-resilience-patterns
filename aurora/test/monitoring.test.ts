@@ -15,6 +15,7 @@ function createStack() {
     encryptionKeyArn: 'arn:aws:kms:us-east-1:123456789012:key/test-key',
     remoteSecretArn: 'arn:aws:secretsmanager:us-west-2:123456789012:secret:test-abc',
     remoteEncryptionKeyArn: 'arn:aws:kms:us-west-2:123456789012:key/test-key',
+    globalClusterIdentifier: 'test-global-cluster',
     env: { account: '123456789012', region: 'us-east-1' },
   }));
 }
@@ -23,8 +24,8 @@ describe('MonitoringStack', () => {
   const template = createStack();
 
   test('creates Aurora alarms (ReplicaLag, CPU, FreeMemory, CommitLatency)', () => {
-    // 5 Aurora alarms + 2 RPO alarms = 7 total
-    template.resourceCountIs('AWS::CloudWatch::Alarm', 7);
+    // 5 Aurora alarms + 2 RPO alarms + 1 engine version alarm = 8 total
+    template.resourceCountIs('AWS::CloudWatch::Alarm', 8);
   });
 
   test('creates KMS-encrypted SNS topic', () => {

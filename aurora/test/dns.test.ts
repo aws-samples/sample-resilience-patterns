@@ -31,8 +31,8 @@ describe('DnsStack', () => {
     });
   });
 
-  test('creates 2 latency-based record sets for Aurora app', () => {
-    template.resourceCountIs('AWS::Route53::RecordSet', 2);
+  test('creates 4 record sets (2 latency-based + 2 region-aligned)', () => {
+    template.resourceCountIs('AWS::Route53::RecordSet', 4);
   });
 
   test('aurora records use latency routing', () => {
@@ -41,6 +41,15 @@ describe('DnsStack', () => {
     });
     template.hasResourceProperties('AWS::Route53::RecordSet', {
       Name: 'aurora-app.demo.internal', Type: 'A', Region: 'us-west-2', SetIdentifier: 'StandbyRegion',
+    });
+  });
+
+  test('region-aligned simple A-alias records exist', () => {
+    template.hasResourceProperties('AWS::Route53::RecordSet', {
+      Name: 'aurora-app-use1.demo.internal', Type: 'A',
+    });
+    template.hasResourceProperties('AWS::Route53::RecordSet', {
+      Name: 'aurora-app-usw2.demo.internal', Type: 'A',
     });
   });
 

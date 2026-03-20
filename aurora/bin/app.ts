@@ -125,7 +125,9 @@ if (target === 'synthetics-primary' || target === 'synthetics-secondary') {
   const region = target === 'synthetics-primary' ? primaryRegion : secondaryRegion;
   suppress(new SyntheticsStack(app, `${project}-${target}`, {
     project, vpcImport: vpcImport(), syntheticsSgId: c('syntheticsSgId'),
-    localAuroraAlbDns: c('localAuroraAlbDns'),
+    localRecordName: c('localRecordName'),
+    remoteRecordName: c('remoteRecordName'),
+    dnsRecordName: c('dnsRecordName'),
     env: env(region),
   }));
 }
@@ -138,6 +140,7 @@ if (target === 'monitoring-primary' || target === 'monitoring-secondary') {
     vpcImport: vpcImport(), lambdaSgId: c('lambdaSgId'),
     secretArn: c('secretArn'), encryptionKeyArn: c('encryptionKeyArn'),
     remoteSecretArn: c('remoteSecretArn'), remoteEncryptionKeyArn: c('remoteEncryptionKeyArn'),
+    globalClusterIdentifier: globalClusterId,
     env: env(region),
   }));
 }
