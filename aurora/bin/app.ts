@@ -140,7 +140,7 @@ if (target === 'monitoring-primary' || target === 'monitoring-secondary') {
     remoteDbClusterIdentifier: c('remoteDbClusterIdentifier'),
     vpcImport: vpcImport(), lambdaSgId: c('lambdaSgId'),
     secretArn: c('secretArn'), encryptionKeyArn: c('encryptionKeyArn'),
-    remoteSecretArn: c('remoteSecretArn'), remoteEncryptionKeyArn: c('remoteEncryptionKeyArn'),
+    remoteSecretArn: c('remoteSecretArn'), remoteEncryptionKeyArn: c('remoteEncryptionKeyArn'), remoteDbHost: c('remoteDbHost'),
     globalClusterIdentifier: globalClusterId,
     env: env(region),
   }));
