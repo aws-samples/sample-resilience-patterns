@@ -17,6 +17,7 @@ export interface MonitoringStackProps extends cdk.StackProps {
   readonly primaryRegion: string;
   readonly secondaryRegion: string;
   readonly dbClusterIdentifier: string;
+  readonly remoteDbClusterIdentifier: string;
   readonly vpcImport: VpcImportProps;
   readonly lambdaSgId: string;
   readonly secretArn: string;
@@ -51,8 +52,6 @@ export class MonitoringStack extends cdk.Stack {
     const alarms: [string, string, number, string, number][] = [
       ['ReplicaLag', 'AuroraReplicaLag', 1000, 'Maximum', 1],
       ['ReplicaLagMax', 'AuroraReplicaLagMaximum', 2000, 'Maximum', 1],
-      ['CPU', 'CPUUtilization', 80, 'Average', 3],
-      ['FreeMemory', 'FreeableMemory', 256 * 1024 * 1024, 'Average', 3],
       ['CommitLatency', 'CommitLatency', 100, 'Average', 3],
     ];
 
@@ -62,9 +61,7 @@ export class MonitoringStack extends cdk.Stack {
         metric: new cloudwatch.Metric({ namespace, metricName, dimensionsMap: dimensions, statistic: stat as string, period: cdk.Duration.minutes(1) }),
         threshold: threshold as number,
         evaluationPeriods: periods as number,
-        comparisonOperator: name === 'FreeMemory'
-          ? cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD
-          : cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
         treatMissingData: cloudwatch.TreatMissingData.IGNORE,
       });
       alarm.addAlarmAction(alarmAction);
@@ -83,6 +80,7 @@ export class MonitoringStack extends cdk.Stack {
       timeout: cdk.Duration.minutes(2),
       reservedConcurrentExecutions: 5,
       environment: {
+        PROJECT: props.project,
         LOCAL_SECRET_ARN: props.secretArn,
         REMOTE_SECRET_ARN: props.remoteSecretArn,
         REMOTE_REGION: this.region === props.primaryRegion ? props.secondaryRegion : props.primaryRegion,
@@ -145,72 +143,75 @@ export class MonitoringStack extends cdk.Stack {
       treatMissingData: cloudwatch.TreatMissingData.IGNORE,
     });
 
-    // Dashboard
+    // Combined Dashboard (primary region only)
+    const primaryDims = { DBClusterIdentifier: props.dbClusterIdentifier };
+    const remoteDims = { DBClusterIdentifier: props.remoteDbClusterIdentifier };
+    const rdsMetric = (metricName: string, stat: string, region: string, dims: Record<string, string>) =>
+      new cloudwatch.Metric({ namespace, metricName, dimensionsMap: dims, statistic: stat, region });
+    const rpoMetric = (metricName: string, stat: string, dimRegion: string) =>
+      new cloudwatch.Metric({ namespace: rpoNamespace, metricName, dimensionsMap: { Region: dimRegion }, statistic: stat });
+
     const dashboard = new cloudwatch.Dashboard(this, 'Dashboard', {
-      dashboardName: `${props.project}-${this.region}`,
+      dashboardName: `${props.project}-combined`,
     });
 
+    // Row 1
     dashboard.addWidgets(
       new cloudwatch.GraphWidget({
         title: 'Aurora Replica Lag (ms)',
-        left: [new cloudwatch.Metric({ namespace, metricName: 'AuroraReplicaLag', dimensionsMap: dimensions, statistic: 'Maximum' })],
+        left: [
+          rdsMetric('AuroraReplicaLag', 'Maximum', props.primaryRegion, primaryDims),
+          rdsMetric('AuroraReplicaLag', 'Maximum', props.secondaryRegion, remoteDims),
+        ],
         width: 12,
       }),
       new cloudwatch.GraphWidget({
         title: 'RPO: Missing Rows',
-        left: [
-          new cloudwatch.Metric({ namespace: rpoNamespace, metricName: 'CatalogMissingRows', dimensionsMap: { Region: props.primaryRegion }, statistic: 'Maximum' }),
-          new cloudwatch.Metric({ namespace: rpoNamespace, metricName: 'CatalogMissingRows', dimensionsMap: { Region: props.secondaryRegion }, statistic: 'Maximum' }),
-        ],
+        left: [rpoMetric('CatalogMissingRows', 'Maximum', props.primaryRegion), rpoMetric('CatalogMissingRows', 'Maximum', props.secondaryRegion)],
         width: 12,
       }),
     );
 
+    // Row 2
     dashboard.addWidgets(
       new cloudwatch.SingleValueWidget({
         title: 'RPO: Current Missing Rows',
-        metrics: [
-          new cloudwatch.Metric({ namespace: rpoNamespace, metricName: 'CatalogMissingRows', dimensionsMap: { Region: props.primaryRegion }, statistic: 'Maximum' }),
-          new cloudwatch.Metric({ namespace: rpoNamespace, metricName: 'CatalogMissingRows', dimensionsMap: { Region: props.secondaryRegion }, statistic: 'Maximum' }),
-        ],
+        metrics: [rpoMetric('CatalogMissingRows', 'Maximum', props.primaryRegion), rpoMetric('CatalogMissingRows', 'Maximum', props.secondaryRegion)],
         width: 12,
       }),
       new cloudwatch.GraphWidget({
         title: 'RPO: Heartbeat',
-        left: [
-          new cloudwatch.Metric({ namespace: rpoNamespace, metricName: 'CatalogRPOHeartbeat', dimensionsMap: { Region: props.primaryRegion }, statistic: 'Sum' }),
-          new cloudwatch.Metric({ namespace: rpoNamespace, metricName: 'CatalogRPOHeartbeat', dimensionsMap: { Region: props.secondaryRegion }, statistic: 'Sum' }),
-        ],
+        left: [rpoMetric('CatalogRPOHeartbeat', 'Sum', props.primaryRegion), rpoMetric('CatalogRPOHeartbeat', 'Sum', props.secondaryRegion)],
         width: 12,
       }),
     );
 
+    // Row 3
     dashboard.addWidgets(
-      new cloudwatch.GraphWidget({
-        title: 'CPU Utilization (%)',
-        left: [new cloudwatch.Metric({ namespace, metricName: 'CPUUtilization', dimensionsMap: dimensions, statistic: 'Average' })],
-        width: 8,
-      }),
       new cloudwatch.GraphWidget({
         title: 'Commit Latency (ms)',
         left: [
-          new cloudwatch.Metric({ namespace, metricName: 'CommitLatency', dimensionsMap: dimensions, statistic: 'Average' }),
-          new cloudwatch.Metric({ namespace, metricName: 'CommitLatency', dimensionsMap: dimensions, statistic: 'p99' }),
+          rdsMetric('CommitLatency', 'Average', props.primaryRegion, primaryDims),
+          rdsMetric('CommitLatency', 'p99', props.primaryRegion, primaryDims),
+          rdsMetric('CommitLatency', 'Average', props.secondaryRegion, remoteDims),
+          rdsMetric('CommitLatency', 'p99', props.secondaryRegion, remoteDims),
         ],
         width: 8,
       }),
       new cloudwatch.GraphWidget({
-        title: 'Freeable Memory (bytes)',
-        left: [new cloudwatch.Metric({ namespace, metricName: 'FreeableMemory', dimensionsMap: dimensions, statistic: 'Average' })],
+        title: 'Read/Write IOPS',
+        left: [
+          rdsMetric('ReadIOPS', 'Average', props.primaryRegion, primaryDims),
+          rdsMetric('WriteIOPS', 'Average', props.primaryRegion, primaryDims),
+          rdsMetric('ReadIOPS', 'Average', props.secondaryRegion, remoteDims),
+          rdsMetric('WriteIOPS', 'Average', props.secondaryRegion, remoteDims),
+        ],
         width: 8,
       }),
-    );
-
-    dashboard.addWidgets(
       new cloudwatch.SingleValueWidget({
         title: 'Aurora Engine Version Alignment',
-        metrics: [new cloudwatch.Metric({ namespace: rpoNamespace, metricName: 'AuroraEngineVersionMismatch', statistic: 'Maximum' })],
-        width: 6,
+        metrics: [rpoMetric('AuroraEngineVersionMismatch', 'Maximum', props.primaryRegion), rpoMetric('AuroraEngineVersionMismatch', 'Maximum', props.secondaryRegion)],
+        width: 8,
       }),
     );
   }

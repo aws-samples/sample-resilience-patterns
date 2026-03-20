@@ -9,6 +9,7 @@ function createStack() {
     primaryRegion: 'us-east-1',
     secondaryRegion: 'us-west-2',
     dbClusterIdentifier: 'test-cluster',
+    remoteDbClusterIdentifier: 'test-remote-cluster',
     vpcImport: { vpcId: 'vpc-123', subnetIds: 'subnet-1,subnet-2', azs: 'us-east-1a,us-east-1b' },
     lambdaSgId: 'sg-lambda',
     secretArn: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:test-abc',
@@ -23,9 +24,9 @@ function createStack() {
 describe('MonitoringStack', () => {
   const template = createStack();
 
-  test('creates Aurora alarms (ReplicaLag, CPU, FreeMemory, CommitLatency)', () => {
-    // 5 Aurora alarms + 2 RPO alarms + 1 engine version alarm = 8 total
-    template.resourceCountIs('AWS::CloudWatch::Alarm', 8);
+  test('creates Aurora alarms (ReplicaLag, ReplicaLagMax, CommitLatency)', () => {
+    // 3 Aurora alarms + 2 RPO alarms + 1 engine version alarm = 6 total
+    template.resourceCountIs('AWS::CloudWatch::Alarm', 6);
   });
 
   test('creates KMS-encrypted SNS topic', () => {
