@@ -144,6 +144,7 @@ export class MonitoringStack extends cdk.Stack {
     });
 
     // Combined Dashboard (primary region only)
+    if (this.region === props.primaryRegion) {
     const primaryDims = { DBClusterIdentifier: props.dbClusterIdentifier };
     const remoteDims = { DBClusterIdentifier: props.remoteDbClusterIdentifier };
     const rdsMetric = (metricName: string, stat: string, region: string, dims: Record<string, string>) =>
@@ -214,5 +215,6 @@ export class MonitoringStack extends cdk.Stack {
         width: 8,
       }),
     );
+    } // end primary region dashboard
   }
 }
