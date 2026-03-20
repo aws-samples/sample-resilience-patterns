@@ -116,5 +116,6 @@ def _check_engine_versions(local_region, remote_region, namespace):
             'MetricName': 'AuroraEngineVersionMismatch',
             'Value': mismatch,
             'Unit': 'Count',
+            'Dimensions': [{'Name': 'Region', 'Value': local_region}],
         }],
     )
