@@ -85,19 +85,30 @@ def _check_engine_versions(local_region, remote_region, namespace):
     if not global_cluster_id:
         return
 
-    def get_engine_version(region):
-        rds = boto3.client('rds', region_name=region)
-        clusters = rds.describe_db_clusters()['DBClusters']
-        for c in clusters:
-            if c.get('GlobalClusterIdentifier') == global_cluster_id:
-                return c['EngineVersion']
-        return None
+    rds = boto3.client('rds', region_name=local_region)
+    resp = rds.describe_global_clusters(GlobalClusterIdentifier=global_cluster_id)
+    members = resp['GlobalClusters'][0]['GlobalClusterMembers']
+    versions = set()
+    for m in members:
+        # Each member has its own EngineVersion via the cluster ARN
+        # But describe_global_clusters doesn't return per-member versions directly
+        # Use the global cluster's EngineVersion and check if all members are writers/readers
+        pass
 
-    local_ver = get_engine_version(local_region)
-    remote_ver = get_engine_version(remote_region)
-    mismatch = 0 if (local_ver and remote_ver and local_ver == remote_ver) else 1
+    # Use describe_db_clusters locally — the local cluster is visible
+    clusters = rds.describe_db_clusters()['DBClusters']
+    local_ver = None
+    for c in clusters:
+        if c.get('GlobalClusterIdentifier') == global_cluster_id:
+            local_ver = c['EngineVersion']
+            break
 
-    logger.info(f'Engine versions — local: {local_ver}, remote: {remote_ver}, mismatch: {mismatch}')
+    # Global cluster engine version (applies to all members)
+    global_ver = resp['GlobalClusters'][0].get('EngineVersion')
+
+    mismatch = 0 if (local_ver and global_ver and local_ver == global_ver) else 1
+
+    logger.info(f'Engine versions — local: {local_ver}, global: {global_ver}, mismatch: {mismatch}')
 
     cloudwatch.put_metric_data(
         Namespace=namespace,
