@@ -1,4 +1,4 @@
-PROJECT ?= aurora
+PROJECT ?= aurora-dsql
 PRIMARY_REGION ?= us-east-1
 SECONDARY_REGION ?= us-west-2
 ACCOUNT_ID := $(shell aws sts get-caller-identity --query Account --output text)
