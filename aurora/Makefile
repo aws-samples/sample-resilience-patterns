@@ -149,15 +149,17 @@ deploy-monitoring: deploy-database
 	S_KEY=$(call so,$(PROJECT)-db-secondary,$(SECONDARY_REGION),EncryptionKeyArn) && \
 	P_CLUSTER_ID=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),ClusterIdentifier) && \
 	S_CLUSTER_ID=$(call so,$(PROJECT)-db-secondary,$(SECONDARY_REGION),ClusterIdentifier) && \
+	S_READER=$(call so,$(PROJECT)-db-secondary,$(SECONDARY_REGION),ClusterReaderEndpoint) && \
+	P_WRITER=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),ClusterEndpoint) && \
 	$(CDK) deploy $(PROJECT)-monitoring-primary $(CDK_COMMON) -c stack=monitoring-primary \
 		$(call vpc_ctx,$(PROJECT)-vpc-primary,$(PRIMARY_REGION)) \
 		-c dbClusterIdentifier=$$P_CLUSTER_ID -c remoteDbClusterIdentifier=$$S_CLUSTER_ID -c globalClusterIdentifier=$(GLOBAL_CLUSTER_ID) -c secretArn=$$P_SECRET -c encryptionKeyArn=$$P_KEY \
-		-c remoteSecretArn=$$P_SECRET -c remoteEncryptionKeyArn=$$S_KEY \
+		-c remoteSecretArn=$$P_SECRET -c remoteEncryptionKeyArn=$$S_KEY -c remoteDbHost=$$S_READER \
 		--require-approval never -o cdk.out.mon-p && \
 	$(CDK) deploy $(PROJECT)-monitoring-secondary $(CDK_COMMON) -c stack=monitoring-secondary \
 		$(call vpc_ctx,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION)) \
 		-c dbClusterIdentifier=$$S_CLUSTER_ID -c remoteDbClusterIdentifier=$$P_CLUSTER_ID -c globalClusterIdentifier=$(GLOBAL_CLUSTER_ID) -c secretArn=$$P_SECRET -c encryptionKeyArn=$$S_KEY \
-		-c remoteSecretArn=$$P_SECRET -c remoteEncryptionKeyArn=$$P_KEY \
+		-c remoteSecretArn=$$P_SECRET -c remoteEncryptionKeyArn=$$P_KEY -c remoteDbHost=$$P_WRITER \
 		--require-approval never -o cdk.out.mon-s
 
 deploy-reconciliation: deploy-database

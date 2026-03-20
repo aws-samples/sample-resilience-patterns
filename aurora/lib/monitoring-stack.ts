@@ -24,6 +24,7 @@ export interface MonitoringStackProps extends cdk.StackProps {
   readonly encryptionKeyArn: string;
   readonly remoteSecretArn: string;
   readonly remoteEncryptionKeyArn: string;
+  readonly remoteDbHost: string;
   readonly globalClusterIdentifier: string;
 }
 
@@ -84,6 +85,7 @@ export class MonitoringStack extends cdk.Stack {
         LOCAL_SECRET_ARN: props.secretArn,
         REMOTE_SECRET_ARN: props.remoteSecretArn,
         REMOTE_REGION: this.region === props.primaryRegion ? props.secondaryRegion : props.primaryRegion,
+        REMOTE_DB_HOST: props.remoteDbHost,
         GLOBAL_CLUSTER_ID: props.globalClusterIdentifier,
       },
     });

@@ -15,7 +15,7 @@ function createStack() {
     secretArn: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:test-abc',
     encryptionKeyArn: 'arn:aws:kms:us-east-1:123456789012:key/test-key',
     remoteSecretArn: 'arn:aws:secretsmanager:us-west-2:123456789012:secret:test-abc',
-    remoteEncryptionKeyArn: 'arn:aws:kms:us-west-2:123456789012:key/test-key',
+    remoteEncryptionKeyArn: 'arn:aws:kms:us-west-2:123456789012:key/test-key', remoteDbHost: 'remote-cluster.us-west-2.rds.amazonaws.com',
     globalClusterIdentifier: 'test-global-cluster',
     env: { account: '123456789012', region: 'us-east-1' },
   }));
