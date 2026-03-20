@@ -1,13 +1,13 @@
-name: 'aurora-dsql: build'
+name: 'aurora: build'
 
 on:
   push:
     branches-ignore: [main]
-    paths: ['aurora-dsql/**']
+    paths: ['aurora/**']
 
 defaults:
   run:
-    working-directory: aurora-dsql
+    working-directory: aurora
 
 jobs:
   build:

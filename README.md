@@ -2,8 +2,8 @@
 
 ![s3mrap-crr build](https://github.com/aws-samples/sample-resilience-patterns/actions/workflows/s3mrap-crr-build.yml/badge.svg)
 ![s3mrap-crr e2e](https://github.com/aws-samples/sample-resilience-patterns/actions/workflows/s3mrap-crr-e2e.yml/badge.svg)
-![aurora-dsql build](https://github.com/aws-samples/sample-resilience-patterns/actions/workflows/aurora-dsql-build.yml/badge.svg)
-![aurora-dsql e2e](https://github.com/aws-samples/sample-resilience-patterns/actions/workflows/aurora-dsql-e2e.yml/badge.svg)
+![aurora build](https://github.com/aws-samples/sample-resilience-patterns/actions/workflows/aurora-build.yml/badge.svg)
+![aurora e2e](https://github.com/aws-samples/sample-resilience-patterns/actions/workflows/aurora-e2e.yml/badge.svg)
 
 A collection of sample implementations demonstrating resilient architectures for common AWS services and patterns. Each subdirectory is a standalone, fully deployable reference implementation.
 
@@ -16,7 +16,7 @@ These samples show how to build resilient, multi-region, and fault-tolerant syst
 | Directory | Description |
 |-----------|-------------|
 | [`s3mrap-crr/`](s3mrap-crr/) | S3 Multi-Region Access Points with bidirectional Cross-Region Replication, ARC-based failover, CloudWatch observability, and replication latency load testing |
-| [`aurora-dsql/`](aurora-dsql/) | Aurora Global Database + Aurora DSQL multi-region resilience with ARC Region Switch failover, CloudWatch Synthetics, RPO monitoring, post-failover reconciliation, FIS chaos testing, and load generation |
+| [`aurora/`](aurora/) | Aurora Global Database + Aurora DSQL multi-region resilience with ARC Region Switch failover, CloudWatch Synthetics, RPO monitoring, post-failover reconciliation, FIS chaos testing, and load generation |
 
 ## Technology
 

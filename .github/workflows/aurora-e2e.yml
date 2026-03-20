@@ -1,8 +1,8 @@
-name: 'aurora-dsql: e2e'
+name: 'aurora: e2e'
 
 on:
   pull_request:
-    paths: ['aurora-dsql/**']
+    paths: ['aurora/**']
   workflow_dispatch:
 
 permissions:
@@ -11,7 +11,7 @@ permissions:
 
 defaults:
   run:
-    working-directory: aurora-dsql
+    working-directory: aurora
 
 jobs:
   e2e:
@@ -30,14 +30,14 @@ jobs:
       - run: npm ci
       - run: npx projen test
       - name: Deploy via bootstrap
-        run: npx cdk deploy aurora-dsql-bootstrap --require-approval never
+        run: npx cdk deploy aurora-bootstrap --require-approval never
       - name: Verify canaries
         run: |
           echo "Waiting for canaries to run..."
           sleep 360
           # Check canary status
           for region in us-east-1 us-west-2; do
-            aws synthetics get-canary --name aurora-dsql-al-${region: -4} --region $region --query 'Canary.Status.State' --output text || true
+            aws synthetics get-canary --name aurora-al-${region: -4} --region $region --query 'Canary.Status.State' --output text || true
           done
       - name: Cleanup on success
         if: success()

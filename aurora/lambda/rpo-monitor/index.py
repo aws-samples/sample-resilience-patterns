@@ -29,7 +29,7 @@ def get_order_ids(host, port, user, password, dbname):
 def handler(event, context):
     local_region = os.environ.get('AWS_REGION', 'us-east-1')
     remote_region = os.environ['REMOTE_REGION']
-    namespace = os.environ.get('METRIC_NAMESPACE', f'{os.environ.get("PROJECT", "aurora-dsql")}/RPO')
+    namespace = os.environ.get('METRIC_NAMESPACE', f'{os.environ.get("PROJECT", "aurora")}/RPO')
 
     try:
         # Connect to local (reader) and remote (reader/writer) in single invocation

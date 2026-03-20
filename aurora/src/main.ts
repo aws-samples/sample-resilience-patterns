@@ -17,7 +17,7 @@ const devEnv = {
 
 const app = new App();
 
-new MyStack(app, 'aurora-dsql-dev', { env: devEnv });
-// new MyStack(app, 'aurora-dsql-prod', { env: prodEnv });
+new MyStack(app, 'aurora-dev', { env: devEnv });
+// new MyStack(app, 'aurora-prod', { env: prodEnv });
 
 app.synth();
