@@ -35,7 +35,7 @@ def handler(event, context):
         # Connect to local (reader) and remote (reader/writer) in single invocation
         local_host, local_port, local_user, local_pass, local_db = get_credentials(os.environ['LOCAL_SECRET_ARN'])
         remote_host, remote_port, remote_user, remote_pass, remote_db = get_credentials(
-            os.environ['REMOTE_SECRET_ARN'], remote_region)
+            os.environ['REMOTE_SECRET_ARN'])
         # Override remote host with the actual endpoint (secret may contain primary writer host)
         remote_host = os.environ.get('REMOTE_DB_HOST', remote_host)
 
