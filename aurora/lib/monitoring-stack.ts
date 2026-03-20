@@ -158,7 +158,7 @@ export class MonitoringStack extends cdk.Stack {
       dashboardName: `${props.project}-combined`,
     });
 
-    // Row 1
+    // Row 1: Replication health
     dashboard.addWidgets(
       new cloudwatch.GraphWidget({
         title: 'Aurora Replica Lag (ms)',
@@ -166,55 +166,43 @@ export class MonitoringStack extends cdk.Stack {
           rdsMetric('AuroraReplicaLag', 'Maximum', props.primaryRegion, primaryDims),
           rdsMetric('AuroraReplicaLag', 'Maximum', props.secondaryRegion, remoteDims),
         ],
-        width: 12,
+        width: 12, height: 6,
       }),
       new cloudwatch.GraphWidget({
         title: 'RPO: Missing Rows',
         left: [rpoMetric('CatalogMissingRows', 'Maximum', props.primaryRegion), rpoMetric('CatalogMissingRows', 'Maximum', props.secondaryRegion)],
-        width: 12,
+        width: 12, height: 6,
       }),
     );
 
-    // Row 2
+    // Row 2: RPO status
     dashboard.addWidgets(
       new cloudwatch.SingleValueWidget({
         title: 'RPO: Current Missing Rows',
         metrics: [rpoMetric('CatalogMissingRows', 'Maximum', props.primaryRegion), rpoMetric('CatalogMissingRows', 'Maximum', props.secondaryRegion)],
-        width: 12,
+        width: 12, height: 3,
       }),
       new cloudwatch.GraphWidget({
         title: 'RPO: Heartbeat',
         left: [rpoMetric('CatalogRPOHeartbeat', 'Sum', props.primaryRegion), rpoMetric('CatalogRPOHeartbeat', 'Sum', props.secondaryRegion)],
-        width: 12,
+        width: 12, height: 6,
       }),
     );
 
-    // Row 3
+    // Row 3: Performance + version
     dashboard.addWidgets(
       new cloudwatch.GraphWidget({
         title: 'Commit Latency (ms)',
         left: [
           rdsMetric('CommitLatency', 'Average', props.primaryRegion, primaryDims),
-          rdsMetric('CommitLatency', 'p99', props.primaryRegion, primaryDims),
           rdsMetric('CommitLatency', 'Average', props.secondaryRegion, remoteDims),
-          rdsMetric('CommitLatency', 'p99', props.secondaryRegion, remoteDims),
         ],
-        width: 8,
-      }),
-      new cloudwatch.GraphWidget({
-        title: 'Read/Write IOPS',
-        left: [
-          rdsMetric('ReadIOPS', 'Average', props.primaryRegion, primaryDims),
-          rdsMetric('WriteIOPS', 'Average', props.primaryRegion, primaryDims),
-          rdsMetric('ReadIOPS', 'Average', props.secondaryRegion, remoteDims),
-          rdsMetric('WriteIOPS', 'Average', props.secondaryRegion, remoteDims),
-        ],
-        width: 8,
+        width: 12, height: 6,
       }),
       new cloudwatch.SingleValueWidget({
         title: 'Aurora Engine Version Alignment',
         metrics: [rpoMetric('AuroraEngineVersionMismatch', 'Maximum', props.primaryRegion), rpoMetric('AuroraEngineVersionMismatch', 'Maximum', props.secondaryRegion)],
-        width: 8,
+        width: 12, height: 3,
       }),
     );
     } // end primary region dashboard
