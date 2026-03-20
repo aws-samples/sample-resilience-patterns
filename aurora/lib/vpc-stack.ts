@@ -55,10 +55,13 @@ export class VpcStack extends cdk.Stack {
 
     // Database SG: inbound 5432 from Lambda
     this.databaseSg.addIngressRule(this.lambdaSg, ec2.Port.tcp(5432), 'Lambda to PostgreSQL');
+    this.databaseSg.addIngressRule(ec2.Peer.ipv4(props.peerCidr), ec2.Port.tcp(5432), 'Cross-region RPO monitor');
+    this.databaseSg.addIngressRule(ec2.Peer.ipv4(props.peerCidr), ec2.Port.tcp(5432), 'Cross-region RPO monitor');
 
     // Lambda SG: inbound from ALB, outbound to DB + VPC endpoints
     this.lambdaSg.addIngressRule(this.albSg, ec2.Port.tcp(80), 'ALB to Lambda');
     this.lambdaSg.addEgressRule(this.databaseSg, ec2.Port.tcp(5432), 'Lambda to DB');
+    this.lambdaSg.addEgressRule(ec2.Peer.ipv4(props.peerCidr), ec2.Port.tcp(5432), 'Lambda to cross-region DB');
     this.lambdaSg.addEgressRule(this.vpcEndpointSg, ec2.Port.tcp(443), 'Lambda to VPC endpoints');
 
     // VPC Endpoint SG: inbound 443 from Lambda and Synthetics
