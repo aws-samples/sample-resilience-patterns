@@ -106,7 +106,7 @@ export class MonitoringStack extends cdk.Stack {
     }));
 
     rpoMonitorFn.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['rds:DescribeDBClusters'],
+      actions: ['rds:DescribeDBClusters', 'rds:DescribeGlobalClusters'],
       resources: ['*'],
     }));
 
