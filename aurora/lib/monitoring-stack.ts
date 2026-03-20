@@ -82,8 +82,8 @@ export class MonitoringStack extends cdk.Stack {
       reservedConcurrentExecutions: 5,
       environment: {
         PROJECT: props.project,
-        LOCAL_SECRET_ARN: props.secretArn,
-        REMOTE_SECRET_ARN: props.remoteSecretArn,
+        LOCAL_SECRET_ARN: `${props.project}/db-credentials`,
+        REMOTE_SECRET_ARN: `${props.project}/db-credentials`,
         REMOTE_REGION: this.region === props.primaryRegion ? props.secondaryRegion : props.primaryRegion,
         REMOTE_DB_HOST: props.remoteDbHost,
         GLOBAL_CLUSTER_ID: props.globalClusterIdentifier,
@@ -92,7 +92,7 @@ export class MonitoringStack extends cdk.Stack {
 
     rpoMonitorFn.addToRolePolicy(new iam.PolicyStatement({
       actions: ['secretsmanager:GetSecretValue'],
-      resources: [props.secretArn, props.remoteSecretArn],
+      resources: [`arn:aws:secretsmanager:${this.region}:${this.account}:secret:${props.project}/db-credentials-*`],
     }));
 
     rpoMonitorFn.addToRolePolicy(new iam.PolicyStatement({
@@ -200,7 +200,7 @@ export class MonitoringStack extends cdk.Stack {
         width: 12, height: 6,
       }),
       new cloudwatch.SingleValueWidget({
-        title: 'Aurora Engine Version Alignment',
+        title: 'Aurora Engine Version Alignment (0 = match, 1 = MISMATCH — blocks failover)',
         metrics: [rpoMetric('AuroraEngineVersionMismatch', 'Maximum', props.primaryRegion), rpoMetric('AuroraEngineVersionMismatch', 'Maximum', props.secondaryRegion)],
         width: 12, height: 3,
       }),
