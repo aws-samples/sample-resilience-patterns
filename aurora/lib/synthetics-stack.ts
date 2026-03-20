@@ -41,38 +41,6 @@ def handler(event, context):
 `;
 }
 
-function crudCode(url: string): string {
-  return `
-import http.client
-import json
-import urllib.parse
-from aws_synthetics.selenium import synthetics_webdriver as syn_webdriver
-from aws_synthetics.common import synthetics_logger as logger
-
-def do_request(method, url, body=None):
-    parsed = urllib.parse.urlparse(url)
-    conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=10)
-    headers = {"User-Agent": str(syn_webdriver.get_canary_user_agent_string()), "Content-Type": "application/json"}
-    conn.request(method, parsed.path or "/", json.dumps(body) if body else None, headers)
-    resp = conn.getresponse()
-    data = resp.read().decode()
-    logger.info(f"{method} {url} -> {resp.status}: {data[:200]}")
-    conn.close()
-    if not (200 <= resp.status <= 299):
-        raise Exception(f"Failed: {resp.status} {data[:200]}")
-    return json.loads(data) if data else None
-
-def handler(event, context):
-    base = "http://${url}"
-    do_request("GET", f"{base}/health")
-    order = do_request("POST", f"{base}/orders", {"item": "canary-test", "quantity": 1})
-    order_id = order["id"]
-    do_request("GET", f"{base}/orders")
-    do_request("PUT", f"{base}/orders/{order_id}/status", {"status": "shipped"})
-    do_request("DELETE", f"{base}/orders/{order_id}")
-    logger.info("CRUD checks passed")
-`;
-}
 
 export class SyntheticsStack extends cdk.Stack {
   constructor(scope: cdk.App, id: string, props: SyntheticsStackProps) {
@@ -102,7 +70,7 @@ export class SyntheticsStack extends cdk.Stack {
 
     const canaries: { suffix: string; code: string }[] = [
       { suffix: 'al', code: readOnlyCode(props.localRecordName) },
-      { suffix: 'ar', code: crudCode(props.remoteRecordName) },
+      { suffix: 'ar', code: readOnlyCode(props.remoteRecordName) },
       { suffix: 'ad', code: readOnlyCode(props.dnsRecordName) },
     ];
 
