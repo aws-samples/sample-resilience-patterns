@@ -43,19 +43,27 @@ def handler(event, context):
         remote_ids = get_order_ids(remote_host, remote_port, remote_user, remote_pass, remote_db)
 
         # Delta: rows the remote has that I don't
-        missing = len(remote_ids - local_ids)
+        local_missing = len(remote_ids - local_ids)
+        # Delta: rows I have that the remote doesn't
+        remote_missing = len(local_ids - remote_ids)
 
-        logger.info(f'Local: {len(local_ids)} rows, Remote: {len(remote_ids)} rows, Missing: {missing}')
+        logger.info(f'Local: {len(local_ids)} rows, Remote: {len(remote_ids)} rows, LocalMissing: {local_missing}, RemoteMissing: {remote_missing}')
 
-        # Publish metrics
+        # Publish metrics for BOTH regions to local CloudWatch
         cloudwatch.put_metric_data(
             Namespace=namespace,
             MetricData=[
                 {
                     'MetricName': 'CatalogMissingRows',
-                    'Value': missing,
+                    'Value': local_missing,
                     'Unit': 'Count',
                     'Dimensions': [{'Name': 'Region', 'Value': local_region}],
+                },
+                {
+                    'MetricName': 'CatalogMissingRows',
+                    'Value': remote_missing,
+                    'Unit': 'Count',
+                    'Dimensions': [{'Name': 'Region', 'Value': remote_region}],
                 },
                 {
                     'MetricName': 'CatalogRPOHeartbeat',
@@ -63,10 +71,16 @@ def handler(event, context):
                     'Unit': 'Count',
                     'Dimensions': [{'Name': 'Region', 'Value': local_region}],
                 },
+                {
+                    'MetricName': 'CatalogRPOHeartbeat',
+                    'Value': 1,
+                    'Unit': 'Count',
+                    'Dimensions': [{'Name': 'Region', 'Value': remote_region}],
+                },
             ],
         )
 
-        return {'missing_rows': missing, 'local_count': len(local_ids), 'remote_count': len(remote_ids)}
+        return {'local_missing': local_missing, 'remote_missing': remote_missing}
 
     except Exception as e:
         logger.error(f'RPO monitor error: {e}')
@@ -112,10 +126,18 @@ def _check_engine_versions(local_region, remote_region, namespace):
 
     cloudwatch.put_metric_data(
         Namespace=namespace,
-        MetricData=[{
-            'MetricName': 'AuroraEngineVersionMismatch',
-            'Value': mismatch,
-            'Unit': 'Count',
-            'Dimensions': [{'Name': 'Region', 'Value': local_region}],
-        }],
+        MetricData=[
+            {
+                'MetricName': 'AuroraEngineVersionMismatch',
+                'Value': mismatch,
+                'Unit': 'Count',
+                'Dimensions': [{'Name': 'Region', 'Value': local_region}],
+            },
+            {
+                'MetricName': 'AuroraEngineVersionMismatch',
+                'Value': mismatch,
+                'Unit': 'Count',
+                'Dimensions': [{'Name': 'Region', 'Value': remote_region}],
+            },
+        ],
     )
