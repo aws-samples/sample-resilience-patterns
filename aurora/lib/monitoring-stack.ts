@@ -232,15 +232,10 @@ export class MonitoringStack extends cdk.Stack {
 
     // Row 2: RPO status
     dashboard.addWidgets(
-      new cloudwatch.SingleValueWidget({
-        title: 'RPO: Current Missing Rows',
-        metrics: [rpoMetric('CatalogMissingRows', 'Maximum', props.primaryRegion), rpoMetric('CatalogMissingRows', 'Maximum', props.secondaryRegion)],
-        width: 12, height: 3,
-      }),
       new cloudwatch.GraphWidget({
-        title: 'RPO: Heartbeat',
+        title: 'RPO: Heartbeat (gaps = monitor stopped, RPO data is stale)',
         left: [rpoMetric('CatalogRPOHeartbeat', 'Sum', props.primaryRegion), rpoMetric('CatalogRPOHeartbeat', 'Sum', props.secondaryRegion)],
-        width: 12, height: 6,
+        width: 24, height: 6,
       }),
     );
 

@@ -75,15 +75,14 @@
 
 ### FR-6: CloudWatch Dashboard (Primary Region Only)
 
-Combined dashboard (`${project}-combined`) with 8 widget areas:
+Combined dashboard (`${project}-combined`) with 7 widget areas:
 1. Writer Region — SingleValueWidget: AuroraWriterActive per region
 2. DNS Active Region — SingleValueWidget: RegionDNSActive per region (1 = Active, 0 = Removed)
 3. Replica Lag — GraphWidget: AuroraReplicaLag from both regions
 4. RPO: Missing Rows — GraphWidget: CatalogMissingRows from both regions
-5. RPO: Current Missing Rows — SingleValueWidget: CatalogMissingRows (no FILL)
-6. RPO: Heartbeat — GraphWidget: CatalogRPOHeartbeat from both regions (no FILL)
-7. Commit Latency — GraphWidget: CommitLatency Average from both regions
-8. Engine Version Alignment — SingleValueWidget: AuroraEngineVersionMismatch (0 = match, 1 = MISMATCH)
+5. RPO: Heartbeat (gaps = monitor stopped, RPO data is stale) — full-width GraphWidget: CatalogRPOHeartbeat from both regions (no FILL)
+6. Commit Latency — GraphWidget: CommitLatency Average from both regions
+7. Engine Version Alignment — SingleValueWidget: AuroraEngineVersionMismatch (0 = match, 1 = MISMATCH)
 
 ### FR-7: RPO Monitoring
 
