@@ -26,6 +26,8 @@ export interface MonitoringStackProps extends cdk.StackProps {
   readonly remoteEncryptionKeyArn: string;
   readonly remoteDbHost: string;
   readonly globalClusterIdentifier: string;
+  readonly planArn: string;
+  readonly recordName: string;
 }
 
 export class MonitoringStack extends cdk.Stack {
@@ -145,8 +147,47 @@ export class MonitoringStack extends cdk.Stack {
       treatMissingData: cloudwatch.TreatMissingData.IGNORE,
     });
 
+    new cloudwatch.Alarm(this, 'WriterRegionAlarm', {
+      alarmName: `${props.project}-writer-region-${this.region}`,
+      metric: new cloudwatch.Metric({ namespace: rpoNamespace, metricName: 'AuroraWriterActive', dimensionsMap: { Region: props.primaryRegion }, statistic: 'Maximum', period: cdk.Duration.minutes(1) }),
+      threshold: 1,
+      evaluationPeriods: 2,
+      comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.IGNORE,
+    });
+
     // Combined Dashboard (primary region only)
     if (this.region === props.primaryRegion) {
+
+    // DNS Status Lambda (not VPC-deployed — ARC API has no VPC endpoint)
+    const dnsStatusFn = new lambda.Function(this, 'DnsStatusFunction', {
+      functionName: `${props.project}-dns-status-${this.region}`,
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'dns-status')),
+      timeout: cdk.Duration.seconds(30),
+      reservedConcurrentExecutions: 1,
+      environment: {
+        PLAN_ARN: props.planArn,
+        METRIC_NAMESPACE: rpoNamespace,
+      },
+    });
+
+    dnsStatusFn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['arc-region-switch:ListRoute53HealthChecks'],
+      resources: [props.planArn],
+    }));
+
+    dnsStatusFn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['cloudwatch:PutMetricData'],
+      resources: ['*'],
+    }));
+
+    new events.Rule(this, 'DnsStatusSchedule', {
+      schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
+      targets: [new eventsTargets.LambdaFunction(dnsStatusFn)],
+    });
+
     const primaryDims = { DBClusterIdentifier: props.dbClusterIdentifier };
     const remoteDims = { DBClusterIdentifier: props.remoteDbClusterIdentifier };
     const rdsMetric = (metricName: string, stat: string, region: string, dims: Record<string, string>) =>
@@ -157,6 +198,20 @@ export class MonitoringStack extends cdk.Stack {
     const dashboard = new cloudwatch.Dashboard(this, 'Dashboard', {
       dashboardName: `${props.project}-combined`,
     });
+
+    // Row 0: Writer + DNS status
+    dashboard.addWidgets(
+      new cloudwatch.SingleValueWidget({
+        title: 'Aurora Writer Region (1 = Writer)',
+        metrics: [rpoMetric('AuroraWriterActive', 'Maximum', props.primaryRegion), rpoMetric('AuroraWriterActive', 'Maximum', props.secondaryRegion)],
+        width: 12, height: 3,
+      }),
+      new cloudwatch.SingleValueWidget({
+        title: 'DNS Active Region (1 = Active, 0 = Removed)',
+        metrics: [rpoMetric('RegionDNSActive', 'Maximum', props.primaryRegion), rpoMetric('RegionDNSActive', 'Maximum', props.secondaryRegion)],
+        width: 12, height: 3,
+      }),
+    );
 
     // Row 1: Replication health
     dashboard.addWidgets(

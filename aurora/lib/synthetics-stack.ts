@@ -41,6 +41,33 @@ def handler(event, context):
 `;
 }
 
+function writeCode(url: string): string {
+  return `
+import json, http.client
+from aws_synthetics.selenium import synthetics_webdriver as syn_webdriver
+from aws_synthetics.common import synthetics_logger as logger
+
+def handler(event, context):
+    ua = {"User-Agent": str(syn_webdriver.get_canary_user_agent_string())}
+    body = json.dumps({"region": "canary-write", "status": "PENDING", "payload": {"canary": True}})
+    conn = http.client.HTTPConnection("${url}", 80, timeout=10)
+    conn.request("POST", "/orders", body, {**ua, "Content-Type": "application/json"})
+    resp = conn.getresponse()
+    data = resp.read().decode()
+    if resp.status != 201:
+        conn.close()
+        raise Exception(f"Write failed: {resp.status} {data[:200]}")
+    order_id = json.loads(data).get("id")
+    conn.close()
+    if order_id:
+        conn2 = http.client.HTTPConnection("${url}", 80, timeout=10)
+        conn2.request("DELETE", f"/orders/{order_id}", None, ua)
+        conn2.getresponse().read()
+        conn2.close()
+    logger.info("Write canary passed")
+`;
+}
+
 
 export class SyntheticsStack extends cdk.Stack {
   constructor(scope: cdk.App, id: string, props: SyntheticsStackProps) {
@@ -72,6 +99,9 @@ export class SyntheticsStack extends cdk.Stack {
       { suffix: 'al', code: readOnlyCode(props.localRecordName) },
       { suffix: 'ar', code: readOnlyCode(props.remoteRecordName) },
       { suffix: 'ad', code: readOnlyCode(props.dnsRecordName) },
+      { suffix: 'wl', code: writeCode(props.localRecordName) },
+      { suffix: 'wr', code: writeCode(props.remoteRecordName) },
+      { suffix: 'wd', code: writeCode(props.dnsRecordName) },
     ];
 
     for (const { suffix, code } of canaries) {

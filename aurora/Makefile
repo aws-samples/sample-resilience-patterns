@@ -68,15 +68,19 @@ deploy-schema: deploy-database
 deploy-aurora-app: deploy-schema
 	@echo "═══ Deploying Aurora app stacks ═══"
 	@SECRET_ARN=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),SecretArn) && \
-	S_READER_ENDPOINT=$(call so,$(PROJECT)-db-secondary,$(SECONDARY_REGION),ClusterReaderEndpoint) && \
 	ENC_KEY_ARN=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),EncryptionKeyArn) && \
+	P_READ_HOST=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),ClusterEndpoint) && \
+	S_READ_HOST=$(call so,$(PROJECT)-db-secondary,$(SECONDARY_REGION),ClusterReaderEndpoint) && \
+	GLOBAL_WRITER_HOST=$$(aws rds describe-global-clusters --global-cluster-identifier $(GLOBAL_CLUSTER_ID) --region $(PRIMARY_REGION) --query "GlobalClusters[0].Endpoint" --output text) && \
 	$(CDK) deploy $(PROJECT)-aurora-app-primary $(CDK_COMMON) -c stack=aurora-app-primary \
 		$(call vpc_ctx,$(PROJECT)-vpc-primary,$(PRIMARY_REGION)) \
 		-c secretArn=$$SECRET_ARN -c encryptionKeyArn=$$ENC_KEY_ARN \
+		-c dbReadHost=$$P_READ_HOST -c dbWriteHost=$$GLOBAL_WRITER_HOST \
 		--require-approval never -o cdk.out.aapp-p && \
 	$(CDK) deploy $(PROJECT)-aurora-app-secondary $(CDK_COMMON) -c stack=aurora-app-secondary \
 		$(call vpc_ctx,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION)) \
-		-c secretArn=$$SECRET_ARN -c encryptionKeyArn=$$ENC_KEY_ARN -c dbHostOverride=$$S_READER_ENDPOINT \
+		-c secretArn=$$SECRET_ARN -c encryptionKeyArn=$$ENC_KEY_ARN \
+		-c dbReadHost=$$S_READ_HOST -c dbWriteHost=$$GLOBAL_WRITER_HOST \
 		--require-approval never -o cdk.out.aapp-s
 
 deploy-dns: deploy-aurora-app
@@ -151,15 +155,18 @@ deploy-monitoring: deploy-database
 	S_CLUSTER_ID=$(call so,$(PROJECT)-db-secondary,$(SECONDARY_REGION),ClusterIdentifier) && \
 	S_READER=$(call so,$(PROJECT)-db-secondary,$(SECONDARY_REGION),ClusterReaderEndpoint) && \
 	P_WRITER=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),ClusterEndpoint) && \
+	PLAN_ARN=$(call so,$(PROJECT)-failover-plan,$(PRIMARY_REGION),PlanArn) && \
 	$(CDK) deploy $(PROJECT)-monitoring-primary $(CDK_COMMON) -c stack=monitoring-primary \
 		$(call vpc_ctx,$(PROJECT)-vpc-primary,$(PRIMARY_REGION)) \
 		-c dbClusterIdentifier=$$P_CLUSTER_ID -c remoteDbClusterIdentifier=$$S_CLUSTER_ID -c globalClusterIdentifier=$(GLOBAL_CLUSTER_ID) -c secretArn=$$P_SECRET -c encryptionKeyArn=$$P_KEY \
 		-c remoteSecretArn=$$P_SECRET -c remoteEncryptionKeyArn=$$S_KEY -c remoteDbHost=$$S_READER \
+		-c planArn=$$PLAN_ARN -c recordName=aurora-app.demo.internal \
 		--require-approval never -o cdk.out.mon-p && \
 	$(CDK) deploy $(PROJECT)-monitoring-secondary $(CDK_COMMON) -c stack=monitoring-secondary \
 		$(call vpc_ctx,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION)) \
 		-c dbClusterIdentifier=$$S_CLUSTER_ID -c remoteDbClusterIdentifier=$$P_CLUSTER_ID -c globalClusterIdentifier=$(GLOBAL_CLUSTER_ID) -c secretArn=$$P_SECRET -c encryptionKeyArn=$$S_KEY \
 		-c remoteSecretArn=$$P_SECRET -c remoteEncryptionKeyArn=$$P_KEY -c remoteDbHost=$$P_WRITER \
+		-c planArn=$$PLAN_ARN -c recordName=aurora-app.demo.internal \
 		--require-approval never -o cdk.out.mon-s
 
 deploy-reconciliation: deploy-database

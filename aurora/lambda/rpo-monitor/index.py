@@ -101,12 +101,25 @@ def _check_engine_versions(local_region, remote_region, namespace):
 
     rds = boto3.client('rds', region_name=local_region)
     resp = rds.describe_global_clusters(GlobalClusterIdentifier=global_cluster_id)
-    members = resp['GlobalClusters'][0]['GlobalClusterMembers']
+    members = resp['GlobalClusters'][0].get('GlobalClusterMembers', [])
+
+    # Publish AuroraWriterActive metric per region
+    for m in members:
+        arn = m.get('DBClusterArn', '')
+        is_writer = m.get('IsWriter', False)
+        member_region = arn.split(':')[3] if ':' in arn else 'unknown'
+        cloudwatch.put_metric_data(
+            Namespace=namespace,
+            MetricData=[{
+                'MetricName': 'AuroraWriterActive',
+                'Value': 1.0 if is_writer else 0.0,
+                'Unit': 'None',
+                'Dimensions': [{'Name': 'Region', 'Value': member_region}],
+            }]
+        )
+
     versions = set()
     for m in members:
-        # Each member has its own EngineVersion via the cluster ARN
-        # But describe_global_clusters doesn't return per-member versions directly
-        # Use the global cluster's EngineVersion and check if all members are writers/readers
         pass
 
     # Use describe_db_clusters locally — the local cluster is visible

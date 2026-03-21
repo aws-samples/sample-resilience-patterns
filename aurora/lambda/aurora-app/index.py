@@ -9,17 +9,21 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 
-def get_db_credentials():
-    secret_id = os.environ['DB_SECRET_ARN']
+def _get_secret():
     sm = boto3.client('secretsmanager')
-    secret = json.loads(sm.get_secret_value(SecretId=secret_id)['SecretString'])
-    host = os.environ.get('DB_HOST_OVERRIDE', secret['host'])
-    return host, secret['port'], secret['username'], secret['password'], secret['dbname']
+    return json.loads(sm.get_secret_value(SecretId=os.environ['DB_SECRET_ARN'])['SecretString'])
 
 
-def get_connection():
-    host, port, user, password, dbname = get_db_credentials()
-    return psycopg2.connect(host=host, port=port, user=user, password=password, dbname=dbname)
+def get_read_connection():
+    secret = _get_secret()
+    host = os.environ.get('DB_READ_HOST', secret['host'])
+    return psycopg2.connect(host=host, port=secret['port'], user=secret['username'], password=secret['password'], dbname=secret['dbname'])
+
+
+def get_write_connection():
+    secret = _get_secret()
+    host = os.environ.get('DB_WRITE_HOST', secret['host'])
+    return psycopg2.connect(host=host, port=secret['port'], user=secret['username'], password=secret['password'], dbname=secret['dbname'])
 
 
 def handler(event, context):
@@ -35,7 +39,7 @@ def handler(event, context):
         if path == '/health' and method == 'GET':
             return respond(200, {'status': 'ok', 'region': os.environ.get('AWS_REGION')})
 
-        conn = get_connection()
+        conn = get_write_connection() if method in ('POST', 'PUT', 'DELETE') else get_read_connection()
         try:
             conn.autocommit = True
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
