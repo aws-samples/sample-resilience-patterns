@@ -142,7 +142,7 @@
 - Combined Dashboard (primary region only): `${project}-combined`
   - Row 0: Writer Region (SingleValue) + DNS Active Region (SingleValue)
   - Row 1: Replica Lag (Graph) + Missing Rows (Graph)
-  - Row 2: Current Missing Rows (SingleValue) + Heartbeat (Graph)
+  - Row 2: Heartbeat — full-width (gaps = monitor stopped, RPO data is stale)
   - Row 3: Commit Latency (Graph) + Engine Version Alignment (SingleValue)
 
 ### ReconciliationStack (per region)
