@@ -7,10 +7,14 @@ def handler(event, context):
     resp = arc.list_route53_health_checks(arn=os.environ['PLAN_ARN'])
     metrics = []
     for hc in resp.get('healthChecks', []):
+        # ARC health checks default to healthy (active). Status field is only
+        # present after ARC sets a check to unhealthy during deactivation.
+        # Absent status = healthy = region active in DNS.
+        status = hc.get('status', 'healthy')
         metrics.append({
             'MetricName': 'RegionDNSActive',
             'Dimensions': [{'Name': 'Region', 'Value': hc['region']}],
-            'Value': 1.0 if hc.get('status') == 'healthy' else 0.0,
+            'Value': 0.0 if status == 'unhealthy' else 1.0,
             'Unit': 'None',
         })
     if metrics:
