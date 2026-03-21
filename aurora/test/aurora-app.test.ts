@@ -11,6 +11,8 @@ function createStack() {
     albSgId: 'sg-alb',
     secretArn: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:test/db-credentials-abc123',
     encryptionKeyArn: 'arn:aws:kms:us-east-1:123456789012:key/test-key-id',
+    dbReadHost: 'read.cluster.rds.amazonaws.com',
+    dbWriteHost: 'write.global.rds.amazonaws.com',
     env: { account: '123456789012', region: 'us-east-1' },
   }));
 }
@@ -53,6 +55,17 @@ describe('AuroraAppStack', () => {
       VpcConfig: Match.objectLike({
         SubnetIds: Match.anyValue(),
       }),
+    });
+  });
+
+  test('Lambda has DB_READ_HOST and DB_WRITE_HOST env vars', () => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Environment: {
+        Variables: Match.objectLike({
+          DB_READ_HOST: 'read.cluster.rds.amazonaws.com',
+          DB_WRITE_HOST: 'write.global.rds.amazonaws.com',
+        }),
+      },
     });
   });
 

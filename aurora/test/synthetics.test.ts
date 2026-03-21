@@ -14,9 +14,9 @@ describe('SyntheticsStack', () => {
     env: { account: '123456789012', region: 'us-east-1' },
   }));
 
-  test('creates 3 canaries', () => { template.resourceCountIs('AWS::Synthetics::Canary', 3); });
+  test('creates 6 canaries', () => { template.resourceCountIs('AWS::Synthetics::Canary', 6); });
   test('canaries run every 5 minutes', () => { template.hasResourceProperties('AWS::Synthetics::Canary', { Schedule: { Expression: 'rate(5 minutes)' } }); });
   test('canaries are VPC-deployed', () => { template.hasResourceProperties('AWS::Synthetics::Canary', { VPCConfig: Match.objectLike({ SubnetIds: Match.anyValue() }) }); });
   test('creates KMS-encrypted artifact bucket', () => { template.hasResourceProperties('AWS::S3::Bucket', { BucketEncryption: Match.anyValue() }); });
-  test('creates 3 alarms', () => { template.resourceCountIs('AWS::CloudWatch::Alarm', 3); });
+  test('creates 6 alarms', () => { template.resourceCountIs('AWS::CloudWatch::Alarm', 6); });
 });

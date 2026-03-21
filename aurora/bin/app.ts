@@ -89,12 +89,12 @@ if (target === 'schema') {
 // ─── Aurora App ───
 if (target === 'aurora-app-primary') {
   suppress(new AuroraAppStack(app, `${project}-aurora-app-primary`, {
-    project, vpcImport: vpcImport(), lambdaSgId: c('lambdaSgId'), albSgId: c('albSgId'), secretArn: c('secretArn'), encryptionKeyArn: c('encryptionKeyArn'), env: env(primaryRegion),
+    project, vpcImport: vpcImport(), lambdaSgId: c('lambdaSgId'), albSgId: c('albSgId'), secretArn: c('secretArn'), encryptionKeyArn: c('encryptionKeyArn'), dbReadHost: c('dbReadHost'), dbWriteHost: c('dbWriteHost'), env: env(primaryRegion),
   }));
 }
 if (target === 'aurora-app-secondary') {
   suppress(new AuroraAppStack(app, `${project}-aurora-app-secondary`, {
-    project, vpcImport: vpcImport(), lambdaSgId: c('lambdaSgId'), albSgId: c('albSgId'), secretArn: c('secretArn'), encryptionKeyArn: c('encryptionKeyArn'), dbHostOverride: c('dbHostOverride'), env: env(secondaryRegion),
+    project, vpcImport: vpcImport(), lambdaSgId: c('lambdaSgId'), albSgId: c('albSgId'), secretArn: c('secretArn'), encryptionKeyArn: c('encryptionKeyArn'), dbReadHost: c('dbReadHost'), dbWriteHost: c('dbWriteHost'), env: env(secondaryRegion),
   }));
 }
 
@@ -142,6 +142,7 @@ if (target === 'monitoring-primary' || target === 'monitoring-secondary') {
     secretArn: c('secretArn'), encryptionKeyArn: c('encryptionKeyArn'),
     remoteSecretArn: c('remoteSecretArn'), remoteEncryptionKeyArn: c('remoteEncryptionKeyArn'), remoteDbHost: c('remoteDbHost'),
     globalClusterIdentifier: globalClusterId,
+    planArn: c('planArn'), recordName: 'aurora-app.demo.internal',
     env: env(region),
   }));
 }
