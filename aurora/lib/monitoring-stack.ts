@@ -230,16 +230,7 @@ export class MonitoringStack extends cdk.Stack {
       }),
     );
 
-    // Row 2: RPO status
-    dashboard.addWidgets(
-      new cloudwatch.GraphWidget({
-        title: 'RPO: Heartbeat (gaps = monitor stopped, RPO data is stale)',
-        left: [rpoMetric('CatalogRPOHeartbeat', 'Sum', props.primaryRegion), rpoMetric('CatalogRPOHeartbeat', 'Sum', props.secondaryRegion)],
-        width: 24, height: 6,
-      }),
-    );
-
-    // Row 3: Performance + version
+    // Row 2: Commit Latency (full-width)
     dashboard.addWidgets(
       new cloudwatch.GraphWidget({
         title: 'Commit Latency (ms)',
@@ -247,12 +238,25 @@ export class MonitoringStack extends cdk.Stack {
           rdsMetric('CommitLatency', 'Average', props.primaryRegion, primaryDims),
           rdsMetric('CommitLatency', 'Average', props.secondaryRegion, remoteDims),
         ],
-        width: 12, height: 6,
+        width: 24, height: 6,
       }),
+    );
+
+    // Row 3: Engine Version Alignment (full-width)
+    dashboard.addWidgets(
       new cloudwatch.SingleValueWidget({
         title: 'Aurora Engine Version Alignment (0 = match, 1 = MISMATCH — blocks failover)',
         metrics: [rpoMetric('AuroraEngineVersionMismatch', 'Maximum', props.primaryRegion), rpoMetric('AuroraEngineVersionMismatch', 'Maximum', props.secondaryRegion)],
-        width: 12, height: 3,
+        width: 24, height: 3,
+      }),
+    );
+
+    // Row 4: Heartbeat
+    dashboard.addWidgets(
+      new cloudwatch.GraphWidget({
+        title: 'RPO: Heartbeat (gaps = monitor stopped, RPO data is stale)',
+        left: [rpoMetric('CatalogRPOHeartbeat', 'Sum', props.primaryRegion), rpoMetric('CatalogRPOHeartbeat', 'Sum', props.secondaryRegion)],
+        width: 24, height: 5,
       }),
     );
     } // end primary region dashboard
