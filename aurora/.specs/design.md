@@ -3,31 +3,6 @@
 ## Architecture
 
 ```
-GitHub Actions                             AWS
-──────────────                             ───
-Push to non-main branch ──► Build workflow (compile + test + synth)
-Pull Request ──────────────► E2E workflow:
-                               ├─ Build + test
-                               │    ├─ deploy-vpc            (us-east-1 + us-west-2, parallel)
-                               │    ├─ deploy-vpc-peering    (sequential)
-                               │    ├─ deploy-database       (us-east-1 primary, then us-west-2 secondary)
-                               │    ├─ deploy-schema         (us-east-1, runs migration)
-                               │    ├─ deploy-aurora-app     (us-east-1 + us-west-2, sequential)
-                               │    ├─ deploy-dns            (sequential, no health checks)
-                               │    ├─ deploy-failover-plan  (sequential, captures health check IDs)
-                               │    ├─ deploy-dns-with-hc    (sequential, wires health checks)
-                               │    ├─ deploy-synthetics     (us-east-1 + us-west-2, sequential)
-                               │    ├─ deploy-monitoring     (us-east-1 + us-west-2, parallel)
-                               │    ├─ deploy-reconciliation (us-east-1 + us-west-2, parallel)
-                               │    ├─ deploy-loadgen        (sequential)
-                               │    └─ deploy-chaos          (us-east-1 + us-west-2, parallel)
-                               ├─ Run Synthetics canaries (read-only health + query)
-                               ├─ Verify: replication lag, metrics, alarms
-                               └─ Cleanup (on success only)
-Manual trigger ────────────► Cleanup workflow (cleanup.sh)
-```
-
-```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        GLOBAL RESOURCES                         │
 │  Aurora Global Database (PostgreSQL 16.6)                       │
@@ -42,20 +17,26 @@ Manual trigger ────────────► Cleanup workflow (cleanup
 
 ┌──────────── us-east-1 ────────────┐  ┌──────────── us-west-2 ────────────┐
 │  VPC (10.0.0.0/23, 2 AZ, isolated)│  │  VPC (10.0.2.0/23, 2 AZ, isolated)│
-│  7 VPC Endpoints (no IGW, no NAT) │  │  7 VPC Endpoints (no IGW, no NAT) │
+│  8 VPC Endpoints (no IGW, no NAT) │  │  8 VPC Endpoints (no IGW, no NAT) │
 │                                   │  │                                   │
 │  Aurora App:                      │  │  Aurora App:                      │
 │    ALB (internal, HTTP:80) ──►   │  │    ALB (internal, HTTP:80) ──►   │
 │    Lambda (isolated) ──►          │  │    Lambda (isolated) ──►          │
-│    Aurora Primary (writer)        │  │    Aurora Secondary (reader)      │
-│                                   │  │    (DB_HOST_OVERRIDE → reader)    │
-│  Synthetics (3 canaries):         │  │  Synthetics (3 canaries):         │
+│    DB_READ_HOST: primary endpoint │  │    DB_READ_HOST: secondary reader │
+│    DB_WRITE_HOST: global writer   │  │    DB_WRITE_HOST: global writer   │
+│                                   │  │                                   │
+│  Synthetics (6 canaries):         │  │  Synthetics (6 canaries):         │
 │    al → aurora-app-use1 (local)   │  │    al → aurora-app-usw2 (local)   │
 │    ar → aurora-app-usw2 (remote)  │  │    ar → aurora-app-use1 (remote)  │
 │    ad → aurora-app (dns/ARC)      │  │    ad → aurora-app (dns/ARC)      │
+│    wl → write local               │  │    wl → write local               │
+│    wr → write remote              │  │    wr → write remote              │
+│    wd → write dns                 │  │    wd → write dns                 │
+│                                   │  │                                   │
 │  Schema Migration Lambda          │  │                                   │
 │  RPO Monitor Lambda               │  │  RPO Monitor Lambda               │
-│  CloudWatch Dashboard + 8 Alarms  │  │  CloudWatch Dashboard + 8 Alarms  │
+│  DNS Status Lambda (NOT in VPC)   │  │                                   │
+│  Combined Dashboard + 7 Alarms    │  │  7 Alarms (no dashboard)          │
 │  Reconciliation SSM + Lambda      │  │  Reconciliation SSM + Lambda      │
 │  Load Generation Lambda + SSM     │  │                                   │
 │  FIS Experiments (network, Aurora) │  │  FIS Experiments (network, Aurora) │
@@ -67,135 +48,176 @@ Manual trigger ────────────► Cleanup workflow (cleanup
 
 ## CDK Stacks
 
-### BootstrapStack
-- CodeBuild project (aws/codebuild/standard:7.0)
-- S3 artifact bucket encrypted with local CMK
-- IAM role scoped to: sts:AssumeRole on cdk-*, cloudformation:DescribeStacks/ListStacks, ssm:GetParameter on cdk-bootstrap/*
-- BucketDeployment to upload source as CDK asset
-- Build trigger custom resource (Lambda-backed): onEvent + isComplete, 30s poll, 30min timeout
-- buildspec.yml: npm ci, ts-node install, make deploy
+### BootstrapStack (primary region)
+- CodeBuild project (`${project}-deploy`, aws/codebuild/standard:7.0, SMALL compute)
+- S3 artifact bucket encrypted with local CMK (`${project}-codebuild-${account}`)
+- BucketDeployment to upload source as CDK asset (excludes .git, node_modules, cdk.out, cdk.out.*, dist, .specs)
+- IAM role: sts:AssumeRole on cdk-*, cloudformation:DescribeStacks/ListStacks/DescribeStackResources, ssm:GetParameter on cdk-bootstrap/*, ec2/rds/dsql describe ops, arc-region-switch list ops
+- Build trigger: onEvent Lambda (starts build) + isComplete Lambda (polls status), 30s query interval, 60min total timeout
+- buildspec.yml: npm ci, global install aws-cdk + ts-node, pip install Lambda deps, make deploy
 
 ### VpcStack (per region)
 - VPC with 2 AZs, isolated subnets only (/23 CIDR, /24 subnets)
 - Non-overlapping CIDRs: us-east-1 = 10.0.0.0/23, us-west-2 = 10.0.2.0/23
-- 6 VPC Interface endpoints: CloudWatch Logs, CloudWatch Monitoring, Secrets Manager, STS, Lambda, Synthetics
-- 1 VPC Gateway endpoint: S3
-- Security groups: ALB, Database, Lambda, VPC Endpoint, Synthetics
+- 7 Interface endpoints (private DNS enabled): CloudWatch Logs, CloudWatch Monitoring, Secrets Manager, STS, Lambda, Synthetics, RDS
+- 1 Gateway endpoint: S3
+- 5 Security groups: ALB, Database, Lambda, VPC Endpoint, Synthetics (all allowAllOutbound: false)
+- Outputs: VpcId, VpcCidr, IsolatedSubnetIds, AvailabilityZones, all 5 SG IDs
 
-### VpcPeeringStack
-- Cross-region VPC peering connection (requester in us-east-1, accepter in us-west-2)
-- Route table entries in both VPCs: cross-region CIDR → peering connection
+### VpcPeeringStack (primary region)
+- CfnVPCPeeringConnection: primary VPC → secondary VPC (peerRegion: us-west-2)
+- Peering acceptance + secondary route table entries done via AWS CLI in Makefile
+- Output: PeeringConnectionId
 
-### DatabaseStack (primary)
-- Aurora Global Database cluster (PostgreSQL 16.6)
-- Primary Aurora cluster with one db.r6g.large writer instance
-- Customer-managed KMS key, Secrets Manager credentials (30-day rotation)
+### DatabaseStack (primary region)
+- CfnGlobalCluster: aurora-postgresql 16.6, storageEncrypted, deletionProtection: false
+- Primary DatabaseCluster: aurora-postgres 16.6, one db.r6g.large writer, KMS encryption, isolated subnets
+- Credentials: fromGeneratedSecret('dbadmin', secretName: `${project}/db-credentials`, encrypted with same KMS key)
+- Default database: 'orders', backup retention: 7 days
+- Secret replication: CfnSecret ReplicaRegions property override to secondary region
+- Outputs: GlobalClusterArn, ClusterIdentifier, ClusterEndpoint, ClusterReaderEndpoint, SecretArn, EncryptionKeyArn
 
-### DatabaseReplicaStack (secondary)
-- Secondary Aurora cluster joined to Global Database
+### DatabaseReplicaStack (secondary region)
+- Secondary DatabaseCluster joined to global cluster via globalClusterIdentifier
 - One db.r6g.large reader instance, regional KMS key
+- MasterUsername, MasterUserPassword, DatabaseName properties deleted from CfnDBCluster
+- Outputs: ClusterIdentifier, ClusterReaderEndpoint, EncryptionKeyArn
 
-### SchemaStack
-- Lambda-backed custom resource for schema migration
-- Creates orders table, replication_tracking table, 4 stored procedures
-- VPC-deployed, idempotent
+### SchemaStack (primary region)
+- Lambda-backed custom resource (Provider pattern) for schema migration
+- Migration Lambda: Python 3.12, on_event handler, 5-min timeout, reserved concurrency 1
+- VPC-deployed with Lambda SG, DB_SECRET_ARN env var (secret ARN)
+- IAM: secretsmanager:GetSecretValue + kms:Decrypt
 
 ### AuroraAppStack (per region)
-- Internal ALB (HTTP:80, isolated subnets) + Lambda target group
-- Python 3.12 Lambda with CRUD handler calling stored procedures
-- Secondary region uses DB_HOST_OVERRIDE for reader endpoint
-- Secret replicated to us-west-2 for cross-region access
-- Reserved concurrency: 5, timeout: 60s
+- Internal ALB (HTTP:80, isolated subnets, named `${project}-aurora-${region}`)
+- Lambda target group with /health health check
+- Lambda: Python 3.12, handler index.handler, 60s timeout, reserved concurrency 5
+- Function name: `${project}-aurora-app-${region}`
+- Environment: DB_SECRET_ARN=`${project}/db-credentials` (name, not ARN), DB_READ_HOST, DB_WRITE_HOST
+- IAM: secretsmanager:GetSecretValue on both the passed secretArn and wildcard `${project}/db-credentials-*` in current region; kms:Decrypt
+- Outputs: AlbDnsName, AlbArn, AlbHostedZoneId
 
-### DnsStack
-- Route 53 private hosted zone: `demo.internal` (associated with both VPCs)
-- `aurora-app.demo.internal` — latency-based A-alias records (PrimaryRegion + StandbyRegion)
-- `aurora-app-use1.demo.internal` — simple A-alias to us-east-1 ALB
-- `aurora-app-usw2.demo.internal` — simple A-alias to us-west-2 ALB
-- ARC health check IDs attached in second deployment pass
+### DnsStack (primary region)
+- CfnHostedZone: `demo.internal`, associated with both VPCs
+- 4 CfnRecordSets:
+  - 2 latency-based A-alias: `aurora-app.demo.internal` (PrimaryRegion/us-east-1, StandbyRegion/us-west-2)
+  - 2 simple A-alias: `aurora-app-use1.demo.internal`, `aurora-app-usw2.demo.internal`
+- Health check IDs conditionally attached (spread operator, only if non-empty)
+- All alias targets: evaluateTargetHealth: true
+- Outputs: HostedZoneIdOutput, PrimaryRegionRecordName, SecondaryRegionRecordName
 
-### FailoverPlanStack
-- AWS::ARCRegionSwitch::Plan with activeActive recovery
-- Execution role for arc-region-switch.amazonaws.com
-- Deactivate: AuroraGlobalDatabase block (switchoverOnly, ungraceful: failover) → Route53HealthCheck block
-- Activate: Route53HealthCheck block (restore DNS)
+### FailoverPlanStack (primary region)
+- CfnResource type AWS::ARCRegionSwitch::Plan
+- Name: `${project}-region-switch`, RecoveryApproach: activeActive
+- PrimaryRegion: us-east-1, Regions: [us-east-1, us-west-2]
+- Execution role: arc-region-switch.amazonaws.com with iam:SimulatePrincipalPolicy on self, arc-region-switch read ops, rds describe/failover/switchover, route53 change/get/list/healthcheck, cloudwatch describe/get
+- Deactivate workflow (2 steps): failover-aurora-db (AuroraGlobalDatabase, switchoverOnly, ungraceful: failover, 20min) → shift-dns-aurora (Route53HealthCheck, 5min)
+- Activate workflow (1 step): restore-dns-aurora (Route53HealthCheck, 5min)
+- Outputs: PlanArn, ExecutionRoleArn
 
 ### SyntheticsStack (per region)
-- 3 canaries per region, all read-only (health + query):
-  - `al` (local) → region-aligned record for own region
-  - `ar` (remote) → region-aligned record for opposite region (via VPC peering)
-  - `ad` (dns) → `aurora-app.demo.internal` (ARC-managed routing)
+- 6 canaries per region: al, ar, ad (read-only), wl, wr, wd (write)
+- Read-only code: GET /health + GET /orders via http.client
+- Write code: POST /orders + DELETE /orders/{id} via http.client
 - Runtime: syn-python-selenium-10.0
-- KMS-encrypted artifact bucket, CloudWatch alarm per canary
+- Schedule: every 5 minutes, startAfterCreation: true
+- KMS-encrypted artifact bucket (`${project}-canary-${region}-${account}`)
+- 6 CloudWatch alarms (SuccessPercent < 100%, treat missing: ignore)
+- All canaries VPC-deployed with Synthetics SG
+- Canary names: `${project}-${suffix}-${regionSuffix}` (truncated to 21 chars)
 
 ### MonitoringStack (per region)
-- 5 Aurora alarms: ReplicaLag, ReplicaLagMax, CPU, FreeMemory, CommitLatency
-- 2 RPO alarms: CatalogMissingRows, CatalogRPOHeartbeat
-- 1 engine version alarm: AuroraEngineVersionMismatch
-- SNS alarm topic (KMS encrypted)
-- RPO Monitor Lambda (Python 3.12, every 5 min): cross-region row comparison + heartbeat + engine version check
-- Dashboard: replica lag, missing rows (FILL REPEAT), heartbeat (no FILL), CPU, commit latency, memory, engine version alignment
+- KMS-encrypted SNS alarm topic (`${project}-alarms-${region}`)
+- 3 Aurora alarms with SNS actions: ReplicaLag (>1000, Max, 1 period), ReplicaLagMax (>2000, Max, 1 period), CommitLatency (>100, Avg, 3 periods)
+- 3 RPO alarms (custom namespace `${project}/RPO`): CatalogMissingRows (>10, Max, 2 periods), Heartbeat (<1, Sum, 10-min period, 2 periods, BREACHING), EngineVersionMismatch (>=1, Max, 1 period)
+- 1 Writer region alarm: AuroraWriterActive < 1 for primary region dimension (Max, 2 periods)
+- RPO Monitor Lambda: `${project}-rpo-monitor-${region}`, Python 3.12, 2-min timeout, reserved concurrency 5, every 5 min
+  - Env: PROJECT, LOCAL_SECRET_ARN (name), REMOTE_SECRET_ARN (name), REMOTE_REGION, REMOTE_DB_HOST, GLOBAL_CLUSTER_ID
+  - IAM: secretsmanager:GetSecretValue (wildcard ARN), kms:Decrypt (both keys), cloudwatch:PutMetricData, rds:DescribeDBClusters/DescribeGlobalClusters
+- DNS Status Lambda (primary region only, NOT VPC-deployed): `${project}-dns-status-${region}`, Python 3.12, 30s timeout, reserved concurrency 1, every 1 min
+  - Env: PLAN_ARN, METRIC_NAMESPACE
+  - IAM: arc-region-switch:ListRoute53HealthChecks on plan ARN, cloudwatch:PutMetricData
+  - Publishes RegionDNSActive metric per region
+- Combined Dashboard (primary region only): `${project}-combined`
+  - Row 0: Writer Region (SingleValue) + DNS Active Region (SingleValue)
+  - Row 1: Replica Lag (Graph) + Missing Rows (Graph)
+  - Row 2: Current Missing Rows (SingleValue) + Heartbeat (Graph)
+  - Row 3: Commit Latency (Graph) + Engine Version Alignment (SingleValue)
 
 ### ReconciliationStack (per region)
-- Snapshot & Copy SSM Document (primary): takes Aurora snapshot, copies cross-region with KMS
-- Restore & Reconcile SSM Document (standby): restores snapshot → temp cluster → reconciliation Lambda
-- Reconciliation Lambda: compares order IDs, produces missing transaction report
+- Reconciliation Lambda: `${project}-reconcile-${region}`, Python 3.12, lambda_handler, 10-min timeout, reserved concurrency 5, VPC-deployed
+- SSM Automation role: ssm.amazonaws.com, lambda:InvokeFunction, rds snapshot/restore/describe/create/delete, kms:Decrypt/CreateGrant/DescribeKey
+- Snapshot & Copy SSM Document (`${project}-snapshot-copy-${region}`): copies source snapshot cross-region
+- Restore & Reconcile SSM Document (`${project}-restore-reconcile-${region}`): restores snapshot → temp cluster (db.t4g.medium) → waits → invokes reconciliation Lambda
 
-### LoadGenStack
-- Load generation Lambda (Python 3.12, 15-min timeout, 512MB, reserved concurrency 10)
-- SSM Automation Document for operator invocation
-- VPC-deployed with ALB access
+### LoadGenStack (primary region)
+- Load gen Lambda: `${project}-loadgen`, Python 3.12, 15-min timeout, 512MB, reserved concurrency 10, VPC-deployed
+- Env: AURORA_ALB_DNS
+- IAM: cloudwatch:PutMetricData
+- SSM Automation Document (`${project}-load-test`): parameters RequestsPerSecond, DurationSeconds, TargetApp, OperationMix
+- SSM Automation role: ssm.amazonaws.com, lambda:InvokeFunction
+- Output: LoadGenFunctionArn
 
 ### ChaosStack (per region)
-- FIS experiment templates: cross-region network disruption + Aurora cluster failover
-- FIS IAM role, KMS-encrypted log group (7-day retention)
-- ChaosAllowed tags on target resources
+- 2 FIS experiment templates:
+  - NetworkDisruption: aws:network:route-table-disrupt-cross-region-connectivity on subnets (ChaosAllowed=true), targets opposite region
+  - AuroraFailover: aws:rds:failover-db-cluster on clusters (ChaosAllowed=true)
+- FIS IAM role: ec2 describe/create/delete/associate/disassociate, rds:FailoverDBCluster/RebootDBInstance, tag:GetResources, logs
+- KMS-encrypted log group (`${project}-chaos-${region}`, 7-day retention)
+- experimentOptions: single-account, skip empty targets
+- Default duration: PT20M
 
 ## Deployment Order (Makefile)
 
 ```
 deploy-vpc                  (parallel: vpc-primary + vpc-secondary)
     │
-deploy-vpc-peering          (sequential: peering connection + routes)
+deploy-vpc-peering          (sequential: peering + accept + secondary routes via CLI)
     │
-deploy-database             (sequential: db-primary, then db-secondary)
+deploy-database             (sequential: db-primary, then db-secondary with separate cdk.out)
     │
 deploy-schema               (sequential: schema migration against primary writer)
     │
-deploy-aurora-app           (sequential: aurora-app-primary, then aurora-app-secondary)
+deploy-aurora-app           (sequential: aurora-app-primary, then aurora-app-secondary, separate cdk.out dirs)
+    │                       (captures: P_READ_HOST from primary ClusterEndpoint,
+    │                        S_READ_HOST from secondary ClusterReaderEndpoint,
+    │                        GLOBAL_WRITER_HOST from describe_global_clusters Endpoint)
     │
 deploy-dns                  (sequential: PHZ + latency-based + region-aligned records, no health checks)
     │
-deploy-failover-plan        (sequential: ARC Region Switch Plan, captures health check IDs)
+deploy-failover-plan        (sequential: ARC Region Switch Plan, captures PlanArn)
     │
-deploy-dns-with-hc          (sequential: re-deploy DNS with ARC health check IDs)
+deploy-dns-with-hc          (sequential: re-deploy DNS with ARC health check IDs from list-route53-health-checks)
     │
-deploy-synthetics           (sequential: synthetics-primary, then synthetics-secondary)
+deploy-synthetics           (sequential: synthetics-primary, then synthetics-secondary, separate cdk.out dirs)
     │
-deploy-monitoring           (parallel: monitoring-primary + monitoring-secondary)
+deploy-monitoring           (parallel: monitoring-primary + monitoring-secondary, separate cdk.out dirs)
+    │                       (depends on deploy-database, captures cluster IDs, secrets, keys, plan ARN)
     │
-deploy-reconciliation       (parallel: reconciliation-primary + reconciliation-secondary)
+deploy-reconciliation       (parallel: reconciliation-primary + reconciliation-secondary, separate cdk.out dirs)
+    │                       (depends on deploy-database)
     │
 deploy-loadgen              (sequential: load generation Lambda + SSM doc)
+    │                       (depends on deploy-aurora-app)
     │
-deploy-chaos                (parallel: chaos-primary + chaos-secondary)
+deploy-chaos                (parallel: chaos-primary + chaos-secondary, separate cdk.out dirs)
+                            (depends on deploy-vpc + deploy-database)
 ```
-
-Parallel deploys use separate `-o cdk.out.*` directories to avoid CDK lock conflicts.
-PID-based `wait` propagates failures. Shell variables captured via `aws cloudformation describe-stacks`.
 
 ## Cross-Stack Data Flow
 
-- VPC IDs, subnet IDs, security group IDs: CloudFormation outputs from VpcStack, passed as CDK context
-- Database endpoints: CloudFormation outputs from DatabaseStack
-- Secret ARN: CloudFormation output from DatabaseStack, passed to AuroraAppStack, SchemaStack, MonitoringStack
-- KMS key ARNs: CloudFormation outputs, passed to dependent stacks
-- Hosted zone ID: CloudFormation output from DnsStack, passed to FailoverPlanStack
-- ARC health check IDs: retrieved from ARC plan via `arc-region-switch list-route53-health-checks`, passed back to DnsStack on second deploy
-- Global cluster identifier: convention-based (`{project}-global-cluster`)
-- Regional cluster ARNs: resolved via `aws rds describe-db-clusters`
-- VPC peering connection ID: CloudFormation output from VpcPeeringStack
-- Cross-region VPC CIDR: passed as CDK context for security group rules and route tables
+- VPC IDs, subnet IDs, AZs, SG IDs: CloudFormation outputs from VpcStack, passed as CDK context via `vpc_ctx` macro
+- Database endpoints: CloudFormation outputs from DatabaseStack/DatabaseReplicaStack
+- Global writer endpoint: `aws rds describe-global-clusters` Endpoint field
+- Secret ARN: CloudFormation output from DatabaseStack
+- KMS key ARNs: CloudFormation outputs from DatabaseStack/DatabaseReplicaStack
+- Hosted zone ID: CloudFormation output from DnsStack (HostedZoneIdOutput)
+- ARC health check IDs: `aws arc-region-switch list-route53-health-checks` filtered by region
+- Plan ARN: CloudFormation output from FailoverPlanStack
+- ALB DNS/hosted zone: CloudFormation outputs from AuroraAppStack
+- Global cluster identifier: convention-based (`${project}-global-cluster`)
+- Cross-region VPC CIDR: hardcoded in VpcStack props (peerCidr)
 
 ## Database Schema
 
@@ -210,6 +232,10 @@ CREATE TABLE IF NOT EXISTS orders (
     deleted_at TIMESTAMPTZ
 );
 
+CREATE INDEX IF NOT EXISTS idx_orders_region ON orders(region);
+CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at);
+
 CREATE TABLE IF NOT EXISTS replication_tracking (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     source_region VARCHAR(20) NOT NULL,
@@ -217,35 +243,21 @@ CREATE TABLE IF NOT EXISTS replication_tracking (
     committed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     replicated_at TIMESTAMPTZ
 );
+
+CREATE INDEX IF NOT EXISTS idx_repl_tracking_source ON replication_tracking(source_region);
+CREATE INDEX IF NOT EXISTS idx_repl_tracking_committed ON replication_tracking(committed_at);
 ```
 
 ## Stored Procedures
 
 - `sp_insert_order(p_region, p_status, p_payload)` → returns UUID
 - `sp_update_order_status(p_id, p_status)` → soft update with timestamp
-- `sp_delete_order(p_id)` → soft delete
+- `sp_delete_order(p_id)` → soft delete (sets deleted_at + updated_at)
 - `sp_query_orders(p_region, p_status, p_since)` → filtered query excluding deleted
 
 ## Cleanup
 
-Standalone `cleanup.sh` script (reverse deployment order):
-1. Delete stuck stacks (ROLLBACK_COMPLETE/ROLLBACK_FAILED)
-2. Destroy chaos stacks (parallel)
-3. Destroy loadgen stack
-4. Destroy reconciliation stacks (parallel, clean up temp clusters)
-5. Destroy monitoring stacks (parallel)
-6. Destroy synthetics stacks (parallel)
-7. Destroy failover plan stack
-8. Destroy DNS stack
-9. Destroy Aurora app stacks (parallel)
-10. Destroy schema stack
-11. Destroy database secondary (leave global cluster before deletion)
-12. Destroy database primary + global cluster
-13. Destroy VPC peering stack
-14. Destroy VPC stacks (parallel)
-15. Destroy bootstrap stack
-16. Clean orphaned S3 buckets
-17. Remove local cdk.out directories
+Standalone `cleanup.sh` script (reverse deployment order).
 
 ## Project Structure
 
@@ -258,46 +270,53 @@ aurora/
 │   ├── design.md
 │   └── tasks.md
 ├── bin/
-│   └── app.ts                    # CDK app entry point, cdk-nag opt-in
+│   └── app.ts                    # CDK app entry point, cdk-nag opt-in, stack wiring by -c stack=
 ├── lib/
-│   ├── imports.ts                # VPC/SG import helpers
+│   ├── imports.ts                # VPC/SG import helpers (importVpc, importSg, VpcImportProps)
 │   ├── bootstrap-stack.ts        # CodeBuild project + local CMK + build trigger
-│   ├── vpc-stack.ts              # VPC per region (isolated subnets, 7 endpoints)
-│   ├── vpc-peering-stack.ts      # Cross-region VPC peering + routes
-│   ├── database-stack.ts         # Aurora Global DB primary cluster
+│   ├── vpc-stack.ts              # VPC per region (isolated subnets, 8 endpoints, 5 SGs)
+│   ├── vpc-peering-stack.ts      # Cross-region VPC peering connection
+│   ├── database-stack.ts         # Aurora Global DB primary cluster + secret replication
 │   ├── database-replica-stack.ts # Aurora Global DB secondary cluster
 │   ├── schema-stack.ts           # Schema migration custom resource
-│   ├── aurora-app-stack.ts       # Aurora app: ALB + Lambda
+│   ├── aurora-app-stack.ts       # Aurora app: ALB + Lambda (read/write split)
 │   ├── dns-stack.ts              # PHZ + latency-based + region-aligned DNS records
 │   ├── failover-plan-stack.ts    # ARC Region Switch Plan (activeActive)
-│   ├── synthetics-stack.ts       # CloudWatch Synthetics canaries (3 per region)
-│   ├── monitoring-stack.ts       # Alarms + dashboard + RPO monitor
+│   ├── synthetics-stack.ts       # CloudWatch Synthetics canaries (6 per region)
+│   ├── monitoring-stack.ts       # 7 alarms + dashboard + RPO monitor + DNS status
 │   ├── reconciliation-stack.ts   # Post-failover snapshot/restore/reconcile SSM docs
 │   ├── loadgen-stack.ts          # Load generation Lambda + SSM doc
 │   └── chaos-stack.ts            # FIS experiment templates
 ├── lambda/
-│   ├── build-trigger/index.py    # CodeBuild start + poll for completion
-│   ├── schema-migration/index.py # Database schema + stored procedures
-│   ├── aurora-app/index.py       # Aurora CRUD handler (ALB target)
-│   ├── rpo-monitor/index.py      # RPO: cross-region row comparison + heartbeat + engine version
+│   ├── build-trigger/index.py    # CodeBuild start (on_event) + poll (is_complete)
+│   ├── schema-migration/
+│   │   ├── index.py              # Database schema + stored procedures (on_event)
+│   │   └── requirements.txt      # psycopg2-binary==2.9.10
+│   ├── aurora-app/
+│   │   ├── index.py              # Aurora CRUD handler (ALB target, read/write split)
+│   │   └── requirements.txt      # psycopg2-binary==2.9.10
+│   ├── rpo-monitor/
+│   │   ├── index.py              # RPO: cross-region row comparison + heartbeat + engine version + writer active
+│   │   └── requirements.txt      # psycopg2-binary==2.9.10
+│   ├── dns-status/index.py       # DNS status: ARC health check → RegionDNSActive metric
 │   ├── reconciliation/index.py   # Post-failover: compare rows, missing txn report
 │   └── loadgen/index.py          # Load generation: sustained CRUD traffic via ALB
 ├── test/
-│   ├── bootstrap.test.ts
-│   ├── vpc.test.ts
-│   ├── database.test.ts
-│   ├── database-replica.test.ts
-│   ├── schema.test.ts
-│   ├── aurora-app.test.ts
-│   ├── dns.test.ts
-│   ├── failover-plan.test.ts
-│   ├── synthetics.test.ts
-│   ├── monitoring.test.ts
-│   ├── chaos.test.ts
-│   ├── reconciliation.test.ts
-│   └── loadgen.test.ts
-├── Makefile                      # Parallel deploys, variable capture
-├── buildspec.yml                 # CodeBuild: npm ci, ts-node, make deploy
+│   ├── bootstrap.test.ts         # 7 tests
+│   ├── vpc.test.ts               # 8 tests
+│   ├── database.test.ts          # 7 tests
+│   ├── database-replica.test.ts  # 5 tests
+│   ├── schema.test.ts            # 4 tests
+│   ├── aurora-app.test.ts        # 7 tests
+│   ├── dns.test.ts               # 7 tests
+│   ├── failover-plan.test.ts     # 7 tests
+│   ├── synthetics.test.ts        # 5 tests
+│   ├── monitoring.test.ts        # 7 tests
+│   ├── chaos.test.ts             # 6 tests
+│   ├── reconciliation.test.ts    # 4 tests
+│   └── loadgen.test.ts           # 5 tests
+├── Makefile                      # Parallel deploys, variable capture, vpc_ctx macro
+├── buildspec.yml                 # CodeBuild: npm ci, ts-node, pip install, make deploy
 ├── cleanup.sh                    # Reliable teardown (reverse order)
 ├── .checkov.yaml                 # Checkov skip rules with justifications
 ├── cdk.json
