@@ -35,7 +35,7 @@ const globalSuppressions = [
 function c(key: string, fallback = 'PLACEHOLDER') { return app.node.tryGetContext(key) || fallback; }
 function suppress(s: cdk.Stack) { NagSuppressions.addStackSuppressions(s, globalSuppressions, true); }
 
-const project = c('project', 'aurora-dsql');
+const project = c('project', 'aurora');
 const primaryRegion = c('primaryRegion', 'us-east-1');
 const secondaryRegion = c('secondaryRegion', 'us-west-2');
 const accountId = c('accountId', process.env.CDK_DEFAULT_ACCOUNT || '000000000000');
