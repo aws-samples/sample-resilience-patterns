@@ -22,6 +22,11 @@ export class FailoverPlanStack extends cdk.Stack {
     });
 
     executionRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['iam:SimulatePrincipalPolicy'],
+      resources: [executionRole.roleArn],
+    }));
+
+    executionRole.addToPolicy(new iam.PolicyStatement({
       actions: ['arc-region-switch:GetPlan', 'arc-region-switch:GetPlanExecution', 'arc-region-switch:ListPlanExecutions'],
       resources: ['*'],
     }));
