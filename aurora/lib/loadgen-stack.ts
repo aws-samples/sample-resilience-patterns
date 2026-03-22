@@ -69,6 +69,7 @@ export class LoadGenStack extends cdk.Stack {
           {
             name: 'RunLoadTest',
             action: 'aws:invokeLambdaFunction',
+            timeoutSeconds: 900,
             inputs: {
               FunctionName: loadGenFn.functionName,
               InputPayload: {

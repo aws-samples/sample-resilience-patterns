@@ -51,7 +51,8 @@ export class VpcStack extends cdk.Stack {
 
     // ALB SG: inbound 80 from local Synthetics + cross-region CIDR
     this.albSg.addIngressRule(this.syntheticsSg, ec2.Port.tcp(80), 'Synthetics local');
-    this.albSg.addIngressRule(ec2.Peer.ipv4(props.peerCidr), ec2.Port.tcp(80), 'Synthetics cross-region');
+    this.albSg.addIngressRule(this.lambdaSg, ec2.Port.tcp(80), 'Lambda to ALB (loadgen)');
+    this.albSg.addIngressRule(ec2.Peer.ipv4(props.peerCidr), ec2.Port.tcp(80), 'Cross-region');
 
     // Database SG: inbound 5432 from Lambda
     this.databaseSg.addIngressRule(this.lambdaSg, ec2.Port.tcp(5432), 'Lambda to PostgreSQL');
@@ -63,6 +64,7 @@ export class VpcStack extends cdk.Stack {
     this.lambdaSg.addEgressRule(this.databaseSg, ec2.Port.tcp(5432), 'Lambda to DB');
     this.lambdaSg.addEgressRule(ec2.Peer.ipv4(props.peerCidr), ec2.Port.tcp(5432), 'Lambda to cross-region DB');
     this.lambdaSg.addEgressRule(this.vpcEndpointSg, ec2.Port.tcp(443), 'Lambda to VPC endpoints');
+    this.lambdaSg.addEgressRule(this.albSg, ec2.Port.tcp(80), 'Lambda to ALB (loadgen)');
 
     // VPC Endpoint SG: inbound 443 from Lambda and Synthetics
     this.vpcEndpointSg.addIngressRule(this.lambdaSg, ec2.Port.tcp(443), 'Lambda to endpoints');
