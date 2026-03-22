@@ -93,19 +93,19 @@ export class SyntheticsStack extends cdk.Stack {
     });
 
     const runtime = new synthetics.Runtime('syn-python-selenium-10.0', synthetics.RuntimeFamily.PYTHON);
-    const regionSuffix = this.region.replace(/-/g, '').slice(-4);
 
+    const regionCode = this.region === 'us-east-1' ? 'e1' : 'w2';
     const canaries: { suffix: string; code: string }[] = [
-      { suffix: 'al', code: readOnlyCode(props.localRecordName) },
-      { suffix: 'ar', code: readOnlyCode(props.remoteRecordName) },
-      { suffix: 'ad', code: readOnlyCode(props.dnsRecordName) },
-      { suffix: 'wl', code: writeCode(props.localRecordName) },
-      { suffix: 'wr', code: writeCode(props.remoteRecordName) },
-      { suffix: 'wd', code: writeCode(props.dnsRecordName) },
+      { suffix: `rd-local-${regionCode}`, code: readOnlyCode(props.localRecordName) },
+      { suffix: `rd-remote-${regionCode}`, code: readOnlyCode(props.remoteRecordName) },
+      { suffix: `rd-global-${regionCode}`, code: readOnlyCode(props.dnsRecordName) },
+      { suffix: `wr-local-${regionCode}`, code: writeCode(props.localRecordName) },
+      { suffix: `wr-remote-${regionCode}`, code: writeCode(props.remoteRecordName) },
+      { suffix: `wr-global-${regionCode}`, code: writeCode(props.dnsRecordName) },
     ];
 
     for (const { suffix, code } of canaries) {
-      const canaryName = `${props.project}-${suffix}-${regionSuffix}`.slice(0, 21);
+      const canaryName = `${props.project}-${suffix}`.slice(0, 21);
       const canary = new synthetics.Canary(this, canaryName, {
         canaryName,
         runtime,
