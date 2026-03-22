@@ -45,6 +45,10 @@ deploy-vpc-peering: deploy-vpc
 	SEC_RT_IDS=$$(aws ec2 describe-route-tables --filters Name=vpc-id,Values=$$SECONDARY_VPC_ID --region $(SECONDARY_REGION) --query "RouteTables[].RouteTableId" --output text) && \
 	for rt in $$SEC_RT_IDS; do \
 		aws ec2 create-route --route-table-id $$rt --destination-cidr-block 10.0.0.0/23 --vpc-peering-connection-id $$PEERING_ID --region $(SECONDARY_REGION) 2>/dev/null || true; \
+	done && \
+	PRI_RT_IDS=$$(aws ec2 describe-route-tables --filters Name=vpc-id,Values=$$PRIMARY_VPC_ID --region $(PRIMARY_REGION) --query "RouteTables[].RouteTableId" --output text) && \
+	for rt in $$PRI_RT_IDS; do \
+		aws ec2 create-route --route-table-id $$rt --destination-cidr-block 10.0.2.0/23 --vpc-peering-connection-id $$PEERING_ID --region $(PRIMARY_REGION) 2>/dev/null || true; \
 	done
 
 deploy-database: deploy-vpc
