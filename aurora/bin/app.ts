@@ -142,7 +142,7 @@ if (target === 'monitoring-primary' || target === 'monitoring-secondary') {
     secretArn: c('secretArn'), encryptionKeyArn: c('encryptionKeyArn'),
     remoteSecretArn: c('remoteSecretArn'), remoteEncryptionKeyArn: c('remoteEncryptionKeyArn'), remoteDbHost: c('remoteDbHost'),
     globalClusterIdentifier: globalClusterId,
-    planArn: c('planArn'), recordName: 'aurora-app.demo.internal',
+    primaryAlbDns: c('primaryAlbDns'), secondaryAlbDns: c('secondaryAlbDns'), recordName: 'aurora-app.demo.internal',
     env: env(region),
   }));
 }

@@ -113,7 +113,8 @@ deploy-failover-plan: deploy-dns
 
 deploy-dns-with-hc: deploy-failover-plan
 	@echo "═══ Re-deploying DNS with ARC health check IDs ═══"
-	@PLAN_ARN=$(call so,$(PROJECT)-failover-plan,$(PRIMARY_REGION),PlanArn) && \
+	@P_ALB_DNS=$(call so,$(PROJECT)-aurora-app-primary,$(PRIMARY_REGION),AlbDnsName) && \
+	S_ALB_DNS=$(call so,$(PROJECT)-aurora-app-secondary,$(SECONDARY_REGION),AlbDnsName) && \
 	P_HC_ID=$$(aws arc-region-switch list-route53-health-checks --arn $$PLAN_ARN --region $(PRIMARY_REGION) --output json 2>/dev/null | jq -r '.healthChecks[] | select(.region == "$(PRIMARY_REGION)") | .healthCheckId' 2>/dev/null || echo "") && \
 	S_HC_ID=$$(aws arc-region-switch list-route53-health-checks --arn $$PLAN_ARN --region $(PRIMARY_REGION) --output json 2>/dev/null | jq -r '.healthChecks[] | select(.region == "$(SECONDARY_REGION)") | .healthCheckId' 2>/dev/null || echo "") && \
 	if [ -n "$$P_HC_ID" ] && [ -n "$$S_HC_ID" ]; then \
@@ -159,18 +160,19 @@ deploy-monitoring: deploy-database
 	S_CLUSTER_ID=$(call so,$(PROJECT)-db-secondary,$(SECONDARY_REGION),ClusterIdentifier) && \
 	S_READER=$(call so,$(PROJECT)-db-secondary,$(SECONDARY_REGION),ClusterReaderEndpoint) && \
 	P_WRITER=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),ClusterEndpoint) && \
-	PLAN_ARN=$(call so,$(PROJECT)-failover-plan,$(PRIMARY_REGION),PlanArn) && \
+	P_ALB_DNS=$(call so,$(PROJECT)-aurora-app-primary,$(PRIMARY_REGION),AlbDnsName) && \
+	S_ALB_DNS=$(call so,$(PROJECT)-aurora-app-secondary,$(SECONDARY_REGION),AlbDnsName) && \
 	$(CDK) deploy $(PROJECT)-monitoring-primary $(CDK_COMMON) -c stack=monitoring-primary \
 		$(call vpc_ctx,$(PROJECT)-vpc-primary,$(PRIMARY_REGION)) \
 		-c dbClusterIdentifier=$$P_CLUSTER_ID -c remoteDbClusterIdentifier=$$S_CLUSTER_ID -c globalClusterIdentifier=$(GLOBAL_CLUSTER_ID) -c secretArn=$$P_SECRET -c encryptionKeyArn=$$P_KEY \
 		-c remoteSecretArn=$$P_SECRET -c remoteEncryptionKeyArn=$$S_KEY -c remoteDbHost=$$S_READER \
-		-c planArn=$$PLAN_ARN -c recordName=aurora-app.demo.internal \
+		-c primaryAlbDns=$$P_ALB_DNS -c secondaryAlbDns=$$S_ALB_DNS -c recordName=aurora-app.demo.internal \
 		--require-approval never -o cdk.out.mon-p && \
 	$(CDK) deploy $(PROJECT)-monitoring-secondary $(CDK_COMMON) -c stack=monitoring-secondary \
 		$(call vpc_ctx,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION)) \
 		-c dbClusterIdentifier=$$S_CLUSTER_ID -c remoteDbClusterIdentifier=$$P_CLUSTER_ID -c globalClusterIdentifier=$(GLOBAL_CLUSTER_ID) -c secretArn=$$P_SECRET -c encryptionKeyArn=$$S_KEY \
 		-c remoteSecretArn=$$P_SECRET -c remoteEncryptionKeyArn=$$P_KEY -c remoteDbHost=$$P_WRITER \
-		-c planArn=$$PLAN_ARN -c recordName=aurora-app.demo.internal \
+		-c primaryAlbDns=$$P_ALB_DNS -c secondaryAlbDns=$$S_ALB_DNS -c recordName=aurora-app.demo.internal \
 		--require-approval never -o cdk.out.mon-s
 
 deploy-reconciliation: deploy-database
