@@ -1,4 +1,7 @@
-import boto3, os, socket
+import boto3, os, socket, logging
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 def handler(event, context):
     cw = boto3.client('cloudwatch')
@@ -7,27 +10,30 @@ def handler(event, context):
     primary_alb = os.environ.get('PRIMARY_ALB_DNS', '')
     secondary_alb = os.environ.get('SECONDARY_ALB_DNS', '')
 
-    # Resolve the ARC-managed DNS record to see which ALB it points to
-    # Then resolve each ALB to compare IPs
-    try:
-        dns_ips = set(socket.getaddrinfo(record_name, 80, socket.AF_INET))
-        dns_ips = {addr[4][0] for addr in dns_ips}
-    except Exception:
-        dns_ips = set()
-
-    metrics = []
-    for region, alb_dns in [('us-east-1', primary_alb), ('us-west-2', secondary_alb)]:
+    def resolve(hostname):
         try:
-            alb_ips = {addr[4][0] for addr in socket.getaddrinfo(alb_dns, 80, socket.AF_INET)}
-            active = 1.0 if alb_ips & dns_ips else 0.0
-        except Exception:
-            active = 0.0
-        metrics.append({
-            'MetricName': 'RegionDNSActive',
-            'Dimensions': [{'Name': 'Region', 'Value': region}],
-            'Value': active,
-            'Unit': 'None',
-        })
+            results = socket.getaddrinfo(hostname, 80, socket.AF_INET, socket.SOCK_STREAM)
+            ips = {r[4][0] for r in results}
+            return ips
+        except Exception as e:
+            logger.error(f'Failed to resolve {hostname}: {e}')
+            return set()
 
-    if metrics:
-        cw.put_metric_data(Namespace=namespace, MetricData=metrics)
+    dns_ips = resolve(record_name)
+    primary_ips = resolve(primary_alb)
+    secondary_ips = resolve(secondary_alb)
+
+    primary_active = 1.0 if primary_ips and (primary_ips & dns_ips) else 0.0
+    secondary_active = 1.0 if secondary_ips and (secondary_ips & dns_ips) else 0.0
+
+    logger.info(f'DNS={record_name} -> {dns_ips}')
+    logger.info(f'Primary ALB={primary_alb} -> {primary_ips}, active={primary_active}')
+    logger.info(f'Secondary ALB={secondary_alb} -> {secondary_ips}, active={secondary_active}')
+
+    cw.put_metric_data(
+        Namespace=namespace,
+        MetricData=[
+            {'MetricName': 'RegionDNSActive', 'Dimensions': [{'Name': 'Region', 'Value': 'us-east-1'}], 'Value': primary_active, 'Unit': 'None'},
+            {'MetricName': 'RegionDNSActive', 'Dimensions': [{'Name': 'Region', 'Value': 'us-west-2'}], 'Value': secondary_active, 'Unit': 'None'},
+        ],
+    )
