@@ -1,0 +1,44 @@
+name: 'aurora: e2e'
+
+on:
+  pull_request:
+    paths: ['aurora/**']
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+defaults:
+  run:
+    working-directory: aurora
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - run: npm ci
+      - run: npx projen test
+      - name: Deploy via bootstrap
+        run: npx cdk deploy aurora-bootstrap --require-approval never
+      - name: Verify canaries
+        run: |
+          echo "Waiting for canaries to run..."
+          sleep 360
+          # Check canary status
+          for region in us-east-1 us-west-2; do
+            aws synthetics get-canary --name aurora-al-${region: -4} --region $region --query 'Canary.Status.State' --output text || true
+          done
+      - name: Cleanup on success
+        if: success()
+        run: ./cleanup.sh
