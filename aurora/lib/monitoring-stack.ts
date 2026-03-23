@@ -26,8 +26,8 @@ export interface MonitoringStackProps extends cdk.StackProps {
   readonly remoteEncryptionKeyArn: string;
   readonly remoteDbHost: string;
   readonly globalClusterIdentifier: string;
-  readonly primaryAlbDns: string;
-  readonly secondaryAlbDns: string;
+  readonly hostedZoneId: string;
+  readonly planArn: string;
   readonly recordName: string;
 }
 
@@ -160,27 +160,24 @@ export class MonitoringStack extends cdk.Stack {
     // Combined Dashboard (primary region only)
     if (this.region === props.primaryRegion) {
 
-    // DNS Status Lambda (VPC-deployed — resolves private hosted zone DNS)
+    // DNS Status Lambda (NOT VPC-deployed — calls ARC API which has no VPC endpoint)
     const dnsStatusFn = new lambda.Function(this, 'DnsStatusFunction', {
       functionName: `${props.project}-dns-status-${this.region}`,
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'dns-status')),
       timeout: cdk.Duration.seconds(30),
-      vpc,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
-      securityGroups: [lambdaSg],
       reservedConcurrentExecutions: 1,
       environment: {
+        PLAN_ARN: props.planArn,
+        HOSTED_ZONE_ID: props.hostedZoneId,
         RECORD_NAME: props.recordName,
-        PRIMARY_ALB_DNS: props.primaryAlbDns,
-        SECONDARY_ALB_DNS: props.secondaryAlbDns,
         METRIC_NAMESPACE: rpoNamespace,
       },
     });
 
     dnsStatusFn.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['cloudwatch:PutMetricData'],
+      actions: ['arc-region-switch:ListRoute53HealthChecks', 'cloudwatch:PutMetricData'],
       resources: ['*'],
     }));
 
