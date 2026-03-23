@@ -86,14 +86,32 @@ wait
 echo "Detaching secondary from global cluster..."
 GLOBAL_CLUSTER_ID="${PROJECT}-global-cluster"
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-aws rds remove-from-global-cluster \
-  --global-cluster-identifier "${GLOBAL_CLUSTER_ID}" \
-  --db-cluster-identifier "arn:aws:rds:${SECONDARY_REGION}:${ACCOUNT_ID}:cluster:$(aws cloudformation describe-stack-resources --stack-name ${PROJECT}-db-secondary --region ${SECONDARY_REGION} --query "StackResources[?ResourceType=='AWS::RDS::DBCluster'].PhysicalResourceId" --output text 2>/dev/null)" \
-  --region "${PRIMARY_REGION}" 2>/dev/null || true
-sleep 30
+SEC_CLUSTER_ID=$(aws cloudformation describe-stack-resources --stack-name ${PROJECT}-db-secondary --region ${SECONDARY_REGION} --query "StackResources[?ResourceType=='AWS::RDS::DBCluster'].PhysicalResourceId" --output text 2>/dev/null)
+if [ -n "${SEC_CLUSTER_ID}" ]; then
+  aws rds remove-from-global-cluster \
+    --global-cluster-identifier "${GLOBAL_CLUSTER_ID}" \
+    --db-cluster-identifier "arn:aws:rds:${SECONDARY_REGION}:${ACCOUNT_ID}:cluster:${SEC_CLUSTER_ID}" \
+    --region "${PRIMARY_REGION}" 2>/dev/null || true
+  echo "Waiting for detach to complete..."
+  sleep 60
+fi
 
 echo "Destroying database secondary..."
-delete_stack "${PROJECT}-db-secondary" "${SECONDARY_REGION}"
+aws cloudformation delete-stack --stack-name "${PROJECT}-db-secondary" --region "${SECONDARY_REGION}" 2>/dev/null || true
+aws cloudformation wait stack-delete-complete --stack-name "${PROJECT}-db-secondary" --region "${SECONDARY_REGION}" 2>/dev/null || {
+  echo "Stack delete failed, retrying with retain..."
+  aws cloudformation delete-stack --stack-name "${PROJECT}-db-secondary" --region "${SECONDARY_REGION}" \
+    --retain-resources SecondaryClusterAF0232D7 2>/dev/null || true
+  aws cloudformation wait stack-delete-complete --stack-name "${PROJECT}-db-secondary" --region "${SECONDARY_REGION}" 2>/dev/null || true
+  # Clean up retained cluster
+  if [ -n "${SEC_CLUSTER_ID}" ]; then
+    for inst in $(aws rds describe-db-instances --region ${SECONDARY_REGION} --query "DBInstances[?DBClusterIdentifier=='${SEC_CLUSTER_ID}'].DBInstanceIdentifier" --output text 2>/dev/null); do
+      aws rds delete-db-instance --db-instance-identifier "$inst" --skip-final-snapshot --region "${SECONDARY_REGION}" 2>/dev/null || true
+    done
+    sleep 60
+    aws rds delete-db-cluster --db-cluster-identifier "${SEC_CLUSTER_ID}" --skip-final-snapshot --region "${SECONDARY_REGION}" 2>/dev/null || true
+  fi
+}
 
 # 13. Database primary + global cluster
 echo "Detaching primary from global cluster..."
