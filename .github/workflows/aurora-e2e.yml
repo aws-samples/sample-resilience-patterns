@@ -24,7 +24,7 @@ jobs:
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::190334034435:role/github-actions-aws-samples_sample-resilience-patterns
+          role-to-assume: arn:aws:iam::563688183446:role/github-actions-aws-samples_sample-resilience-patterns
           aws-region: us-east-1
 
       - run: npm ci
