@@ -49,6 +49,54 @@ jobs:
           for canary in aurora-rd-local-e1 aurora-wr-local-e1; do
             aws synthetics get-canary-runs --name $canary --region us-east-1 --query 'CanaryRuns[0].Status.State' --output text || true
           done
+
+      - name: Load test + failover exercise
+        run: |
+          ACCOUNT_ID=${{ steps.account.outputs.id }}
+          PLAN_ARN=$(aws cloudformation describe-stacks --stack-name aurora-failover-plan --region us-east-1 \
+            --query "Stacks[0].Outputs[?OutputKey=='PlanArn'].OutputValue" --output text)
+
+          # Find the SSM doc name (auto-generated)
+          SSM_DOC=$(aws cloudformation describe-stack-resources --stack-name aurora-loadgen --region us-east-1 \
+            --query "StackResources[?ResourceType=='AWS::SSM::Document'].PhysicalResourceId" --output text)
+
+          echo "Starting 1-min load test via SSM: $SSM_DOC"
+          aws ssm start-automation-execution \
+            --document-name "$SSM_DOC" \
+            --parameters '{"RequestsPerSecond":["10"],"DurationSeconds":["60"],"TargetApp":["aurora"],"OperationMix":["50,20,10,20"]}' \
+            --region us-east-1 || true
+
+          echo "Running ARC failover exercise concurrently..."
+
+          echo "1/4: Deactivate us-east-1"
+          EXEC1=$(aws arc-region-switch start-plan-execution \
+            --plan-arn "$PLAN_ARN" --target-region us-east-1 --target-action deactivate \
+            --region us-east-1 --query 'executionArn' --output text)
+          echo "  Execution: $EXEC1"
+          aws arc-region-switch wait plan-execution-complete --plan-execution-arn "$EXEC1" --region us-east-1 2>/dev/null || sleep 120
+
+          echo "2/4: Activate us-east-1"
+          EXEC2=$(aws arc-region-switch start-plan-execution \
+            --plan-arn "$PLAN_ARN" --target-region us-east-1 --target-action activate \
+            --region us-east-1 --query 'executionArn' --output text)
+          echo "  Execution: $EXEC2"
+          aws arc-region-switch wait plan-execution-complete --plan-execution-arn "$EXEC2" --region us-east-1 2>/dev/null || sleep 120
+
+          echo "3/4: Deactivate us-west-2"
+          EXEC3=$(aws arc-region-switch start-plan-execution \
+            --plan-arn "$PLAN_ARN" --target-region us-west-2 --target-action deactivate \
+            --region us-east-1 --query 'executionArn' --output text)
+          echo "  Execution: $EXEC3"
+          aws arc-region-switch wait plan-execution-complete --plan-execution-arn "$EXEC3" --region us-east-1 2>/dev/null || sleep 120
+
+          echo "4/4: Activate us-west-2"
+          EXEC4=$(aws arc-region-switch start-plan-execution \
+            --plan-arn "$PLAN_ARN" --target-region us-west-2 --target-action activate \
+            --region us-east-1 --query 'executionArn' --output text)
+          echo "  Execution: $EXEC4"
+          aws arc-region-switch wait plan-execution-complete --plan-execution-arn "$EXEC4" --region us-east-1 2>/dev/null || sleep 120
+
+          echo "Failover exercise complete"
       - name: Cleanup on success
         if: success()
         run: ./cleanup.sh
