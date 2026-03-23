@@ -54,14 +54,13 @@ export class LoadGenStack extends cdk.Stack {
 
     new ssm.CfnDocument(this, 'LoadGenDoc', {
       documentType: 'Automation',
-      name: `${props.project}-load-test`,
       content: {
         schemaVersion: '0.3',
         description: 'Generate sustained CRUD load against Aurora app',
         assumeRole: automationRole.roleArn,
         parameters: {
           RequestsPerSecond: { type: 'String', default: '10', description: 'Target RPS' },
-          DurationSeconds: { type: 'String', default: '300', description: 'Test duration in seconds' },
+          DurationSeconds: { type: 'String', default: '240', description: 'Test duration in seconds (max 240 for SSM invocation)' },
           TargetApp: { type: 'String', default: 'aurora', description: 'Target application' },
           OperationMix: { type: 'String', default: '50,20,10,20', description: 'insert,update,delete,query percentages' },
         },
