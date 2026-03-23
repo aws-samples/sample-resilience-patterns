@@ -42,7 +42,6 @@ export class LoadGenStack extends cdk.Stack {
       resources: ['*'],
     }));
 
-    // SSM Automation Document
     const automationRole = new iam.Role(this, 'AutomationRole', {
       assumedBy: new iam.ServicePrincipal('ssm.amazonaws.com'),
     });
@@ -52,17 +51,20 @@ export class LoadGenStack extends cdk.Stack {
       resources: [loadGenFn.functionArn],
     }));
 
-    // SSM also needs Lambda invoke permission for async invocation via executeAwsApi
-    automationRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['lambda:GetFunction'],
-      resources: [loadGenFn.functionArn],
-    }));
+    const scriptCode = [
+      'def handler(event, context):',
+      '  import boto3, json',
+      '  client = boto3.client("lambda")',
+      '  payload = json.dumps({k: event[k] for k in ["rps","duration","target","mix"]})',
+      '  resp = client.invoke(FunctionName=event["FunctionName"], InvocationType="Event", Payload=payload)',
+      '  return {"StatusCode": resp["StatusCode"]}',
+    ].join('\n');
 
     new ssm.CfnDocument(this, 'LoadGenDoc', {
       documentType: 'Automation',
       content: {
         schemaVersion: '0.3',
-        description: 'Generate sustained CRUD load against Aurora app (async — supports long-running tests)',
+        description: 'Generate sustained CRUD load against Aurora app',
         assumeRole: automationRole.roleArn,
         parameters: {
           RequestsPerSecond: { type: 'String', default: '10', description: 'Target RPS' },
@@ -73,36 +75,20 @@ export class LoadGenStack extends cdk.Stack {
         mainSteps: [
           {
             name: 'InvokeLambdaAsync',
-            action: 'aws:executeAwsApi',
+            action: 'aws:executeScript',
+            timeoutSeconds: 30,
             inputs: {
-              Service: 'lambda',
-              Api: 'Invoke',
-              FunctionName: loadGenFn.functionName,
-              InvocationType: 'Event',
-              Payload: '{"rps":"{{RequestsPerSecond}}","duration":"{{DurationSeconds}}","target":"{{TargetApp}}","mix":"{{OperationMix}}"}',
+              Runtime: 'python3.11',
+              Handler: 'handler',
+              InputPayload: {
+                FunctionName: loadGenFn.functionName,
+                rps: '{{RequestsPerSecond}}',
+                duration: '{{DurationSeconds}}',
+                target: '{{TargetApp}}',
+                mix: '{{OperationMix}}',
+              },
+              Script: scriptCode,
             },
-            outputs: [
-              { Name: 'StatusCode', Selector: '$.StatusCode', Type: 'Integer' },
-            ],
-          },
-          {
-            name: 'WaitForCompletion',
-            action: 'aws:sleep',
-            inputs: {
-              Duration: 'PT{{DurationSeconds}}S',
-            },
-          },
-          {
-            name: 'VerifyCompletion',
-            action: 'aws:executeAwsApi',
-            inputs: {
-              Service: 'lambda',
-              Api: 'GetFunction',
-              FunctionName: loadGenFn.functionName,
-            },
-            outputs: [
-              { Name: 'State', Selector: '$.Configuration.State', Type: 'String' },
-            ],
           },
         ],
       },
