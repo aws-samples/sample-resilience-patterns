@@ -104,7 +104,6 @@ deploy-dns: deploy-aurora-app
 deploy-failover-plan: deploy-dns
 	@echo "═══ Deploying ARC Region Switch Plan ═══"
 	@HZ_ID=$(call so,$(PROJECT)-dns,$(PRIMARY_REGION),HostedZoneIdOutput) && \
-	PLAN_ARN=$(call so,$(PROJECT)-failover-plan,$(PRIMARY_REGION),PlanArn) && \
 	P_CLUSTER_ARN=$$(aws rds describe-db-clusters --region $(PRIMARY_REGION) --query "DBClusters[?GlobalClusterIdentifier=='$(GLOBAL_CLUSTER_ID)'].DBClusterArn" --output text) && \
 	S_CLUSTER_ARN=$$(aws rds describe-db-clusters --region $(SECONDARY_REGION) --query "DBClusters[?GlobalClusterIdentifier=='$(GLOBAL_CLUSTER_ID)'].DBClusterArn" --output text) && \
 	$(CDK) deploy $(PROJECT)-failover-plan $(CDK_COMMON) -c stack=failover-plan \
@@ -151,9 +150,11 @@ deploy-synthetics: deploy-dns-with-hc
 		-c dnsRecordName=aurora-app.demo.internal \
 		--require-approval never -o cdk.out.synth-s
 
-deploy-monitoring: deploy-database
+deploy-monitoring: deploy-database deploy-failover-plan
 	@echo "═══ Deploying monitoring stacks ═══"
-	@P_SECRET=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),SecretArn) && \
+	@PLAN_ARN=$(call so,$(PROJECT)-failover-plan,$(PRIMARY_REGION),PlanArn) && \
+	HZ_ID=$(call so,$(PROJECT)-dns,$(PRIMARY_REGION),HostedZoneIdOutput) && \
+	P_SECRET=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),SecretArn) && \
 	P_KEY=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),EncryptionKeyArn) && \
 	S_KEY=$(call so,$(PROJECT)-db-secondary,$(SECONDARY_REGION),EncryptionKeyArn) && \
 	P_CLUSTER_ID=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),ClusterIdentifier) && \
@@ -161,7 +162,6 @@ deploy-monitoring: deploy-database
 	S_READER=$(call so,$(PROJECT)-db-secondary,$(SECONDARY_REGION),ClusterReaderEndpoint) && \
 	P_WRITER=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),ClusterEndpoint) && \
 	HZ_ID=$(call so,$(PROJECT)-dns,$(PRIMARY_REGION),HostedZoneIdOutput) && \
-	PLAN_ARN=$(call so,$(PROJECT)-failover-plan,$(PRIMARY_REGION),PlanArn) && \
 	$(CDK) deploy $(PROJECT)-monitoring-primary $(CDK_COMMON) -c stack=monitoring-primary \
 		$(call vpc_ctx,$(PROJECT)-vpc-primary,$(PRIMARY_REGION)) \
 		-c dbClusterIdentifier=$$P_CLUSTER_ID -c remoteDbClusterIdentifier=$$S_CLUSTER_ID -c globalClusterIdentifier=$(GLOBAL_CLUSTER_ID) -c secretArn=$$P_SECRET -c encryptionKeyArn=$$P_KEY \
