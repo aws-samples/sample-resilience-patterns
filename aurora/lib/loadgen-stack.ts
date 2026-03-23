@@ -52,32 +52,57 @@ export class LoadGenStack extends cdk.Stack {
       resources: [loadGenFn.functionArn],
     }));
 
+    // SSM also needs Lambda invoke permission for async invocation via executeAwsApi
+    automationRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['lambda:GetFunction'],
+      resources: [loadGenFn.functionArn],
+    }));
+
     new ssm.CfnDocument(this, 'LoadGenDoc', {
       documentType: 'Automation',
       content: {
         schemaVersion: '0.3',
-        description: 'Generate sustained CRUD load against Aurora app',
+        description: 'Generate sustained CRUD load against Aurora app (async — supports long-running tests)',
         assumeRole: automationRole.roleArn,
         parameters: {
           RequestsPerSecond: { type: 'String', default: '10', description: 'Target RPS' },
-          DurationSeconds: { type: 'String', default: '240', description: 'Test duration in seconds (max 240 for SSM invocation)' },
+          DurationSeconds: { type: 'String', default: '300', description: 'Test duration in seconds' },
           TargetApp: { type: 'String', default: 'aurora', description: 'Target application' },
           OperationMix: { type: 'String', default: '50,20,10,20', description: 'insert,update,delete,query percentages' },
         },
         mainSteps: [
           {
-            name: 'RunLoadTest',
-            action: 'aws:invokeLambdaFunction',
-            timeoutSeconds: 900,
+            name: 'InvokeLambdaAsync',
+            action: 'aws:executeAwsApi',
             inputs: {
+              Service: 'lambda',
+              Api: 'Invoke',
               FunctionName: loadGenFn.functionName,
-              InputPayload: {
-                rps: '{{RequestsPerSecond}}',
-                duration: '{{DurationSeconds}}',
-                target: '{{TargetApp}}',
-                mix: '{{OperationMix}}',
-              },
+              InvocationType: 'Event',
+              Payload: '{"rps":"{{RequestsPerSecond}}","duration":"{{DurationSeconds}}","target":"{{TargetApp}}","mix":"{{OperationMix}}"}',
             },
+            outputs: [
+              { Name: 'StatusCode', Selector: '$.StatusCode', Type: 'Integer' },
+            ],
+          },
+          {
+            name: 'WaitForCompletion',
+            action: 'aws:sleep',
+            inputs: {
+              Duration: 'PT{{DurationSeconds}}S',
+            },
+          },
+          {
+            name: 'VerifyCompletion',
+            action: 'aws:executeAwsApi',
+            inputs: {
+              Service: 'lambda',
+              Api: 'GetFunction',
+              FunctionName: loadGenFn.functionName,
+            },
+            outputs: [
+              { Name: 'State', Selector: '$.Configuration.State', Type: 'String' },
+            ],
           },
         ],
       },
