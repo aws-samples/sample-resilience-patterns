@@ -90,6 +90,13 @@ export class LoadGenStack extends cdk.Stack {
               Script: scriptCode,
             },
           },
+          {
+            name: 'WaitForLoadTest',
+            action: 'aws:sleep',
+            inputs: {
+              Duration: 'PT{{DurationSeconds}}S',
+            },
+          },
         ],
       },
     });
