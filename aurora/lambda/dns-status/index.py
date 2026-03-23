@@ -1,39 +1,31 @@
-import boto3, os, socket, logging
+import boto3, os, logging
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 def handler(event, context):
+    arc = boto3.client('arc-region-switch')
     cw = boto3.client('cloudwatch')
     namespace = os.environ['METRIC_NAMESPACE']
-    record_name = os.environ['RECORD_NAME']
-    primary_alb = os.environ.get('PRIMARY_ALB_DNS', '')
-    secondary_alb = os.environ.get('SECONDARY_ALB_DNS', '')
 
-    def resolve(hostname):
-        try:
-            results = socket.getaddrinfo(hostname, 80, socket.AF_INET, socket.SOCK_STREAM)
-            ips = {r[4][0] for r in results}
-            return ips
-        except Exception as e:
-            logger.error(f'Failed to resolve {hostname}: {e}')
-            return set()
-
-    dns_ips = resolve(record_name)
-    primary_ips = resolve(primary_alb)
-    secondary_ips = resolve(secondary_alb)
-
-    primary_active = 1.0 if primary_ips and (primary_ips & dns_ips) else 0.0
-    secondary_active = 1.0 if secondary_ips and (secondary_ips & dns_ips) else 0.0
-
-    logger.info(f'DNS={record_name} -> {dns_ips}')
-    logger.info(f'Primary ALB={primary_alb} -> {primary_ips}, active={primary_active}')
-    logger.info(f'Secondary ALB={secondary_alb} -> {secondary_ips}, active={secondary_active}')
-
-    cw.put_metric_data(
-        Namespace=namespace,
-        MetricData=[
-            {'MetricName': 'RegionDNSActive', 'Dimensions': [{'Name': 'Region', 'Value': 'us-east-1'}], 'Value': primary_active, 'Unit': 'None'},
-            {'MetricName': 'RegionDNSActive', 'Dimensions': [{'Name': 'Region', 'Value': 'us-west-2'}], 'Value': secondary_active, 'Unit': 'None'},
-        ],
+    resp = arc.list_route53_health_checks(
+        arn=os.environ['PLAN_ARN'],
+        hostedZoneId=os.environ['HOSTED_ZONE_ID'],
+        recordName=os.environ['RECORD_NAME']
     )
+
+    metrics = []
+    for hc in resp.get('healthChecks', []):
+        status = hc.get('status', 'healthy')
+        value = 1.0 if status == 'healthy' else 0.0
+        logger.info(f"Region={hc['region']} status={status} value={value}")
+        metrics.append({
+            'MetricName': 'RegionDNSActive',
+            'Dimensions': [{'Name': 'Region', 'Value': hc['region']}],
+            'Value': value,
+            'Unit': 'None',
+        })
+
+    if metrics:
+        cw.put_metric_data(Namespace=namespace, MetricData=metrics)
+    return {'metrics': metrics}

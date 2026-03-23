@@ -17,7 +17,7 @@ function createStack() {
     remoteSecretArn: 'arn:aws:secretsmanager:us-west-2:123456789012:secret:test-abc',
     remoteEncryptionKeyArn: 'arn:aws:kms:us-west-2:123456789012:key/test-key', remoteDbHost: 'remote-cluster.us-west-2.rds.amazonaws.com',
     globalClusterIdentifier: 'test-global-cluster',
-    primaryAlbDns: 'primary.elb.amazonaws.com', secondaryAlbDns: 'secondary.elb.amazonaws.com', recordName: 'aurora-app.demo.internal',
+    planArn: 'arn:aws:arc-region-switch::123:plan/test', hostedZoneId: 'Z12345', recordName: 'aurora-app.demo.internal',
     env: { account: '123456789012', region: 'us-east-1' },
   }));
 }
