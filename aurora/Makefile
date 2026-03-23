@@ -113,10 +113,9 @@ deploy-failover-plan: deploy-dns
 
 deploy-dns-with-hc: deploy-failover-plan
 	@echo "═══ Re-deploying DNS with ARC health check IDs ═══"
-	@P_ALB_DNS=$(call so,$(PROJECT)-aurora-app-primary,$(PRIMARY_REGION),AlbDnsName) && \
-	S_ALB_DNS=$(call so,$(PROJECT)-aurora-app-secondary,$(SECONDARY_REGION),AlbDnsName) && \
-	P_HC_ID=$$(aws arc-region-switch list-route53-health-checks --arn $$PLAN_ARN --region $(PRIMARY_REGION) --output json 2>/dev/null | jq -r '.healthChecks[] | select(.region == "$(PRIMARY_REGION)") | .healthCheckId' 2>/dev/null || echo "") && \
-	S_HC_ID=$$(aws arc-region-switch list-route53-health-checks --arn $$PLAN_ARN --region $(PRIMARY_REGION) --output json 2>/dev/null | jq -r '.healthChecks[] | select(.region == "$(SECONDARY_REGION)") | .healthCheckId' 2>/dev/null || echo "") && \
+	@PLAN_ARN=$(call so,$(PROJECT)-failover-plan,$(PRIMARY_REGION),PlanArn) && \
+	P_HC_ID=$$(aws arc-region-switch list-route53-health-checks --arn $$PLAN_ARN --region $(PRIMARY_REGION) --output json | jq -r '.healthChecks[] | select(.region == "$(PRIMARY_REGION)") | .healthCheckId') && \
+	S_HC_ID=$$(aws arc-region-switch list-route53-health-checks --arn $$PLAN_ARN --region $(PRIMARY_REGION) --output json | jq -r '.healthChecks[] | select(.region == "$(SECONDARY_REGION)") | .healthCheckId') && \
 	if [ -n "$$P_HC_ID" ] && [ -n "$$S_HC_ID" ]; then \
 		PRIMARY_VPC_ID=$(call so,$(PROJECT)-vpc-primary,$(PRIMARY_REGION),VpcId) && \
 		SECONDARY_VPC_ID=$(call so,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),VpcId) && \
