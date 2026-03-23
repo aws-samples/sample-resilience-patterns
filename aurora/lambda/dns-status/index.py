@@ -18,7 +18,7 @@ def handler(event, context):
     for hc in resp.get('healthChecks', []):
         status = hc.get('status', 'healthy')
         value = 1.0 if status == 'healthy' else 0.0
-        logger.info(f"Region={hc['region']} status={status} value={value}")
+        logger.info(f"Region={hc['region']} status={status} healthCheckId={hc.get('healthCheckId')} value={value}")
         metrics.append({
             'MetricName': 'RegionDNSActive',
             'Dimensions': [{'Name': 'Region', 'Value': hc['region']}],
