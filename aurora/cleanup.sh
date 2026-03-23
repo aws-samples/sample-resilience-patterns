@@ -35,15 +35,21 @@ done
 
 # 2. Chaos
 echo "Destroying chaos stacks..."
-delete_parallel "${PROJECT}-chaos"
+delete_stack "${PROJECT}-chaos-primary" "${PRIMARY_REGION}" &
+delete_stack "${PROJECT}-chaos-secondary" "${SECONDARY_REGION}" &
+wait
 
 # 3. Reconciliation
 echo "Destroying reconciliation stacks..."
-delete_parallel "${PROJECT}-reconciliation"
+delete_stack "${PROJECT}-reconciliation-primary" "${PRIMARY_REGION}" &
+delete_stack "${PROJECT}-reconciliation-secondary" "${SECONDARY_REGION}" &
+wait
 
 # 4. Monitoring
 echo "Destroying monitoring stacks..."
-delete_parallel "${PROJECT}-monitoring"
+delete_stack "${PROJECT}-monitoring-primary" "${PRIMARY_REGION}" &
+delete_stack "${PROJECT}-monitoring-secondary" "${SECONDARY_REGION}" &
+wait
 
 # 5. Load gen
 echo "Destroying loadgen stack..."
@@ -51,7 +57,9 @@ delete_stack "${PROJECT}-loadgen" "${PRIMARY_REGION}"
 
 # 6. Synthetics
 echo "Destroying synthetics stacks..."
-delete_parallel "${PROJECT}-synthetics"
+delete_stack "${PROJECT}-synthetics-primary" "${PRIMARY_REGION}" &
+delete_stack "${PROJECT}-synthetics-secondary" "${SECONDARY_REGION}" &
+wait
 
 # 7. Failover plan
 echo "Destroying failover plan..."
@@ -63,8 +71,6 @@ delete_stack "${PROJECT}-dns" "${PRIMARY_REGION}"
 
 # 9. App stacks
 echo "Destroying app stacks..."
-delete_stack "${PROJECT}-dsql-app-primary" "${PRIMARY_REGION}" &
-delete_stack "${PROJECT}-dsql-app-secondary" "${SECONDARY_REGION}" &
 delete_stack "${PROJECT}-aurora-app-primary" "${PRIMARY_REGION}" &
 delete_stack "${PROJECT}-aurora-app-secondary" "${SECONDARY_REGION}" &
 wait
@@ -74,9 +80,6 @@ echo "Destroying schema stack..."
 delete_stack "${PROJECT}-schema" "${PRIMARY_REGION}"
 
 # 11. DSQL
-echo "Destroying DSQL stacks..."
-delete_stack "${PROJECT}-dsql-primary" "${PRIMARY_REGION}" &
-delete_stack "${PROJECT}-dsql-secondary" "${SECONDARY_REGION}" &
 wait
 
 # 12. Database secondary (detach from global cluster first)
@@ -110,7 +113,8 @@ delete_stack "${PROJECT}-vpc-peering" "${PRIMARY_REGION}"
 
 # 15. VPCs
 echo "Destroying VPC stacks..."
-delete_parallel "${PROJECT}-vpc"
+delete_stack "${PROJECT}-vpc-primary" "${PRIMARY_REGION}"
+delete_stack "${PROJECT}-vpc-secondary" "${SECONDARY_REGION}"
 
 # 16. Bootstrap
 echo "Destroying bootstrap stack..."
