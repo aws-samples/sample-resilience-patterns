@@ -29,15 +29,24 @@ jobs:
 
       - run: npm ci
       - run: npx projen test
+      - name: Get account ID
+        id: account
+        run: echo "id=$(aws sts get-caller-identity --query Account --output text)" >> $GITHUB_OUTPUT
       - name: Deploy via bootstrap
-        run: npx cdk deploy aurora-bootstrap --require-approval never
+        run: |
+          npx cdk deploy aurora-bootstrap \
+            -c stack=bootstrap \
+            -c project=aurora \
+            -c primaryRegion=us-east-1 \
+            -c secondaryRegion=us-west-2 \
+            -c accountId=${{ steps.account.outputs.id }} \
+            --require-approval never
       - name: Verify canaries
         run: |
           echo "Waiting for canaries to run..."
           sleep 360
-          # Check canary status
-          for region in us-east-1 us-west-2; do
-            aws synthetics get-canary --name aurora-al-${region: -4} --region $region --query 'Canary.Status.State' --output text || true
+          for canary in aurora-rd-local-e1 aurora-wr-local-e1; do
+            aws synthetics get-canary-runs --name $canary --region us-east-1 --query 'CanaryRuns[0].Status.State' --output text || true
           done
       - name: Cleanup on success
         if: success()
