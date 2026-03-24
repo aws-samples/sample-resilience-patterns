@@ -55,10 +55,18 @@ jobs:
           ACCOUNT_ID=${{ steps.account.outputs.id }}
           PLAN_ARN=$(aws cloudformation describe-stacks --stack-name aurora-failover-plan --region us-east-1 \
             --query "Stacks[0].Outputs[?OutputKey=='PlanArn'].OutputValue" --output text)
-
-          # Find the SSM doc name (auto-generated)
           SSM_DOC=$(aws cloudformation describe-stack-resources --stack-name aurora-loadgen --region us-east-1 \
             --query "StackResources[?ResourceType=='AWS::SSM::Document'].PhysicalResourceId" --output text)
+
+          wait_for_plan() {
+            echo "  Waiting for plan execution to complete..."
+            for i in $(seq 1 30); do
+              STATUS=$(aws arc-region-switch get-plan-execution --plan-arn "$PLAN_ARN" --execution-id "$1" --region us-east-1 --query 'status' --output text 2>/dev/null || echo "UNKNOWN")
+              echo "  [$i] status=$STATUS"
+              if [ "$STATUS" = "SUCCEEDED" ] || [ "$STATUS" = "FAILED" ]; then break; fi
+              sleep 30
+            done
+          }
 
           echo "Starting 1-min load test via SSM: $SSM_DOC"
           aws ssm start-automation-execution \
@@ -66,35 +74,35 @@ jobs:
             --parameters '{"RequestsPerSecond":["10"],"DurationSeconds":["60"],"TargetApp":["aurora"],"OperationMix":["50,20,10,20"]}' \
             --region us-east-1 || true
 
-          echo "Running ARC failover exercise concurrently..."
+          echo "Running ARC failover exercise..."
 
           echo "1/4: Deactivate us-east-1"
-          EXEC1=$(aws arc-region-switch start-plan-execution \
+          EXEC_ID=$(aws arc-region-switch start-plan-execution \
             --plan-arn "$PLAN_ARN" --target-region us-east-1 --action deactivate \
-            --region us-west-2 --query 'executionArn' --output text)
-          echo "  Execution: $EXEC1"
-          sleep 180
+            --region us-west-2 --query 'executionId' --output text)
+          echo "  Execution: $EXEC_ID"
+          wait_for_plan "$EXEC_ID"
 
           echo "2/4: Activate us-east-1"
-          EXEC2=$(aws arc-region-switch start-plan-execution \
+          EXEC_ID=$(aws arc-region-switch start-plan-execution \
             --plan-arn "$PLAN_ARN" --target-region us-east-1 --action activate \
-            --region us-east-1 --query 'executionArn' --output text)
-          echo "  Execution: $EXEC2"
-          sleep 60
+            --region us-east-1 --query 'executionId' --output text)
+          echo "  Execution: $EXEC_ID"
+          wait_for_plan "$EXEC_ID"
 
           echo "3/4: Deactivate us-west-2"
-          EXEC3=$(aws arc-region-switch start-plan-execution \
+          EXEC_ID=$(aws arc-region-switch start-plan-execution \
             --plan-arn "$PLAN_ARN" --target-region us-west-2 --action deactivate \
-            --region us-east-1 --query 'executionArn' --output text)
-          echo "  Execution: $EXEC3"
-          sleep 180
+            --region us-east-1 --query 'executionId' --output text)
+          echo "  Execution: $EXEC_ID"
+          wait_for_plan "$EXEC_ID"
 
           echo "4/4: Activate us-west-2"
-          EXEC4=$(aws arc-region-switch start-plan-execution \
+          EXEC_ID=$(aws arc-region-switch start-plan-execution \
             --plan-arn "$PLAN_ARN" --target-region us-west-2 --action activate \
-            --region us-east-1 --query 'executionArn' --output text)
-          echo "  Execution: $EXEC4"
-          sleep 60
+            --region us-east-1 --query 'executionId' --output text)
+          echo "  Execution: $EXEC_ID"
+          wait_for_plan "$EXEC_ID"
 
           echo "Failover exercise complete"
       - name: Cleanup on success
