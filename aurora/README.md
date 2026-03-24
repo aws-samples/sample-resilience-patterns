@@ -84,6 +84,41 @@ This deploys a CodeBuild project that runs `make deploy` to orchestrate all stac
 
 Alternatively, deploy directly with `make deploy` if you have credentials configured for both regions.
 
+
+## Dashboard
+
+A single combined dashboard (`aurora-combined`) is deployed in us-east-1 and shows both regions side-by-side.
+
+### Layout
+
+```
+┌─────────────────────────────┬─────────────────────────────┐
+│ Aurora Writer Region        │ DNS Active Region           │
+│ (1 = Writer)                │ (1 = Active, 0 = Removed)   │
+├─────────────────────────────┼─────────────────────────────┤
+│ Aurora Replica Lag (ms)     │ RPO: Missing Rows           │
+│                             │                             │
+├─────────────────────────────┴─────────────────────────────┤
+│ Commit Latency (ms)                                       │
+├───────────────────────────────────────────────────────────┤
+│ Aurora Engine Version Alignment (0 = match, 1 = MISMATCH) │
+├───────────────────────────────────────────────────────────┤
+│ RPO: Heartbeat (gaps = monitor stopped, RPO data is stale)│
+└───────────────────────────────────────────────────────────┘
+```
+
+### Widget Details
+
+| Widget | Type | What it shows | How to read it |
+|--------|------|---------------|----------------|
+| **Aurora Writer Region** | SingleValue | Which region currently has the Aurora Global Database writer. Published by the RPO monitor Lambda from `describe-global-clusters` → `IsWriter`. | `1` = this region has the writer. After ARC failover, the writer moves and the values flip. |
+| **DNS Active Region** | SingleValue | Which regions are active in Route 53 DNS routing. Published by the DNS status Lambda from ARC `list-route53-health-checks` → `status`. | `1` = region is receiving traffic via `aurora-app.demo.internal`. After ARC deactivation, the deactivated region drops to `0`. |
+| **Aurora Replica Lag** | Graph | Storage-level replication lag between primary and secondary Aurora clusters (`AuroraReplicaLag` metric, Maximum). Both regions shown. | Normally <100ms. Sustained values >1000ms trigger an alarm. Spikes during high write throughput are expected. |
+| **RPO: Missing Rows** | Graph | Number of rows the remote region has that the local region doesn't. Computed atomically by the RPO monitor Lambda connecting to both databases in a single invocation. Both regions shown. | `0` = fully replicated. Non-zero = unreplicated transactions exist. Safe to use FILL(REPEAT) because each data point is an atomic cross-region comparison. |
+| **Commit Latency** | Graph | Average commit latency for both Aurora clusters (`CommitLatency` metric). Full width, both regions overlaid. | Compare primary vs secondary. Secondary should be near-zero (read-only). After failover, the new writer's latency appears. |
+| **Engine Version Alignment** | SingleValue | Whether both Aurora clusters run the same engine version. Published by the RPO monitor from `describe-global-clusters` + `describe-db-clusters`. | `0` = versions match (safe to failover). `1` = MISMATCH — version misalignment can prevent failover/switchover. Triggers an alarm. |
+| **RPO: Heartbeat** | Graph | Confirms the RPO monitor Lambda is running. Publishes `1` every 5 minutes for both regions. Full width, no FILL. | A continuous line of `1`s = monitor is healthy. **Gaps in the line = the monitor stopped running and all other RPO metrics are stale.** This is the staleness indicator — if you see "Missing Rows = 0" but the heartbeat has a gap, that zero is stale data, not a live reading. |
+
 ## Testing
 
 ### CDK Assertion Tests
