@@ -71,7 +71,7 @@ jobs:
           echo "1/4: Deactivate us-east-1"
           EXEC1=$(aws arc-region-switch start-plan-execution \
             --plan-arn "$PLAN_ARN" --target-region us-east-1 --action deactivate \
-            --region us-east-1 --query 'executionArn' --output text)
+            --region us-west-2 --query 'executionArn' --output text)
           echo "  Execution: $EXEC1"
           sleep 180
 
