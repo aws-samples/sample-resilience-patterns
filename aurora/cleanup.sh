@@ -109,7 +109,20 @@ delete_stack "${PROJECT}-db-primary" "${PRIMARY_REGION}"
 echo "Destroying VPC peering..."
 delete_stack "${PROJECT}-vpc-peering" "${PRIMARY_REGION}"
 
-# 15. VPCs
+# 15. Clean orphan Lambda ENIs (prevent VPC delete failures)
+echo "Cleaning orphan Lambda ENIs..."
+for region in ${PRIMARY_REGION} ${SECONDARY_REGION}; do
+  suffix=$([ "$region" = "${PRIMARY_REGION}" ] && echo "primary" || echo "secondary")
+  VPC_ID=$(aws cloudformation describe-stacks --stack-name ${PROJECT}-vpc-${suffix} --region "${region}" --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" --output text 2>/dev/null || echo "")
+  if [ -n "${VPC_ID}" ]; then
+    for eni in $(aws ec2 describe-network-interfaces --filters Name=vpc-id,Values=${VPC_ID} Name=status,Values=available --region "${region}" --query "NetworkInterfaces[].NetworkInterfaceId" --output text 2>/dev/null); do
+      echo "  Deleting orphan ENI ${eni} in ${region}"
+      aws ec2 delete-network-interface --network-interface-id "${eni}" --region "${region}" 2>/dev/null || true
+    done
+  fi
+done
+
+# 16. VPCs
 echo "Destroying VPC stacks..."
 delete_stack "${PROJECT}-vpc-primary" "${PRIMARY_REGION}"
 delete_stack "${PROJECT}-vpc-secondary" "${SECONDARY_REGION}"
