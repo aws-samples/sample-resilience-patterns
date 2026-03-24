@@ -70,31 +70,31 @@ jobs:
 
           echo "1/4: Deactivate us-east-1"
           EXEC1=$(aws arc-region-switch start-plan-execution \
-            --plan-arn "$PLAN_ARN" --target-region us-east-1 --target-action deactivate \
+            --plan-arn "$PLAN_ARN" --target-region us-east-1 --action DEACTIVATE \
             --region us-east-1 --query 'executionArn' --output text)
           echo "  Execution: $EXEC1"
-          aws arc-region-switch wait plan-execution-complete --plan-execution-arn "$EXEC1" --region us-east-1 2>/dev/null || sleep 120
+          sleep 180
 
           echo "2/4: Activate us-east-1"
           EXEC2=$(aws arc-region-switch start-plan-execution \
-            --plan-arn "$PLAN_ARN" --target-region us-east-1 --target-action activate \
+            --plan-arn "$PLAN_ARN" --target-region us-east-1 --action ACTIVATE \
             --region us-east-1 --query 'executionArn' --output text)
           echo "  Execution: $EXEC2"
-          aws arc-region-switch wait plan-execution-complete --plan-execution-arn "$EXEC2" --region us-east-1 2>/dev/null || sleep 120
+          sleep 60
 
           echo "3/4: Deactivate us-west-2"
           EXEC3=$(aws arc-region-switch start-plan-execution \
-            --plan-arn "$PLAN_ARN" --target-region us-west-2 --target-action deactivate \
+            --plan-arn "$PLAN_ARN" --target-region us-west-2 --action DEACTIVATE \
             --region us-east-1 --query 'executionArn' --output text)
           echo "  Execution: $EXEC3"
-          aws arc-region-switch wait plan-execution-complete --plan-execution-arn "$EXEC3" --region us-east-1 2>/dev/null || sleep 120
+          sleep 180
 
           echo "4/4: Activate us-west-2"
           EXEC4=$(aws arc-region-switch start-plan-execution \
-            --plan-arn "$PLAN_ARN" --target-region us-west-2 --target-action activate \
+            --plan-arn "$PLAN_ARN" --target-region us-west-2 --action ACTIVATE \
             --region us-east-1 --query 'executionArn' --output text)
           echo "  Execution: $EXEC4"
-          aws arc-region-switch wait plan-execution-complete --plan-execution-arn "$EXEC4" --region us-east-1 2>/dev/null || sleep 120
+          sleep 60
 
           echo "Failover exercise complete"
       - name: Cleanup on success
