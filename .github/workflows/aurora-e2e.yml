@@ -70,28 +70,28 @@ jobs:
 
           echo "1/4: Deactivate us-east-1"
           EXEC1=$(aws arc-region-switch start-plan-execution \
-            --plan-arn "$PLAN_ARN" --target-region us-east-1 --action DEACTIVATE \
+            --plan-arn "$PLAN_ARN" --target-region us-east-1 --action deactivate \
             --region us-east-1 --query 'executionArn' --output text)
           echo "  Execution: $EXEC1"
           sleep 180
 
           echo "2/4: Activate us-east-1"
           EXEC2=$(aws arc-region-switch start-plan-execution \
-            --plan-arn "$PLAN_ARN" --target-region us-east-1 --action ACTIVATE \
+            --plan-arn "$PLAN_ARN" --target-region us-east-1 --action activate \
             --region us-east-1 --query 'executionArn' --output text)
           echo "  Execution: $EXEC2"
           sleep 60
 
           echo "3/4: Deactivate us-west-2"
           EXEC3=$(aws arc-region-switch start-plan-execution \
-            --plan-arn "$PLAN_ARN" --target-region us-west-2 --action DEACTIVATE \
+            --plan-arn "$PLAN_ARN" --target-region us-west-2 --action deactivate \
             --region us-east-1 --query 'executionArn' --output text)
           echo "  Execution: $EXEC3"
           sleep 180
 
           echo "4/4: Activate us-west-2"
           EXEC4=$(aws arc-region-switch start-plan-execution \
-            --plan-arn "$PLAN_ARN" --target-region us-west-2 --action ACTIVATE \
+            --plan-arn "$PLAN_ARN" --target-region us-west-2 --action activate \
             --region us-east-1 --query 'executionArn' --output text)
           echo "  Execution: $EXEC4"
           sleep 60
