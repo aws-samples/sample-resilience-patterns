@@ -26,12 +26,12 @@
 │    DB_WRITE_HOST: global writer   │  │    DB_WRITE_HOST: global writer   │
 │                                   │  │                                   │
 │  Synthetics (6 canaries):         │  │  Synthetics (6 canaries):         │
-│    al → aurora-app-use1 (local)   │  │    al → aurora-app-usw2 (local)   │
-│    ar → aurora-app-usw2 (remote)  │  │    ar → aurora-app-use1 (remote)  │
-│    ad → aurora-app (dns/ARC)      │  │    ad → aurora-app (dns/ARC)      │
-│    wl → write local               │  │    wl → write local               │
-│    wr → write remote              │  │    wr → write remote              │
-│    wd → write dns                 │  │    wd → write dns                 │
+│    rd-local  → aurora-app-use1    │  │    rd-local  → aurora-app-usw2    │
+│    rd-remote → aurora-app-usw2    │  │    rd-remote → aurora-app-use1    │
+│    rd-global → aurora-app (dns)   │  │    rd-global → aurora-app (dns)   │
+│    wr-local  → write local        │  │    wr-local  → write local        │
+│    wr-remote → write remote       │  │    wr-remote → write remote       │
+│    wr-global → write dns          │  │    wr-global → write dns          │
 │                                   │  │                                   │
 │  Schema Migration Lambda          │  │                                   │
 │  RPO Monitor Lambda               │  │  RPO Monitor Lambda               │
@@ -49,24 +49,24 @@
 ## CDK Stacks
 
 ### BootstrapStack (primary region)
-- CodeBuild project (`${project}-deploy`, aws/codebuild/standard:7.0, SMALL compute)
+- CodeBuild project (`${project}-deploy`, aws/codebuild/standard:7.0, SMALL compute, 60-min timeout)
 - S3 artifact bucket encrypted with local CMK (`${project}-codebuild-${account}`)
 - BucketDeployment to upload source as CDK asset (excludes .git, node_modules, cdk.out, cdk.out.*, dist, .specs)
-- IAM role: sts:AssumeRole on cdk-*, cloudformation:DescribeStacks/ListStacks/DescribeStackResources, ssm:GetParameter on cdk-bootstrap/*, ec2/rds/dsql describe ops, arc-region-switch list ops
+- IAM role: sts:AssumeRole on cdk-*, cloudformation:DescribeStacks/ListStacks/DescribeStackResources, ssm:GetParameter on cdk-bootstrap/*, ec2/rds describe ops, arc-region-switch list ops
 - Build trigger: onEvent Lambda (starts build) + isComplete Lambda (polls status), 30s query interval, 60min total timeout
-- buildspec.yml: npm ci, global install aws-cdk + ts-node, pip install Lambda deps, make deploy
+- buildspec.yml: npm ci, global install aws-cdk + ts-node, pip install Lambda deps (iterates schema-migration, aurora-app, rpo-monitor, reconciliation, loadgen, dns-status — installs if requirements.txt exists), make deploy
 
 ### VpcStack (per region)
 - VPC with 2 AZs, isolated subnets only (/23 CIDR, /24 subnets)
 - Non-overlapping CIDRs: us-east-1 = 10.0.0.0/23, us-west-2 = 10.0.2.0/23
 - 7 Interface endpoints (private DNS enabled): CloudWatch Logs, CloudWatch Monitoring, Secrets Manager, STS, Lambda, Synthetics, RDS
 - 1 Gateway endpoint: S3
-- 5 Security groups: ALB, Database, Lambda, VPC Endpoint, Synthetics (all allowAllOutbound: false)
+- 5 Security groups (all allowAllOutbound: false): ALB, Database, Lambda, VPC Endpoint, Synthetics
 - Outputs: VpcId, VpcCidr, IsolatedSubnetIds, AvailabilityZones, all 5 SG IDs
 
 ### VpcPeeringStack (primary region)
 - CfnVPCPeeringConnection: primary VPC → secondary VPC (peerRegion: us-west-2)
-- Peering acceptance + secondary route table entries done via AWS CLI in Makefile
+- Peering acceptance + route table entries done via AWS CLI in Makefile
 - Output: PeeringConnectionId
 
 ### DatabaseStack (primary region)
@@ -117,7 +117,7 @@
 - Outputs: PlanArn, ExecutionRoleArn
 
 ### SyntheticsStack (per region)
-- 6 canaries per region: al, ar, ad (read-only), wl, wr, wd (write)
+- 6 canaries per region: rd-local, rd-remote, rd-global (read-only), wr-local, wr-remote, wr-global (write)
 - Read-only code: GET /health + GET /orders via http.client
 - Write code: POST /orders + DELETE /orders/{id} via http.client
 - Runtime: syn-python-selenium-10.0
@@ -125,7 +125,7 @@
 - KMS-encrypted artifact bucket (`${project}-canary-${region}-${account}`)
 - 6 CloudWatch alarms (SuccessPercent < 100%, treat missing: ignore)
 - All canaries VPC-deployed with Synthetics SG
-- Canary names: `${project}-${suffix}-${regionSuffix}` (truncated to 21 chars)
+- Canary names: `${project}-${suffix}` (truncated to 21 chars), region suffix: -e1 (us-east-1), -w2 (us-west-2)
 
 ### MonitoringStack (per region)
 - KMS-encrypted SNS alarm topic (`${project}-alarms-${region}`)
@@ -136,14 +136,15 @@
   - Env: PROJECT, LOCAL_SECRET_ARN (name), REMOTE_SECRET_ARN (name), REMOTE_REGION, REMOTE_DB_HOST, GLOBAL_CLUSTER_ID
   - IAM: secretsmanager:GetSecretValue (wildcard ARN), kms:Decrypt (both keys), cloudwatch:PutMetricData, rds:DescribeDBClusters/DescribeGlobalClusters
 - DNS Status Lambda (primary region only, NOT VPC-deployed): `${project}-dns-status-${region}`, Python 3.12, 30s timeout, reserved concurrency 1, every 1 min
-  - Env: PLAN_ARN, METRIC_NAMESPACE
-  - IAM: arc-region-switch:ListRoute53HealthChecks on plan ARN, cloudwatch:PutMetricData
+  - Env: PLAN_ARN, HOSTED_ZONE_ID, RECORD_NAME, METRIC_NAMESPACE
+  - IAM: arc-region-switch:ListRoute53HealthChecks, cloudwatch:PutMetricData
   - Publishes RegionDNSActive metric per region
 - Combined Dashboard (primary region only): `${project}-combined`
-  - Row 0: Writer Region (SingleValue) + DNS Active Region (SingleValue)
-  - Row 1: Replica Lag (Graph) + Missing Rows (Graph)
-  - Row 2: Heartbeat — full-width (gaps = monitor stopped, RPO data is stale)
-  - Row 3: Commit Latency (Graph) + Engine Version Alignment (SingleValue)
+  - Row 0: Writer Region (SingleValue, 12×3) + DNS Active Region (SingleValue, 12×3)
+  - Row 1: Replica Lag (Graph, 12×6) + Missing Rows (Graph, 12×6)
+  - Row 2: Commit Latency (Graph, 24×6, full-width)
+  - Row 3: Engine Version Alignment (SingleValue, 24×3, full-width)
+  - Row 4: Heartbeat (Graph, 24×5, full-width, "gaps = monitor stopped, RPO data is stale")
 
 ### ReconciliationStack (per region)
 - Reconciliation Lambda: `${project}-reconcile-${region}`, Python 3.12, lambda_handler, 10-min timeout, reserved concurrency 5, VPC-deployed
@@ -155,7 +156,7 @@
 - Load gen Lambda: `${project}-loadgen`, Python 3.12, 15-min timeout, 512MB, reserved concurrency 10, VPC-deployed
 - Env: AURORA_ALB_DNS
 - IAM: cloudwatch:PutMetricData
-- SSM Automation Document (`${project}-load-test`): parameters RequestsPerSecond, DurationSeconds, TargetApp, OperationMix
+- SSM Automation Document: async Lambda invocation via aws:executeScript (InvocationType=Event) + aws:sleep for duration
 - SSM Automation role: ssm.amazonaws.com, lambda:InvokeFunction
 - Output: LoadGenFunctionArn
 
@@ -173,13 +174,13 @@
 ```
 deploy-vpc                  (parallel: vpc-primary + vpc-secondary)
     │
-deploy-vpc-peering          (sequential: peering + accept + secondary routes via CLI)
+deploy-vpc-peering          (sequential: peering + accept + routes via CLI)
     │
-deploy-database             (sequential: db-primary, then db-secondary with separate cdk.out)
+deploy-database             (sequential: db-primary, then db-secondary)
     │
 deploy-schema               (sequential: schema migration against primary writer)
     │
-deploy-aurora-app           (sequential: aurora-app-primary, then aurora-app-secondary, separate cdk.out dirs)
+deploy-aurora-app           (sequential: aurora-app-primary, then aurora-app-secondary)
     │                       (captures: P_READ_HOST from primary ClusterEndpoint,
     │                        S_READ_HOST from secondary ClusterReaderEndpoint,
     │                        GLOBAL_WRITER_HOST from describe_global_clusters Endpoint)
@@ -188,21 +189,17 @@ deploy-dns                  (sequential: PHZ + latency-based + region-aligned re
     │
 deploy-failover-plan        (sequential: ARC Region Switch Plan, captures PlanArn)
     │
-deploy-dns-with-hc          (sequential: re-deploy DNS with ARC health check IDs from list-route53-health-checks)
+deploy-dns-with-hc          (sequential: re-deploy DNS with ARC health check IDs)
     │
-deploy-synthetics           (sequential: synthetics-primary, then synthetics-secondary, separate cdk.out dirs)
+deploy-synthetics           (sequential: synthetics-primary, then synthetics-secondary)
     │
-deploy-monitoring           (parallel: monitoring-primary + monitoring-secondary, separate cdk.out dirs)
-    │                       (depends on deploy-database, captures cluster IDs, secrets, keys, plan ARN)
+deploy-monitoring           (sequential: monitoring-primary, then monitoring-secondary)
     │
-deploy-reconciliation       (parallel: reconciliation-primary + reconciliation-secondary, separate cdk.out dirs)
-    │                       (depends on deploy-database)
+deploy-reconciliation       (parallel: reconciliation-primary + reconciliation-secondary)
     │
 deploy-loadgen              (sequential: load generation Lambda + SSM doc)
-    │                       (depends on deploy-aurora-app)
     │
-deploy-chaos                (parallel: chaos-primary + chaos-secondary, separate cdk.out dirs)
-                            (depends on deploy-vpc + deploy-database)
+deploy-chaos                (parallel: chaos-primary + chaos-secondary)
 ```
 
 ## Cross-Stack Data Flow
@@ -232,10 +229,6 @@ CREATE TABLE IF NOT EXISTS orders (
     deleted_at TIMESTAMPTZ
 );
 
-CREATE INDEX IF NOT EXISTS idx_orders_region ON orders(region);
-CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
-CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at);
-
 CREATE TABLE IF NOT EXISTS replication_tracking (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     source_region VARCHAR(20) NOT NULL,
@@ -243,10 +236,9 @@ CREATE TABLE IF NOT EXISTS replication_tracking (
     committed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     replicated_at TIMESTAMPTZ
 );
-
-CREATE INDEX IF NOT EXISTS idx_repl_tracking_source ON replication_tracking(source_region);
-CREATE INDEX IF NOT EXISTS idx_repl_tracking_committed ON replication_tracking(committed_at);
 ```
+
+Indexes: idx_orders_region, idx_orders_status, idx_orders_created_at, idx_repl_tracking_source, idx_repl_tracking_committed
 
 ## Stored Procedures
 
@@ -257,7 +249,22 @@ CREATE INDEX IF NOT EXISTS idx_repl_tracking_committed ON replication_tracking(c
 
 ## Cleanup
 
-Standalone `cleanup.sh` script (reverse deployment order).
+Standalone `cleanup.sh` script (reverse deployment order):
+1. Delete stuck stacks (ROLLBACK_COMPLETE, ROLLBACK_FAILED)
+2. Chaos stacks (parallel)
+3. Reconciliation stacks (parallel)
+4. Monitoring stacks (parallel)
+5. Load gen stack
+6. Synthetics stacks (parallel)
+7. Failover plan
+8. DNS stack
+9. App stacks (parallel)
+10. Schema stack
+11. Database: detach all members from global cluster, wait 60s, delete global cluster, then delete db-secondary, then db-primary
+12. VPC peering
+13. VPC stacks
+14. Bootstrap stack
+15. Clean local cdk.out directories
 
 ## Project Structure
 
@@ -298,9 +305,13 @@ aurora/
 │   ├── rpo-monitor/
 │   │   ├── index.py              # RPO: cross-region row comparison + heartbeat + engine version + writer active
 │   │   └── requirements.txt      # psycopg2-binary==2.9.10
-│   ├── dns-status/index.py       # DNS status: ARC health check → RegionDNSActive metric
-│   ├── reconciliation/index.py   # Post-failover: compare rows, missing txn report
-│   └── loadgen/index.py          # Load generation: sustained CRUD traffic via ALB
+│   ├── dns-status/
+│   │   ├── index.py              # DNS status: ARC health check → RegionDNSActive metric
+│   │   └── requirements.txt      # boto3>=1.38.0
+│   ├── reconciliation/
+│   │   └── index.py              # Post-failover: compare rows, missing txn report
+│   └── loadgen/
+│       └── index.py              # Load generation: sustained CRUD traffic via ALB
 ├── test/
 │   ├── bootstrap.test.ts         # 7 tests
 │   ├── vpc.test.ts               # 8 tests
@@ -317,13 +328,13 @@ aurora/
 │   └── loadgen.test.ts           # 5 tests
 ├── Makefile                      # Parallel deploys, variable capture, vpc_ctx macro
 ├── buildspec.yml                 # CodeBuild: npm ci, ts-node, pip install, make deploy
-├── cleanup.sh                    # Reliable teardown (reverse order)
-├── .checkov.yaml                 # Checkov skip rules with justifications
+├── cleanup.sh                    # Reliable teardown (reverse order, global cluster detach)
+├── .checkov.yaml                 # Checkov skip rules (CKV_AWS_116, CKV_AWS_173)
 ├── cdk.json
 ├── tsconfig.json
 ├── tsconfig.dev.json
 ├── package.json
-├── LICENSE                       # MIT-0
+├── LICENSE
 ├── CONTRIBUTING.md
 ├── CODE_OF_CONDUCT.md
 └── README.md

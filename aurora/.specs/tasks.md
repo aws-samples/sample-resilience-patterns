@@ -12,8 +12,8 @@ must have corresponding tests written and passing (`npx projen test`) before mov
 
 ## Phase 2: Bootstrap Stack (CodeBuild)
 
-- [x] 2.1 Create lib/bootstrap-stack.ts — CodeBuild project (standard:7.0, SMALL), local CMK, scoped IAM role (sts:AssumeRole cdk-*, cloudformation describe/list, ssm:GetParameter cdk-bootstrap/*, ec2/rds/dsql describe, arc-region-switch list), artifact bucket (KMS, block public, enforce SSL), source upload (BucketDeployment), build trigger (onEvent + isComplete, 30s poll, 60min timeout)
-- [x] 2.2 Create buildspec.yml — npm ci, global install aws-cdk + ts-node, pip install Lambda deps, make deploy
+- [x] 2.1 Create lib/bootstrap-stack.ts — CodeBuild project (standard:7.0, SMALL, 60-min timeout), local CMK, scoped IAM role (sts:AssumeRole cdk-*, cloudformation describe/list, ssm:GetParameter cdk-bootstrap/*, ec2/rds describe, arc-region-switch list), artifact bucket (KMS, block public, enforce SSL), source upload (BucketDeployment), build trigger (onEvent + isComplete, 30s poll, 60min timeout)
+- [x] 2.2 Create buildspec.yml — npm ci, global install aws-cdk + ts-node, pip install Lambda deps (iterates schema-migration, aurora-app, rpo-monitor, reconciliation, loadgen, dns-status — installs if requirements.txt exists), make deploy
 - [x] 2.3 Create lambda/build-trigger/index.py — on_event starts CodeBuild, is_complete polls BatchGetBuilds (SUCCEEDED/IN_PROGRESS/fail)
 - [x] 2.4 Wire BootstrapStack in bin/app.ts (target=bootstrap)
 - [x] ✅ Tests pass: bootstrap.test.ts (7 tests)
@@ -24,7 +24,7 @@ must have corresponding tests written and passing (`npx projen test`) before mov
 - [x] 3.2 Non-overlapping /23 CIDRs: us-east-1 = 10.0.0.0/23, us-west-2 = 10.0.2.0/23 (/24 subnets)
 - [x] 3.3 7 VPC Interface endpoints (private DNS): CloudWatch Logs, CloudWatch Monitoring, Secrets Manager, STS, Lambda, Synthetics, RDS
 - [x] 3.4 1 VPC Gateway endpoint: S3
-- [x] 3.5 5 Security groups (all allowAllOutbound: false): ALB (inbound 80 from Synthetics SG + peer CIDR), Database (inbound 5432 from Lambda SG + peer CIDR), Lambda (inbound 80 from ALB; egress 5432 to DB SG + peer CIDR, 443 to VPCe SG), VPC Endpoint (inbound 443 from Lambda + Synthetics), Synthetics (egress 80 to ALB SG + peer CIDR, 443 to VPCe SG + anyIpv4)
+- [x] 3.5 5 Security groups (all allowAllOutbound: false): ALB (inbound 80 from Synthetics SG + Lambda SG + peer CIDR), Database (inbound 5432 from Lambda SG + peer CIDR), Lambda (inbound 80 from ALB; egress 5432 to DB SG + peer CIDR, 443 to VPCe SG, 80 to ALB SG), VPC Endpoint (inbound 443 from Lambda + Synthetics), Synthetics (egress 80 to ALB SG + peer CIDR, 443 to VPCe SG + anyIpv4)
 - [x] 3.6 Wire VpcStack (x2 regions) in bin/app.ts (target=vpc-primary, vpc-secondary)
 - [x] 3.7 Outputs: VpcId, VpcCidr, IsolatedSubnetIds, AvailabilityZones, all 5 SG IDs
 - [x] ✅ Tests pass: vpc.test.ts (8 tests)
@@ -87,7 +87,7 @@ must have corresponding tests written and passing (`npx projen test`) before mov
 
 ## Phase 10: CloudWatch Synthetics Stack (Per Region)
 
-- [x] 10.1 6 canaries per region: al/ar/ad (read-only: GET /health + GET /orders), wl/wr/wd (write: POST /orders + DELETE /orders/{id})
+- [x] 10.1 6 canaries per region: rd-local/rd-remote/rd-global (read-only: GET /health + GET /orders), wr-local/wr-remote/wr-global (write: POST /orders + DELETE /orders/{id})
 - [x] 10.2 All canaries use private hosted zone records (localRecordName, remoteRecordName, dnsRecordName)
 - [x] 10.3 Runtime: syn-python-selenium-10.0, schedule: every 5 minutes, startAfterCreation: true
 - [x] 10.4 KMS-encrypted artifact bucket (`${project}-canary-${region}-${account}`)
@@ -107,8 +107,10 @@ must have corresponding tests written and passing (`npx projen test`) before mov
   - Publishes to local CloudWatch: CatalogMissingRows (both regions), CatalogRPOHeartbeat (both regions), AuroraWriterActive (per region from describe_global_clusters), AuroraEngineVersionMismatch (both regions)
   - Secret accessed by name `${project}/db-credentials`
 - [x] 11.7 DNS Status Lambda (primary region only, NOT VPC-deployed): every 1 min, reserved concurrency 1, 30s timeout
+  - Calls list_route53_health_checks with arn, hostedZoneId, recordName params
+  - Requires boto3>=1.38.0 (bundled via requirements.txt)
   - Publishes RegionDNSActive from ARC health checks
-- [x] 11.8 Combined Dashboard (primary region only): Writer Region, DNS Active Region, Replica Lag, Missing Rows, Current Missing Rows, Heartbeat, Commit Latency, Engine Version Alignment
+- [x] 11.8 Combined Dashboard (primary region only): Writer Region, DNS Active Region, Replica Lag, Missing Rows, Commit Latency (full-width), Engine Version Alignment (full-width), Heartbeat (full-width, with staleness description)
 - [x] 11.9 Wire MonitoringStack (x2 regions) in bin/app.ts (target=monitoring-primary, monitoring-secondary)
 - [x] ✅ Tests pass: monitoring.test.ts (7 tests)
 
@@ -126,7 +128,7 @@ must have corresponding tests written and passing (`npx projen test`) before mov
 
 - [x] 13.1 Create lambda/loadgen/index.py — sustained CRUD traffic against ALB, publishes CloudWatch metrics (RequestsSent, Errors, AvgLatency, P99Latency) to `${project}/LoadTest` namespace
 - [x] 13.2 Create lib/loadgen-stack.ts — Lambda (`${project}-loadgen`, 15-min timeout, 512MB, reserved concurrency 10), VPC-deployed, AURORA_ALB_DNS env var
-- [x] 13.3 SSM Automation Document (`${project}-load-test`): parameters RequestsPerSecond, DurationSeconds, TargetApp, OperationMix
+- [x] 13.3 SSM Automation Document: async Lambda invocation via aws:executeScript (InvocationType=Event) + aws:sleep for duration
 - [x] 13.4 Wire LoadGenStack in bin/app.ts (target=loadgen)
 - [x] ✅ Tests pass: loadgen.test.ts (5 tests)
 
@@ -148,7 +150,7 @@ must have corresponding tests written and passing (`npx projen test`) before mov
 - [x] 15.4 `vpc_ctx` macro for passing VPC/SG context to all VPC-dependent stacks
 - [x] 15.5 Two-phase DNS deployment: deploy → plan → capture health checks → re-deploy
 - [x] 15.6 VPC peering acceptance + secondary route creation via AWS CLI
-- [x] 15.7 Create cleanup.sh for reliable teardown (reverse order)
+- [x] 15.7 Create cleanup.sh for reliable teardown (reverse order, global cluster detach with 60s wait)
 
 ## Phase 16: Security Hardening & Open-Source Compliance
 
@@ -156,16 +158,16 @@ must have corresponding tests written and passing (`npx projen test`) before mov
 - [x] 16.2 Lambda reserved concurrency limits on all functions
 - [x] 16.3 cdk-nag AwsSolutionsChecks opt-in via `-c nag=true`
 - [x] 16.4 Global NagSuppressions per stack: IAM4, IAM5, L1, RDS10, RDS11, SMG4
-- [x] 16.5 Create .checkov.yaml with skip rules and justifications
+- [x] 16.5 Create .checkov.yaml with skip rules (CKV_AWS_116, CKV_AWS_173)
 - [x] 16.6 MIT-0 LICENSE, CONTRIBUTING.md, CODE_OF_CONDUCT.md
 - [x] 16.7 No public subnets, no IGW, no NAT — all traffic via VPC endpoints (except DNS Status Lambda)
 
 ## Phase 17: GitHub Actions CI/CD
 
-- [x] 17.1 Build workflow (compile + test + synth)
-- [x] 17.2 E2E workflow (deploy + verify + cleanup)
-- [x] 17.3 Cleanup workflow (manual trigger)
-- [x] 17.4 AWS OIDC authentication
+- [x] 17.1 Build workflow (`aurora-build.yml`): compile + test + synth on pushes to non-main branches
+- [x] 17.2 E2E workflow (`aurora-e2e.yml`): deploy via bootstrap, verify canaries, load test + ARC failover exercise, cleanup on success. 2h session, account 563688183446
+- [x] 17.3 Cleanup workflow (`aurora-cleanup.yml`): manual trigger only
+- [x] 17.4 AWS OIDC authentication (id-token: write, contents: read)
 - [x] 17.5 Status badges in repo root README
 
 ## Phase 18: CDK Assertion Tests
