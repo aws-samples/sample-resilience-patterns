@@ -61,9 +61,10 @@ jobs:
           wait_for_plan() {
             echo "  Waiting for plan execution to complete..."
             for i in $(seq 1 30); do
-              STATUS=$(aws arc-region-switch get-plan-execution --plan-arn "$PLAN_ARN" --execution-id "$1" --region us-east-1 --query 'status' --output text 2>/dev/null || echo "UNKNOWN")
+              STATUS=$(aws arc-region-switch list-plan-executions --plan-arn "$PLAN_ARN" --region us-east-1 \
+                --query "items[?executionId=='$1'].status" --output text 2>/dev/null || echo "UNKNOWN")
               echo "  [$i] status=$STATUS"
-              if [ "$STATUS" = "SUCCEEDED" ] || [ "$STATUS" = "FAILED" ]; then break; fi
+              if echo "$STATUS" | grep -qi "succeeded\|failed\|completed"; then break; fi
               sleep 30
             done
           }
@@ -100,7 +101,7 @@ jobs:
           echo "4/4: Activate us-west-2"
           EXEC_ID=$(aws arc-region-switch start-plan-execution \
             --plan-arn "$PLAN_ARN" --target-region us-west-2 --action activate \
-            --region us-east-1 --query 'executionId' --output text)
+            --region us-west-2 --query 'executionId' --output text)
           echo "  Execution: $EXEC_ID"
           wait_for_plan "$EXEC_ID"
 
