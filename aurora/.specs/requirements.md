@@ -25,7 +25,7 @@
   - `DELETE /orders/{id}` — calls `sp_delete_order`
   - `GET /orders` — calls `sp_query_orders` (query params: region, status, since)
   - `GET /health` — connectivity check (returns region)
-- Read/write split: `DB_READ_HOST` (local cluster endpoint) for reads, `DB_WRITE_HOST` (Aurora Global writer endpoint) for writes
+- Read/write split: `DB_READ_HOST` (local cluster endpoint) for GET, `DB_WRITE_HOST` (Aurora Global writer endpoint) for POST/PUT/DELETE
 - Secret accessed by name `${project}/db-credentials` (not ARN) — replicated to both regions
 - IAM policy also allows access to replicated secret via wildcard ARN pattern
 - Deployed in isolated subnets, accesses AWS services via VPC endpoints only
@@ -35,12 +35,12 @@
 ### FR-3: CloudWatch Synthetics Testing
 
 - 6 CloudWatch Synthetics canaries per region (12 total):
-  - `al` (local read-only) — hits region-aligned record for own region (e.g., `aurora-app-use1.demo.internal`)
-  - `ar` (remote read-only) — hits region-aligned record for opposite region (e.g., `aurora-app-usw2.demo.internal`) via VPC peering
-  - `ad` (dns read-only) — hits `aurora-app.demo.internal` (ARC-managed latency-based routing)
-  - `wl` (local write) — POST + DELETE against own region record
-  - `wr` (remote write) — POST + DELETE against opposite region record via VPC peering
-  - `wd` (dns write) — POST + DELETE against `aurora-app.demo.internal`
+  - Read-only local (`aurora-rd-local-{e1|w2}`) — hits region-aligned record for own region
+  - Read-only remote (`aurora-rd-remote-{e1|w2}`) — hits region-aligned record for opposite region via VPC peering
+  - Read-only global (`aurora-rd-global-{e1|w2}`) — hits `aurora-app.demo.internal` (ARC-managed latency-based routing)
+  - Write local (`aurora-wr-local-{e1|w2}`) — POST + DELETE against own region record
+  - Write remote (`aurora-wr-remote-{e1|w2}`) — POST + DELETE against opposite region record via VPC peering
+  - Write global (`aurora-wr-global-{e1|w2}`) — POST + DELETE against `aurora-app.demo.internal`
 - Read-only canaries: GET /health + GET /orders
 - Write canaries: POST /orders + DELETE /orders/{id}
 - Runtime: syn-python-selenium-10.0
@@ -49,6 +49,7 @@
 - CloudWatch alarm on canary SuccessPercent per canary (threshold: 100%, treat missing: ignore)
 - All canaries VPC-deployed with Synthetics SG
 - All testing flows through private hosted zone DNS records
+- Canary names truncated to 21 characters
 
 ### FR-4: Database Schema
 
@@ -62,10 +63,10 @@
 
 ### FR-5: CloudWatch Alarms (Per Region)
 
-7 alarms per region:
-- ReplicaLag: AuroraReplicaLag > 1000ms (Maximum, 1 eval period)
-- ReplicaLagMax: AuroraReplicaLagMaximum > 2000ms (Maximum, 1 eval period)
-- CommitLatency: CommitLatency > 100ms (Average, 3 eval periods)
+7 alarms per region (14 total):
+- ReplicaLag: AuroraReplicaLag > 1000ms (Maximum, 1 eval period) — SNS action
+- ReplicaLagMax: AuroraReplicaLagMaximum > 2000ms (Maximum, 1 eval period) — SNS action
+- CommitLatency: CommitLatency > 100ms (Average, 3 eval periods) — SNS action
 - CatalogMissingRows: CatalogMissingRows > 10 (Maximum, 2 eval periods, custom namespace)
 - Heartbeat: CatalogRPOHeartbeat < 1 (Sum, 2 eval periods, 10-min period, treat missing as BREACHING)
 - EngineVersionMismatch: AuroraEngineVersionMismatch >= 1 (Maximum, 1 eval period)
@@ -75,14 +76,14 @@
 
 ### FR-6: CloudWatch Dashboard (Primary Region Only)
 
-Combined dashboard (`${project}-combined`) with 7 widget areas:
-1. Writer Region — SingleValueWidget: AuroraWriterActive per region
-2. DNS Active Region — SingleValueWidget: RegionDNSActive per region (1 = Active, 0 = Removed)
-3. Replica Lag — GraphWidget: AuroraReplicaLag from both regions
-4. RPO: Missing Rows — GraphWidget: CatalogMissingRows from both regions
-5. RPO: Heartbeat (gaps = monitor stopped, RPO data is stale) — full-width GraphWidget: CatalogRPOHeartbeat from both regions (no FILL)
-6. Commit Latency — GraphWidget: CommitLatency Average from both regions
-7. Engine Version Alignment — SingleValueWidget: AuroraEngineVersionMismatch (0 = match, 1 = MISMATCH)
+Combined dashboard (`${project}-combined`) in us-east-1 with 7 widgets:
+1. Writer Region — SingleValueWidget (12×3): AuroraWriterActive per region
+2. DNS Active Region — SingleValueWidget (12×3): RegionDNSActive per region
+3. Replica Lag — GraphWidget (12×6): AuroraReplicaLag from both regions
+4. Missing Rows — GraphWidget (12×6): CatalogMissingRows from both regions
+5. Commit Latency — full-width GraphWidget (24×6): CommitLatency Average from both regions
+6. Engine Version Alignment — full-width SingleValueWidget (24×3): AuroraEngineVersionMismatch (0 = match, 1 = MISMATCH — blocks failover)
+7. Heartbeat — full-width GraphWidget (24×5): CatalogRPOHeartbeat (gaps = monitor stopped, RPO data is stale)
 
 ### FR-7: RPO Monitoring
 
@@ -101,8 +102,9 @@ Combined dashboard (`${project}-combined`) with 7 widget areas:
 
 - NOT VPC-deployed (ARC API has no VPC endpoint)
 - Runs every 1 minute via EventBridge
-- Calls `arc-region-switch:ListRoute53HealthChecks` on the plan ARN
+- Calls `arc-region-switch:ListRoute53HealthChecks` with planArn, hostedZoneId, recordName parameters
 - Publishes `RegionDNSActive` metric (1.0 if healthy, 0.0 otherwise) per region to custom namespace
+- Requires boto3 latest (bundled via requirements.txt: boto3>=1.38.0)
 - Reserved concurrency: 1, timeout: 30s
 
 ### FR-9: VPC Infrastructure (Per Region)
@@ -113,10 +115,10 @@ Combined dashboard (`${project}-combined`) with 7 widget areas:
 - 8 VPC endpoints total:
   - 7 Interface (private DNS enabled): CloudWatch Logs, CloudWatch Monitoring, Secrets Manager, STS, Lambda, Synthetics, RDS
   - 1 Gateway: S3
-- 5 Security groups:
-  - ALB SG: inbound HTTP (80) from local Synthetics SG + cross-region peer CIDR
+- 5 Security groups (all allowAllOutbound: false):
+  - ALB SG: inbound HTTP (80) from Synthetics SG + Lambda SG + cross-region peer CIDR
   - Database SG: inbound PostgreSQL (5432) from Lambda SG + cross-region peer CIDR
-  - Lambda SG: inbound from ALB SG (80); egress to Database SG (5432), cross-region peer CIDR (5432), VPC Endpoint SG (443)
+  - Lambda SG: inbound from ALB SG (80); egress to Database SG (5432), cross-region peer CIDR (5432), VPC Endpoint SG (443), ALB SG (80)
   - VPC Endpoint SG: inbound HTTPS (443) from Lambda SG + Synthetics SG
   - Synthetics SG: egress to local ALB SG (80), cross-region peer CIDR (80), VPC Endpoint SG (443), anyIpv4 (443 for S3 gateway)
 
@@ -132,10 +134,10 @@ Combined dashboard (`${project}-combined`) with 7 widget areas:
 
 - Route 53 private hosted zone (`demo.internal`) associated with both regional VPCs
 - 3 DNS record groups (4 total record sets):
-  - `aurora-app.demo.internal` — 2 latency-based A-alias records (SetIdentifier: PrimaryRegion/StandbyRegion, Region attribute)
+  - `aurora-app.demo.internal` — 2 latency-based A-alias records (SetIdentifier: PrimaryRegion/StandbyRegion, Region attribute), ARC health checks attached on second deployment pass
   - `aurora-app-use1.demo.internal` — simple A-alias to us-east-1 ALB
   - `aurora-app-usw2.demo.internal` — simple A-alias to us-west-2 ALB
-- ARC health check IDs conditionally attached on second deployment pass (empty string = no health check)
+- Health check IDs conditionally attached (spread operator, only if non-empty string)
 - All alias targets use evaluateTargetHealth: true
 
 ### FR-12: ARC Region Switch Plan (Failover/Failback)
@@ -157,19 +159,19 @@ Combined dashboard (`${project}-combined`) with 7 widget areas:
 ### FR-13: CodeBuild Bootstrap
 
 - Single CDK stack deployed locally that creates CodeBuild project
-- Source uploaded via CDK BucketDeployment asset (excludes .git, node_modules, cdk.out, dist, .specs)
+- Source uploaded via CDK BucketDeployment asset (excludes .git, node_modules, cdk.out, cdk.out.*, dist, .specs)
 - CodeBuild triggered via Lambda-backed custom resource (onEvent starts build, isComplete polls status, 30s poll interval, 60min total timeout)
 - Artifact bucket encrypted with local CMK (key rotation enabled)
-- CodeBuild role scoped to: sts:AssumeRole on cdk-*, cloudformation:DescribeStacks/ListStacks/DescribeStackResources, ssm:GetParameter on cdk-bootstrap/*, ec2/rds/dsql describe ops, arc-region-switch list ops
-- buildspec.yml: npm ci, aws-cdk + ts-node global install, pip install Lambda deps, make deploy
-- CodeBuild image: aws/codebuild/standard:7.0, SMALL compute
+- CodeBuild role scoped to: sts:AssumeRole on cdk-*, cloudformation:DescribeStacks/ListStacks/DescribeStackResources, ssm:GetParameter on cdk-bootstrap/*, ec2/rds describe ops, arc-region-switch list ops
+- buildspec.yml: npm ci, aws-cdk + ts-node global install, pip install Lambda deps (iterates schema-migration, aurora-app, rpo-monitor, reconciliation, loadgen, dns-status — installs if requirements.txt exists), make deploy
+- CodeBuild image: aws/codebuild/standard:7.0, SMALL compute, 60-min timeout
 
 ### FR-14: GitHub Actions CI/CD
 
-- Build workflow: compile + test + synth on pushes
-- E2E workflow: deploy all stacks, run Synthetics, verify replication and metrics, cleanup on success
-- Cleanup workflow: manual trigger only
-- AWS OIDC authentication (no long-lived credentials)
+- `aurora-build.yml`: compile + test + synth on pushes to non-main branches touching aurora/**
+- `aurora-e2e.yml`: deploy all stacks via bootstrap, verify canaries, run load test + ARC failover exercise (4-step: deactivate e1 → activate e1 → deactivate w2 → activate w2), cleanup on success. 2h session (role-duration-seconds: 7200), account 123456789012
+- `aurora-cleanup.yml`: manual trigger only, runs cleanup.sh
+- AWS OIDC authentication (id-token: write, contents: read)
 
 ### FR-15: Projen Project Management
 
@@ -185,11 +187,11 @@ Combined dashboard (`${project}-combined`) with 7 widget areas:
 - Shell-based variable capture via `aws cloudformation describe-stacks`
 - PID-based `wait` for parallel failure propagation
 - VPC peering acceptance + secondary route creation via AWS CLI in Makefile
-- cleanup.sh for reliable teardown
+- cleanup.sh for reliable teardown (reverse order, global cluster detach with 60s wait)
 
 ### FR-17: Chaos Engineering (Amazon FIS)
 
-- 2 FIS experiment templates per region:
+- 2 FIS experiment templates per region (4 total):
   - Cross-region network disruption: `aws:network:route-table-disrupt-cross-region-connectivity` on subnets tagged ChaosAllowed=true
   - Aurora cluster failover: `aws:rds:failover-db-cluster` on clusters tagged ChaosAllowed=true
 - FIS experiment IAM role with ec2 describe/create/delete, rds failover/reboot, tag:GetResources, logs permissions
@@ -211,15 +213,14 @@ Combined dashboard (`${project}-combined`) with 7 widget areas:
 - Load generation Lambda (Python 3.12, 15-min timeout, 512MB, reserved concurrency 10)
 - Configurable via event: rps, duration, target, operation mix (insert,query,update,delete percentages)
 - Publishes CloudWatch metrics to `${project}/LoadTest` namespace: RequestsSent, Errors, AvgLatency, P99Latency
-- SSM Automation Document with String parameters: RequestsPerSecond, DurationSeconds, TargetApp, OperationMix
+- SSM Automation Document: async Lambda invocation via aws:executeScript (InvocationType=Event) + aws:sleep for duration
 - VPC-deployed with Lambda SG, AURORA_ALB_DNS env var
 
 ### FR-20: Security Compliance
 
 - cdk-nag AwsSolutionsChecks enabled via `-c nag=true` in bin/app.ts
 - Global NagSuppressions applied per stack: IAM4, IAM5, L1, RDS10, RDS11, SMG4
-- Checkov `.checkov.yaml` at project root with documented skip rules
-- MIT-0 LICENSE, CONTRIBUTING.md, CODE_OF_CONDUCT.md
+- Checkov `.checkov.yaml` at project root with documented skip rules (CKV_AWS_116, CKV_AWS_173)
 
 ## Non-Functional Requirements
 
@@ -271,4 +272,3 @@ Combined dashboard (`${project}-combined`) with 7 widget areas:
 - **Application-level connection pooling** — Lambda handles short-lived connections; no pgBouncer or similar
 - **Custom domain with public DNS** — uses private hosted zone only; no Route 53 public zone or domain registration
 - **Multi-account deployment** — single AWS account assumed for both regions
-- **DSQL** — no Aurora DSQL resources anywhere in this project despite the project name
