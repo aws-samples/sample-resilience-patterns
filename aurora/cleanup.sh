@@ -100,7 +100,25 @@ sleep 60
 aws rds delete-global-cluster --global-cluster-identifier "${GLOBAL_CLUSTER_ID}" --region "${PRIMARY_REGION}" 2>/dev/null || true
 
 echo "Destroying database secondary..."
-delete_stack "${PROJECT}-db-secondary" "${SECONDARY_REGION}"
+aws cloudformation delete-stack --stack-name "${PROJECT}-db-secondary" --region "${SECONDARY_REGION}" 2>/dev/null || true
+aws cloudformation wait stack-delete-complete --stack-name "${PROJECT}-db-secondary" --region "${SECONDARY_REGION}" 2>/dev/null || true
+# Check if delete failed (cluster already detached from global cluster)
+SEC_STATUS=$(aws cloudformation describe-stacks --stack-name "${PROJECT}-db-secondary" --region "${SECONDARY_REGION}" --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "GONE")
+if [ "${SEC_STATUS}" = "DELETE_FAILED" ]; then
+  echo "  Retrying with retain-resources..."
+  aws cloudformation delete-stack --stack-name "${PROJECT}-db-secondary" --region "${SECONDARY_REGION}" --retain-resources SecondaryClusterAF0232D7 2>/dev/null || true
+  aws cloudformation wait stack-delete-complete --stack-name "${PROJECT}-db-secondary" --region "${SECONDARY_REGION}" 2>/dev/null || true
+  # Clean up retained cluster
+  if [ -n "${SEC_CLUSTER_ID}" ]; then
+    echo "  Cleaning retained cluster ${SEC_CLUSTER_ID}..."
+    for inst in $(aws rds describe-db-instances --region ${SECONDARY_REGION} --query "DBInstances[?DBClusterIdentifier=='${SEC_CLUSTER_ID}'].DBInstanceIdentifier" --output text 2>/dev/null); do
+      aws rds delete-db-instance --db-instance-identifier "$inst" --skip-final-snapshot --region "${SECONDARY_REGION}" 2>/dev/null || true
+    done
+    sleep 60
+    aws rds delete-db-cluster --db-cluster-identifier "${SEC_CLUSTER_ID}" --skip-final-snapshot --region "${SECONDARY_REGION}" 2>/dev/null || true
+    sleep 60
+  fi
+fi
 
 echo "Destroying database primary..."
 delete_stack "${PROJECT}-db-primary" "${PRIMARY_REGION}"
