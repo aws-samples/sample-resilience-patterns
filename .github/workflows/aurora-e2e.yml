@@ -62,7 +62,7 @@ jobs:
             echo "  Waiting for plan execution to complete..."
             for i in $(seq 1 30); do
               STATUS=$(aws arc-region-switch list-plan-executions --plan-arn "$PLAN_ARN" --region us-east-1 \
-                --query "items[?executionId=='$1'].status" --output text 2>/dev/null || echo "UNKNOWN")
+                --query "items[?executionId=='$1'].executionState" --output text 2>/dev/null || echo "UNKNOWN")
               echo "  [$i] status=$STATUS"
               if echo "$STATUS" | grep -qi "succeeded\|failed\|completed"; then break; fi
               sleep 30
