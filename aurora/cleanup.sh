@@ -94,8 +94,8 @@ for member_arn in $(aws rds describe-global-clusters --global-cluster-identifier
       --region "${PRIMARY_REGION}" 2>/dev/null || true
   fi
 done
-echo "Waiting for detach to complete..."
-sleep 60
+echo "Waiting for detach to complete (90s)..."
+sleep 90
 
 aws rds delete-global-cluster --global-cluster-identifier "${GLOBAL_CLUSTER_ID}" --region "${PRIMARY_REGION}" 2>/dev/null || true
 
@@ -106,6 +106,7 @@ aws cloudformation wait stack-delete-complete --stack-name "${PROJECT}-db-second
 SEC_STATUS=$(aws cloudformation describe-stacks --stack-name "${PROJECT}-db-secondary" --region "${SECONDARY_REGION}" --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "GONE")
 if [ "${SEC_STATUS}" = "DELETE_FAILED" ]; then
   echo "  Retrying with retain-resources..."
+  SEC_CLUSTER_ID=$(aws rds describe-db-clusters --region ${SECONDARY_REGION} --query "DBClusters[?contains(DBClusterIdentifier,'aurora-db-secondary')].DBClusterIdentifier" --output text 2>/dev/null || echo "")
   aws cloudformation delete-stack --stack-name "${PROJECT}-db-secondary" --region "${SECONDARY_REGION}" --retain-resources SecondaryClusterAF0232D7 2>/dev/null || true
   aws cloudformation wait stack-delete-complete --stack-name "${PROJECT}-db-secondary" --region "${SECONDARY_REGION}" 2>/dev/null || true
   # Clean up retained cluster
