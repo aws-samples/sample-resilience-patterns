@@ -117,8 +117,12 @@ if [ "${SEC_STATUS}" = "DELETE_FAILED" ]; then
     done
     sleep 60
     aws rds delete-db-cluster --db-cluster-identifier "${SEC_CLUSTER_ID}" --skip-final-snapshot --region "${SECONDARY_REGION}" 2>/dev/null || true
-    sleep 60
+    echo "  Waiting for cluster deletion..."
+    aws rds wait db-cluster-deleted --db-cluster-identifier "${SEC_CLUSTER_ID}" --region "${SECONDARY_REGION}" 2>/dev/null || sleep 120
   fi
+  # Final retry now that cluster is gone
+  aws cloudformation delete-stack --stack-name "${PROJECT}-db-secondary" --region "${SECONDARY_REGION}" 2>/dev/null || true
+  aws cloudformation wait stack-delete-complete --stack-name "${PROJECT}-db-secondary" --region "${SECONDARY_REGION}" 2>/dev/null || true
 fi
 
 echo "Destroying database primary..."
