@@ -178,7 +178,8 @@ deploy-monitoring: deploy-database deploy-failover-plan
 		-c dbClusterIdentifier=$$S_CLUSTER_ID -c remoteDbClusterIdentifier=$$P_CLUSTER_ID -c globalClusterIdentifier=$(GLOBAL_CLUSTER_ID) -c secretArn=$$P_SECRET -c encryptionKeyArn=$$S_KEY \
 		-c remoteSecretArn=$$P_SECRET -c remoteEncryptionKeyArn=$$P_KEY -c remoteDbHost=$$P_WRITER \
 		-c planArn=$$PLAN_ARN -c hostedZoneId=$$HZ_ID -c recordName=aurora-app.demo.internal \
-		--require-approval never -o cdk.out.mon-s & \n	wait
+		--require-approval never -o cdk.out.mon-s & \
+	wait
 
 deploy-reconciliation: deploy-database
 	@echo "═══ Deploying reconciliation stacks ═══"
@@ -192,7 +193,8 @@ deploy-reconciliation: deploy-database
 	$(CDK) deploy $(PROJECT)-reconciliation-secondary $(CDK_COMMON) -c stack=reconciliation-secondary \
 		$(call vpc_ctx,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION)) \
 		-c secretArn=$$P_SECRET -c encryptionKeyArn=$$S_KEY \
-		--require-approval never -o cdk.out.recon-s & \n	wait
+		--require-approval never -o cdk.out.recon-s & \
+	wait
 
 deploy-loadgen: deploy-aurora-app
 	@echo "═══ Deploying load generation ═══"
