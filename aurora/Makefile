@@ -166,19 +166,19 @@ deploy-monitoring: deploy-database deploy-failover-plan
 	S_CLUSTER_ID=$(call so,$(PROJECT)-db-secondary,$(SECONDARY_REGION),ClusterIdentifier) && \
 	S_READER=$(call so,$(PROJECT)-db-secondary,$(SECONDARY_REGION),ClusterReaderEndpoint) && \
 	P_WRITER=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),ClusterEndpoint) && \
-	HZ_ID=$(call so,$(PROJECT)-dns,$(PRIMARY_REGION),HostedZoneIdOutput) && \
-	$(CDK) deploy $(PROJECT)-monitoring-primary $(CDK_COMMON) -c stack=monitoring-primary \
+	export PLAN_ARN HZ_ID P_SECRET P_KEY S_KEY P_CLUSTER_ID S_CLUSTER_ID S_READER P_WRITER && \
+	( $(CDK) deploy $(PROJECT)-monitoring-primary $(CDK_COMMON) -c stack=monitoring-primary \
 		$(call vpc_ctx,$(PROJECT)-vpc-primary,$(PRIMARY_REGION)) \
 		-c dbClusterIdentifier=$$P_CLUSTER_ID -c remoteDbClusterIdentifier=$$S_CLUSTER_ID -c globalClusterIdentifier=$(GLOBAL_CLUSTER_ID) -c secretArn=$$P_SECRET -c encryptionKeyArn=$$P_KEY \
 		-c remoteSecretArn=$$P_SECRET -c remoteEncryptionKeyArn=$$S_KEY -c remoteDbHost=$$S_READER \
 		-c planArn=$$PLAN_ARN -c hostedZoneId=$$HZ_ID -c recordName=aurora-app.demo.internal \
-		--require-approval never -o cdk.out.mon-p & \
-	$(CDK) deploy $(PROJECT)-monitoring-secondary $(CDK_COMMON) -c stack=monitoring-secondary \
+		--require-approval never -o cdk.out.mon-p ) & \
+	( $(CDK) deploy $(PROJECT)-monitoring-secondary $(CDK_COMMON) -c stack=monitoring-secondary \
 		$(call vpc_ctx,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION)) \
 		-c dbClusterIdentifier=$$S_CLUSTER_ID -c remoteDbClusterIdentifier=$$P_CLUSTER_ID -c globalClusterIdentifier=$(GLOBAL_CLUSTER_ID) -c secretArn=$$P_SECRET -c encryptionKeyArn=$$S_KEY \
 		-c remoteSecretArn=$$P_SECRET -c remoteEncryptionKeyArn=$$P_KEY -c remoteDbHost=$$P_WRITER \
 		-c planArn=$$PLAN_ARN -c hostedZoneId=$$HZ_ID -c recordName=aurora-app.demo.internal \
-		--require-approval never -o cdk.out.mon-s & \
+		--require-approval never -o cdk.out.mon-s ) & \
 	wait
 
 deploy-reconciliation: deploy-database
@@ -186,14 +186,15 @@ deploy-reconciliation: deploy-database
 	@P_SECRET=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),SecretArn) && \
 	P_KEY=$(call so,$(PROJECT)-db-primary,$(PRIMARY_REGION),EncryptionKeyArn) && \
 	S_KEY=$(call so,$(PROJECT)-db-secondary,$(SECONDARY_REGION),EncryptionKeyArn) && \
-	$(CDK) deploy $(PROJECT)-reconciliation-primary $(CDK_COMMON) -c stack=reconciliation-primary \
+	export P_SECRET P_KEY S_KEY && \
+	( $(CDK) deploy $(PROJECT)-reconciliation-primary $(CDK_COMMON) -c stack=reconciliation-primary \
 		$(call vpc_ctx,$(PROJECT)-vpc-primary,$(PRIMARY_REGION)) \
 		-c secretArn=$$P_SECRET -c encryptionKeyArn=$$P_KEY \
-		--require-approval never -o cdk.out.recon-p & \
-	$(CDK) deploy $(PROJECT)-reconciliation-secondary $(CDK_COMMON) -c stack=reconciliation-secondary \
+		--require-approval never -o cdk.out.recon-p ) & \
+	( $(CDK) deploy $(PROJECT)-reconciliation-secondary $(CDK_COMMON) -c stack=reconciliation-secondary \
 		$(call vpc_ctx,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION)) \
 		-c secretArn=$$P_SECRET -c encryptionKeyArn=$$S_KEY \
-		--require-approval never -o cdk.out.recon-s & \
+		--require-approval never -o cdk.out.recon-s ) & \
 	wait
 
 deploy-loadgen: deploy-aurora-app
