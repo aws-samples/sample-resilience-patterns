@@ -99,7 +99,7 @@ export class BootstrapStack extends cdk.Stack {
       },
       role: buildRole,
       buildSpec: codebuild.BuildSpec.fromSourceFilename('buildspec.yml'),
-      timeout: cdk.Duration.minutes(60),
+      timeout: cdk.Duration.minutes(150),
     });
 
     const triggerFn = new lambda.Function(this, 'BuildTriggerFunction', {
@@ -130,7 +130,7 @@ export class BootstrapStack extends cdk.Stack {
       onEventHandler: triggerFn,
       isCompleteHandler: isCompleteFn,
       queryInterval: cdk.Duration.seconds(30),
-      totalTimeout: cdk.Duration.minutes(60),
+      totalTimeout: cdk.Duration.minutes(150),
     });
 
     const buildTrigger = new cdk.CustomResource(this, 'BuildTrigger', {

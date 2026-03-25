@@ -35,13 +35,17 @@ jobs:
         run: echo "id=$(aws sts get-caller-identity --query Account --output text)" >> $GITHUB_OUTPUT
       - name: Deploy via bootstrap
         run: |
-          npx cdk deploy aurora-bootstrap \
-            -c stack=bootstrap \
-            -c project=aurora \
-            -c primaryRegion=us-east-1 \
-            -c secondaryRegion=us-west-2 \
-            -c accountId=${{ steps.account.outputs.id }} \
-            --require-approval never
+          ACCOUNT_ID=${{ steps.account.outputs.id }}
+          CDK_ARGS="-c stack=bootstrap -c project=aurora -c primaryRegion=us-east-1 -c secondaryRegion=us-west-2 -c accountId=$ACCOUNT_ID --require-approval never"
+          deploy_bootstrap() { npx cdk deploy aurora-bootstrap $CDK_ARGS; }
+          # First attempt may timeout on fresh deploy (Aurora creation ~15min pushes CodeBuild past timeout).
+          # On retry most stacks exist so CodeBuild finishes in ~5min.
+          if ! deploy_bootstrap; then
+            echo "First attempt failed — cleaning up and retrying..."
+            aws cloudformation delete-stack --stack-name aurora-bootstrap --region us-east-1 2>/dev/null || true
+            aws cloudformation wait stack-delete-complete --stack-name aurora-bootstrap --region us-east-1 2>/dev/null || true
+            deploy_bootstrap
+          fi
       - name: Verify canaries
         run: |
           echo "Waiting for canaries to run..."
