@@ -44,7 +44,7 @@ deploy-vpc-peering: deploy-vpc
 	SECONDARY_VPC_ID=$(call so,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION),VpcId) && \
 	$(CDK) deploy $(PROJECT)-vpc-peering $(CDK_COMMON) -c stack=vpc-peering \
 		-c primaryVpcId=$$PRIMARY_VPC_ID -c secondaryVpcId=$$SECONDARY_VPC_ID \
-		--require-approval never && \
+		--require-approval never -o cdk.out.peer && \
 	PEERING_ID=$(call so,$(PROJECT)-vpc-peering,$(PRIMARY_REGION),PeeringConnectionId) && \
 	aws ec2 accept-vpc-peering-connection --vpc-peering-connection-id $$PEERING_ID --region $(SECONDARY_REGION) 2>/dev/null || true && \
 	SEC_RT_IDS=$$(aws ec2 describe-route-tables --filters Name=vpc-id,Values=$$SECONDARY_VPC_ID --region $(SECONDARY_REGION) --query "RouteTables[].RouteTableId" --output text) && \
@@ -60,7 +60,7 @@ deploy-database: deploy-vpc
 	@echo "═══ Deploying Aurora Global Database ═══"
 	@$(CDK) deploy $(PROJECT)-db-primary $(CDK_COMMON) -c stack=db-primary \
 		$(call vpc_ctx,$(PROJECT)-vpc-primary,$(PRIMARY_REGION)) \
-		--require-approval never && \
+		--require-approval never -o cdk.out.db-p && \
 	$(CDK) deploy $(PROJECT)-db-secondary $(CDK_COMMON) -c stack=db-secondary \
 		$(call vpc_ctx,$(PROJECT)-vpc-secondary,$(SECONDARY_REGION)) \
 		--require-approval never -o cdk.out.db-s
@@ -200,7 +200,7 @@ deploy-loadgen: deploy-aurora-app
 	$(CDK) deploy $(PROJECT)-loadgen $(CDK_COMMON) -c stack=loadgen \
 		$(call vpc_ctx,$(PROJECT)-vpc-primary,$(PRIMARY_REGION)) \
 		-c auroraAlbDns=$$P_ALB \
-		--require-approval never
+		--require-approval never -o cdk.out.loadgen
 
 deploy-chaos: deploy-vpc deploy-database
 	@echo "═══ Deploying chaos stacks ═══"
