@@ -84,7 +84,7 @@ for attempt in 1 2 3; do
       aws cloudformation delete-stack --stack-name "${stack}" --region "${region}" 2>/dev/null || true
       aws cloudformation wait stack-delete-complete --stack-name "${stack}" --region "${region}" 2>/dev/null || true
       # If still failed, retain the problematic resources
-      local status2
+      
       status2=$(aws cloudformation describe-stacks --stack-name "${stack}" --region "${region}" --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "GONE")
       if [ "${status2}" = "DELETE_FAILED" ]; then
         failed_res=$(aws cloudformation describe-stack-events --stack-name "${stack}" --region "${region}" \
