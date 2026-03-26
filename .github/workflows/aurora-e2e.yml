@@ -54,6 +54,12 @@ jobs:
             aws synthetics get-canary-runs --name $canary --region us-east-1 --query 'CanaryRuns[0].Status.State' --output text || true
           done
 
+      - name: Refresh AWS credentials (pre-failover)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::563688183446:role/github-actions-aurora
+          aws-region: us-east-1
+
       - name: Load test + failover exercise
         run: |
           ACCOUNT_ID=${{ steps.account.outputs.id }}
@@ -110,6 +116,13 @@ jobs:
           wait_for_plan "$EXEC_ID"
 
           echo "Failover exercise complete"
+      - name: Refresh AWS credentials (pre-cleanup)
+        if: always()
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::563688183446:role/github-actions-aurora
+          aws-region: us-east-1
+
       - name: Cleanup on success
         if: success()
         run: ./cleanup.sh
