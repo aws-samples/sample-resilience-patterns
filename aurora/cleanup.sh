@@ -58,33 +58,38 @@ for region in ${PRIMARY_REGION} ${SECONDARY_REGION}; do
 done
 wait
 
-# --- Retry any DELETE_FAILED stacks with retain-resources ---
+# --- Retry any DELETE_FAILED stacks until clean ---
 echo "Phase 4: Retrying failed stacks..."
-for region in ${PRIMARY_REGION} ${SECONDARY_REGION}; do
-  for stack in $(aws cloudformation list-stacks --stack-status-filter DELETE_FAILED \
-    --region "${region}" --query "StackSummaries[?starts_with(StackName,'${PROJECT}-')].StackName" --output text 2>/dev/null); do
-    echo "  Retrying ${stack} (${region})"
-    # Clean orphan ENIs
-    vpc_id=$(aws cloudformation describe-stacks --stack-name "${stack}" --region "${region}" \
-      --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" --output text 2>/dev/null || echo "")
-    if [ -n "${vpc_id}" ]; then
-      for eni in $(aws ec2 describe-network-interfaces --filters Name=vpc-id,Values="${vpc_id}" Name=status,Values=available \
-        --region "${region}" --query "NetworkInterfaces[].NetworkInterfaceId" --output text 2>/dev/null); do
-        aws ec2 delete-network-interface --network-interface-id "${eni}" --region "${region}" 2>/dev/null || true
-      done
-    fi
-    # Get all resource IDs to retain
-    failed=$(aws cloudformation describe-stack-events --stack-name "${stack}" --region "${region}" \
-      --query "StackEvents[?ResourceStatus=='DELETE_FAILED'].LogicalResourceId" --output text 2>/dev/null || echo "")
-    if [ -n "${failed}" ]; then
-      aws cloudformation delete-stack --stack-name "${stack}" --region "${region}" --retain-resources ${failed} 2>/dev/null || true
-    else
-      aws cloudformation delete-stack --stack-name "${stack}" --region "${region}" 2>/dev/null || true
-    fi
-    aws cloudformation wait stack-delete-complete --stack-name "${stack}" --region "${region}" 2>/dev/null || true &
+for attempt in 1 2 3; do
+  failed_stacks=""
+  for region in ${PRIMARY_REGION} ${SECONDARY_REGION}; do
+    for stack in $(aws cloudformation list-stacks --stack-status-filter DELETE_FAILED \
+      --region "${region}" --query "StackSummaries[?starts_with(StackName,'${PROJECT}-')].StackName" --output text 2>/dev/null); do
+      failed_stacks="yes"
+      echo "  [attempt ${attempt}] ${stack} (${region})"
+      # Clean orphan ENIs
+      vpc_id=$(aws cloudformation describe-stacks --stack-name "${stack}" --region "${region}" \
+        --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" --output text 2>/dev/null || echo "")
+      if [ -n "${vpc_id}" ]; then
+        for eni in $(aws ec2 describe-network-interfaces --filters Name=vpc-id,Values="${vpc_id}" Name=status,Values=available \
+          --region "${region}" --query "NetworkInterfaces[].NetworkInterfaceId" --output text 2>/dev/null); do
+          aws ec2 delete-network-interface --network-interface-id "${eni}" --region "${region}" 2>/dev/null || true
+        done
+      fi
+      # Retain all failed resources and delete
+      failed_res=$(aws cloudformation describe-stack-events --stack-name "${stack}" --region "${region}" \
+        --query "StackEvents[?ResourceStatus=='DELETE_FAILED'].LogicalResourceId" --output text 2>/dev/null || echo "")
+      if [ -n "${failed_res}" ]; then
+        aws cloudformation delete-stack --stack-name "${stack}" --region "${region}" --retain-resources ${failed_res} 2>/dev/null || true
+      else
+        aws cloudformation delete-stack --stack-name "${stack}" --region "${region}" 2>/dev/null || true
+      fi
+      aws cloudformation wait stack-delete-complete --stack-name "${stack}" --region "${region}" 2>/dev/null || true
+    done
   done
+  [ -z "${failed_stacks}" ] && break
+  sleep 10
 done
-wait
 
 # --- Bootstrap ---
 echo "Phase 5: Bootstrap..."
