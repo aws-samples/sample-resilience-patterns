@@ -15,6 +15,21 @@ delete_stack() {
   echo "  Deleting ${stack} in ${region}..."
   aws cloudformation delete-stack --stack-name "${stack}" --region "${region}" 2>/dev/null || true
   aws cloudformation wait stack-delete-complete --stack-name "${stack}" --region "${region}" 2>/dev/null || true
+  # Retry if DELETE_FAILED (e.g. orphan ENIs blocking SG/subnet deletion)
+  local status
+  status=$(aws cloudformation describe-stacks --stack-name "${stack}" --region "${region}" --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "GONE")
+  if [ "${status}" = "DELETE_FAILED" ]; then
+    echo "  ${stack} DELETE_FAILED — cleaning ENIs and retrying..."
+    local vpc_id
+    vpc_id=$(aws cloudformation describe-stacks --stack-name "${stack}" --region "${region}" --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" --output text 2>/dev/null || echo "")
+    if [ -n "${vpc_id}" ]; then
+      for eni in $(aws ec2 describe-network-interfaces --filters Name=vpc-id,Values="${vpc_id}" Name=status,Values=available --region "${region}" --query "NetworkInterfaces[].NetworkInterfaceId" --output text 2>/dev/null); do
+        aws ec2 delete-network-interface --network-interface-id "${eni}" --region "${region}" 2>/dev/null || true
+      done
+    fi
+    aws cloudformation delete-stack --stack-name "${stack}" --region "${region}" 2>/dev/null || true
+    aws cloudformation wait stack-delete-complete --stack-name "${stack}" --region "${region}" 2>/dev/null || true
+  fi
 }
 
 stack_exists() {
