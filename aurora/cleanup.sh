@@ -80,15 +80,20 @@ for attempt in 1 2 3; do
         done
         sleep 5
       fi
-      # Retain all failed resources and delete
-      failed_res=$(aws cloudformation describe-stack-events --stack-name "${stack}" --region "${region}" \
-        --query "StackEvents[?ResourceStatus=='DELETE_FAILED'].LogicalResourceId" --output text 2>/dev/null || echo "")
-      if [ -n "${failed_res}" ]; then
-        aws cloudformation delete-stack --stack-name "${stack}" --region "${region}" --retain-resources ${failed_res} 2>/dev/null || true
-      else
-        aws cloudformation delete-stack --stack-name "${stack}" --region "${region}" 2>/dev/null || true
-      fi
+      # Try plain delete first (blockers may be gone now)
+      aws cloudformation delete-stack --stack-name "${stack}" --region "${region}" 2>/dev/null || true
       aws cloudformation wait stack-delete-complete --stack-name "${stack}" --region "${region}" 2>/dev/null || true
+      # If still failed, retain the problematic resources
+      local status2
+      status2=$(aws cloudformation describe-stacks --stack-name "${stack}" --region "${region}" --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "GONE")
+      if [ "${status2}" = "DELETE_FAILED" ]; then
+        failed_res=$(aws cloudformation describe-stack-events --stack-name "${stack}" --region "${region}" \
+          --query "StackEvents[?ResourceStatus=='DELETE_FAILED'].LogicalResourceId" --output text 2>/dev/null || echo "")
+        if [ -n "${failed_res}" ]; then
+          aws cloudformation delete-stack --stack-name "${stack}" --region "${region}" --retain-resources ${failed_res} 2>/dev/null || true
+          aws cloudformation wait stack-delete-complete --stack-name "${stack}" --region "${region}" 2>/dev/null || true
+        fi
+      fi
     done
   done
   [ -z "${failed_stacks}" ] && break
