@@ -22,14 +22,9 @@ define vpc_ctx
 -c syntheticsSgId=$(call so,$(1),$(2),SyntheticsSgId)
 endef
 
-deploy: deploy-vpc
-	@$(MAKE) deploy-vpc-peering deploy-database --jobs 2
-	@$(MAKE) deploy-schema
-	@$(MAKE) deploy-aurora-app
-	@$(MAKE) deploy-dns
-	@$(MAKE) deploy-failover-plan
-	@$(MAKE) deploy-dns-with-hc
-	@$(MAKE) deploy-synthetics deploy-monitoring deploy-reconciliation deploy-loadgen deploy-chaos --jobs 5
+deploy: deploy-vpc deploy-vpc-peering deploy-database deploy-schema \
+	deploy-aurora-app deploy-dns deploy-failover-plan deploy-dns-with-hc \
+	deploy-synthetics deploy-monitoring deploy-reconciliation deploy-loadgen deploy-chaos
 	@echo "✅ All stacks deployed"
 
 deploy-vpc:
