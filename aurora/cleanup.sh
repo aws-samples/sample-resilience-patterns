@@ -7,6 +7,10 @@ SECONDARY_REGION="${SECONDARY_REGION:-us-west-2}"
 GLOBAL_CLUSTER_ID="${PROJECT}-global-cluster"
 REGIONS="${PRIMARY_REGION} ${SECONDARY_REGION}"
 
+# Explicit stack list from CDK app (only these stacks will be touched)
+PRIMARY_STACKS="${PROJECT}-chaos-primary ${PROJECT}-reconciliation-primary ${PROJECT}-monitoring-primary ${PROJECT}-loadgen ${PROJECT}-synthetics-primary ${PROJECT}-failover-plan ${PROJECT}-dns ${PROJECT}-aurora-app-primary ${PROJECT}-schema ${PROJECT}-db-primary ${PROJECT}-vpc-peering ${PROJECT}-vpc-primary ${PROJECT}-bootstrap"
+SECONDARY_STACKS="${PROJECT}-chaos-secondary ${PROJECT}-reconciliation-secondary ${PROJECT}-monitoring-secondary ${PROJECT}-synthetics-secondary ${PROJECT}-aurora-app-secondary ${PROJECT}-db-secondary ${PROJECT}-vpc-secondary"
+
 echo "🧹 Cleaning up ${PROJECT} stacks..."
 
 # --- Helper: get physical resource IDs from a stack by resource type ---
@@ -49,12 +53,11 @@ wait
 
 # --- Phase 1: Fire delete on ALL stacks + nuke RDS (all parallel) ---
 echo "Phase 1: Deleting everything..."
-for region in ${REGIONS}; do
-  for stack in $(aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE ROLLBACK_COMPLETE \
-    --region "${region}" --query "StackSummaries[?starts_with(StackName,'${PROJECT}-')].StackName" --output text 2>/dev/null); do
-    echo "  Stack: ${stack} (${region})"
-    aws cloudformation delete-stack --stack-name "${stack}" --region "${region}" 2>/dev/null || true &
-  done
+for stack in ${PRIMARY_STACKS}; do
+  aws cloudformation delete-stack --stack-name "${stack}" --region "${PRIMARY_REGION}" 2>/dev/null || true &
+done
+for stack in ${SECONDARY_STACKS}; do
+  aws cloudformation delete-stack --stack-name "${stack}" --region "${SECONDARY_REGION}" 2>/dev/null || true &
 done
 # Kill RDS instances from stacks
 for entry in ${RDS_INSTANCES}; do
@@ -79,11 +82,11 @@ wait
 
 # --- Phase 2: Wait for stacks + RDS in parallel ---
 echo "Phase 2: Waiting..."
-for region in ${REGIONS}; do
-  for stack in $(aws cloudformation list-stacks --stack-status-filter DELETE_IN_PROGRESS \
-    --region "${region}" --query "StackSummaries[?starts_with(StackName,'${PROJECT}-')].StackName" --output text 2>/dev/null); do
-    aws cloudformation wait stack-delete-complete --stack-name "${stack}" --region "${region}" 2>/dev/null || true &
-  done
+for stack in ${PRIMARY_STACKS}; do
+  aws cloudformation wait stack-delete-complete --stack-name "${stack}" --region "${PRIMARY_REGION}" 2>/dev/null || true &
+done
+for stack in ${SECONDARY_STACKS}; do
+  aws cloudformation wait stack-delete-complete --stack-name "${stack}" --region "${SECONDARY_REGION}" 2>/dev/null || true &
 done
 for entry in ${RDS_CLUSTERS}; do
   cluster="${entry%%:*}"; region="${entry##*:}"
@@ -123,11 +126,13 @@ wait
 echo "Phase 4: Retrying failed stacks..."
 for attempt in 1 2 3 4 5; do
   failed_list=""
-  for region in ${REGIONS}; do
-    for stack in $(aws cloudformation list-stacks --stack-status-filter DELETE_FAILED \
-      --region "${region}" --query "StackSummaries[?starts_with(StackName,'${PROJECT}-')].StackName" --output text 2>/dev/null); do
-      failed_list="${failed_list} ${stack}:${region}"
-    done
+  for stack in ${PRIMARY_STACKS}; do
+    s=$(aws cloudformation describe-stacks --stack-name "${stack}" --region "${PRIMARY_REGION}"       --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "GONE")
+    [ "${s}" = "DELETE_FAILED" ] && failed_list="${failed_list} ${stack}:${PRIMARY_REGION}"
+  done
+  for stack in ${SECONDARY_STACKS}; do
+    s=$(aws cloudformation describe-stacks --stack-name "${stack}" --region "${SECONDARY_REGION}"       --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "GONE")
+    [ "${s}" = "DELETE_FAILED" ] && failed_list="${failed_list} ${stack}:${SECONDARY_REGION}"
   done
   [ -z "${failed_list}" ] && break
   echo "  [attempt ${attempt}] $(echo ${failed_list} | wc -w | tr -d ' ') stacks"
