@@ -15,6 +15,17 @@ VPC_ID_PRIMARY=$(aws cloudformation describe-stacks --stack-name "${PROJECT}-vpc
 VPC_ID_SECONDARY=$(aws cloudformation describe-stacks --stack-name "${PROJECT}-vpc-secondary" --region "${SECONDARY_REGION}" \
   --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" --output text 2>/dev/null || echo "")
 
+# --- Phase 0: Remove VPC config from all Lambdas (triggers immediate ENI cleanup) ---
+echo "Phase 0: Detaching Lambdas from VPCs..."
+for region in ${REGIONS}; do
+  for fn in $(aws lambda list-functions --region "${region}" \
+    --query "Functions[?VpcConfig.VpcId!='' && contains(FunctionName,'${PROJECT}')].FunctionName" --output text 2>/dev/null); do
+    echo "  ${fn} (${region})"
+    aws lambda update-function-configuration --function-name "${fn}" --vpc-config SubnetIds=[],SecurityGroupIds=[] --region "${region}" 2>/dev/null || true &
+  done
+done
+wait
+
 # --- Phase 1: Fire delete on ALL stacks + nuke RDS (all parallel) ---
 echo "Phase 1: Deleting everything..."
 for region in ${REGIONS}; do
