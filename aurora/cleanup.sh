@@ -18,8 +18,10 @@ VPC_ID_SECONDARY=$(aws cloudformation describe-stacks --stack-name "${PROJECT}-v
 # --- Phase 0: Remove VPC config from all Lambdas (triggers immediate ENI cleanup) ---
 echo "Phase 0: Detaching Lambdas from VPCs..."
 for region in ${REGIONS}; do
+  vpc_id=$([ "${region}" = "${PRIMARY_REGION}" ] && echo "${VPC_ID_PRIMARY}" || echo "${VPC_ID_SECONDARY}")
+  [ -z "${vpc_id}" ] && continue
   for fn in $(aws lambda list-functions --region "${region}" \
-    --query "Functions[?VpcConfig.VpcId!='' && contains(FunctionName,'${PROJECT}')].FunctionName" --output text 2>/dev/null); do
+    --query "Functions[?VpcConfig.VpcId=='${vpc_id}'].FunctionName" --output text 2>/dev/null); do
     echo "  ${fn} (${region})"
     aws lambda update-function-configuration --function-name "${fn}" --vpc-config SubnetIds=[],SecurityGroupIds=[] --region "${region}" 2>/dev/null || true &
   done
