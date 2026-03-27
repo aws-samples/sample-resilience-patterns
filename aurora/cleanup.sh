@@ -9,11 +9,30 @@ REGIONS="${PRIMARY_REGION} ${SECONDARY_REGION}"
 
 echo "🧹 Cleaning up ${PROJECT} stacks..."
 
-# --- Collect VPC IDs before deleting stacks ---
+# --- Helper: get physical resource IDs from a stack by resource type ---
+stack_resources() {
+  local stack=$1 region=$2 type=$3
+  aws cloudformation describe-stack-resources --stack-name "${stack}" --region "${region}" \
+    --query "StackResources[?ResourceType=='${type}'].PhysicalResourceId" --output text 2>/dev/null || echo ""
+}
+
+# --- Collect VPC IDs and RDS resource IDs from stacks before deleting ---
 VPC_ID_PRIMARY=$(aws cloudformation describe-stacks --stack-name "${PROJECT}-vpc-primary" --region "${PRIMARY_REGION}" \
   --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" --output text 2>/dev/null || echo "")
 VPC_ID_SECONDARY=$(aws cloudformation describe-stacks --stack-name "${PROJECT}-vpc-secondary" --region "${SECONDARY_REGION}" \
   --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" --output text 2>/dev/null || echo "")
+
+RDS_INSTANCES=""
+RDS_CLUSTERS=""
+for stack_region in "${PROJECT}-db-primary:${PRIMARY_REGION}" "${PROJECT}-db-secondary:${SECONDARY_REGION}"; do
+  stack="${stack_region%%:*}"; region="${stack_region##*:}"
+  for inst in $(stack_resources "${stack}" "${region}" "AWS::RDS::DBInstance"); do
+    RDS_INSTANCES="${RDS_INSTANCES} ${inst}:${region}"
+  done
+  for cluster in $(stack_resources "${stack}" "${region}" "AWS::RDS::DBCluster"); do
+    RDS_CLUSTERS="${RDS_CLUSTERS} ${cluster}:${region}"
+  done
+done
 
 # --- Phase 0: Remove VPC config from all Lambdas (triggers immediate ENI cleanup) ---
 echo "Phase 0: Detaching Lambdas from VPCs..."
@@ -36,24 +55,24 @@ for region in ${REGIONS}; do
     echo "  Stack: ${stack} (${region})"
     aws cloudformation delete-stack --stack-name "${stack}" --region "${region}" 2>/dev/null || true &
   done
-  for inst in $(aws rds describe-db-instances --region "${region}" \
-    --query "DBInstances[?contains(DBClusterIdentifier,'${PROJECT}')].DBInstanceIdentifier" --output text 2>/dev/null); do
-    echo "  Instance: ${inst} (${region})"
-    aws rds delete-db-instance --db-instance-identifier "${inst}" --skip-final-snapshot --region "${region}" 2>/dev/null || true &
-  done
 done
+# Kill RDS instances from stacks
+for entry in ${RDS_INSTANCES}; do
+  inst="${entry%%:*}"; region="${entry##*:}"
+  echo "  Instance: ${inst} (${region})"
+  aws rds delete-db-instance --db-instance-identifier "${inst}" --skip-final-snapshot --region "${region}" 2>/dev/null || true &
+done
+# Detach from global cluster + kill clusters
 for arn in $(aws rds describe-global-clusters --global-cluster-identifier "${GLOBAL_CLUSTER_ID}" --region "${PRIMARY_REGION}" \
   --query "GlobalClusters[0].GlobalClusterMembers[].DBClusterArn" --output text 2>/dev/null || echo ""); do
   [ -z "${arn}" ] || [ "${arn}" = "None" ] && continue
   aws rds remove-from-global-cluster --global-cluster-identifier "${GLOBAL_CLUSTER_ID}" \
     --db-cluster-identifier "${arn}" --region "${PRIMARY_REGION}" 2>/dev/null || true
 done
-for region in ${REGIONS}; do
-  for cluster in $(aws rds describe-db-clusters --region "${region}" \
-    --query "DBClusters[?contains(DBClusterIdentifier,'${PROJECT}')].DBClusterIdentifier" --output text 2>/dev/null); do
-    echo "  Cluster: ${cluster} (${region})"
-    aws rds delete-db-cluster --db-cluster-identifier "${cluster}" --skip-final-snapshot --region "${region}" 2>/dev/null || true &
-  done
+for entry in ${RDS_CLUSTERS}; do
+  cluster="${entry%%:*}"; region="${entry##*:}"
+  echo "  Cluster: ${cluster} (${region})"
+  aws rds delete-db-cluster --db-cluster-identifier "${cluster}" --skip-final-snapshot --region "${region}" 2>/dev/null || true &
 done
 aws rds delete-global-cluster --global-cluster-identifier "${GLOBAL_CLUSTER_ID}" --region "${PRIMARY_REGION}" 2>/dev/null || true
 wait
@@ -65,11 +84,11 @@ for region in ${REGIONS}; do
     --region "${region}" --query "StackSummaries[?starts_with(StackName,'${PROJECT}-')].StackName" --output text 2>/dev/null); do
     aws cloudformation wait stack-delete-complete --stack-name "${stack}" --region "${region}" 2>/dev/null || true &
   done
-  for cluster in $(aws rds describe-db-clusters --region "${region}" \
-    --query "DBClusters[?contains(DBClusterIdentifier,'${PROJECT}')].DBClusterIdentifier" --output text 2>/dev/null); do
-    echo "  Waiting for cluster ${cluster}..."
-    aws rds wait db-cluster-deleted --db-cluster-identifier "${cluster}" --region "${region}" 2>/dev/null || true &
-  done
+done
+for entry in ${RDS_CLUSTERS}; do
+  cluster="${entry%%:*}"; region="${entry##*:}"
+  echo "  Waiting for cluster ${cluster}..."
+  aws rds wait db-cluster-deleted --db-cluster-identifier "${cluster}" --region "${region}" 2>/dev/null || true &
 done
 wait
 aws rds delete-global-cluster --global-cluster-identifier "${GLOBAL_CLUSTER_ID}" --region "${PRIMARY_REGION}" 2>/dev/null || true
@@ -116,10 +135,8 @@ for attempt in 1 2 3 4 5; do
   for entry in ${failed_list}; do
     stack="${entry%%:*}"; region="${entry##*:}"
     (
-      # Try plain delete first
       aws cloudformation delete-stack --stack-name "${stack}" --region "${region}" 2>/dev/null || true
       aws cloudformation wait stack-delete-complete --stack-name "${stack}" --region "${region}" 2>/dev/null || true
-      # If still failed, retain problematic resources
       s=$(aws cloudformation describe-stacks --stack-name "${stack}" --region "${region}" \
         --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "GONE")
       if [ "${s}" = "DELETE_FAILED" ]; then
