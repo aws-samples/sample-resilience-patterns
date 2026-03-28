@@ -38,14 +38,33 @@ for stack_region in "${PROJECT}-db-primary:${PRIMARY_REGION}" "${PROJECT}-db-sec
   done
 done
 
-# --- Phase 0: Remove VPC config from all Lambdas (triggers immediate ENI cleanup) ---
-echo "Phase 0: Detaching Lambdas from VPCs..."
+# --- Phase 0: Stop canaries + remove VPC config from Lambdas (triggers ENI cleanup) ---
+echo "Phase 0: Stopping canaries and detaching Lambdas from VPCs..."
+for region in ${REGIONS}; do
+  for canary in $(aws synthetics describe-canaries --region "${region}" \
+    --query "Canaries[].Name" --output text 2>/dev/null); do
+    # Only stop canaries whose Lambda is in our VPCs
+    fn_arn=$(aws synthetics get-canary --name "${canary}" --region "${region}" \
+      --query "Canary.EngineArn" --output text 2>/dev/null || echo "")
+    if [ -n "${fn_arn}" ]; then
+      fn_vpc=$(aws lambda get-function-configuration --function-name "${fn_arn}" --region "${region}" \
+        --query "VpcConfig.VpcId" --output text 2>/dev/null || echo "")
+      vpc_id=$([ "${region}" = "${PRIMARY_REGION}" ] && echo "${VPC_ID_PRIMARY}" || echo "${VPC_ID_SECONDARY}")
+      if [ "${fn_vpc}" = "${vpc_id}" ]; then
+        echo "  Stopping canary: ${canary} (${region})"
+        aws synthetics stop-canary --name "${canary}" --region "${region}" 2>/dev/null || true
+      fi
+    fi
+  done
+done
+# Wait for canaries to stop
+sleep 10
 for region in ${REGIONS}; do
   vpc_id=$([ "${region}" = "${PRIMARY_REGION}" ] && echo "${VPC_ID_PRIMARY}" || echo "${VPC_ID_SECONDARY}")
   [ -z "${vpc_id}" ] && continue
   for fn in $(aws lambda list-functions --region "${region}" \
     --query "Functions[?VpcConfig.VpcId=='${vpc_id}'].FunctionName" --output text 2>/dev/null); do
-    echo "  ${fn} (${region})"
+    echo "  Detaching: ${fn} (${region})"
     aws lambda update-function-configuration --function-name "${fn}" --vpc-config SubnetIds=[],SecurityGroupIds=[] --region "${region}" 2>/dev/null || true &
   done
 done
@@ -136,6 +155,16 @@ for attempt in 1 2 3 4 5; do
   done
   [ -z "${failed_list}" ] && break
   echo "  [attempt ${attempt}] $(echo ${failed_list} | wc -w | tr -d ' ') stacks"
+
+  # Clean ENIs before retrying (canary ENIs may have appeared since Phase 3)
+  for region in ${REGIONS}; do
+    vpc_id=$([ "${region}" = "${PRIMARY_REGION}" ] && echo "${VPC_ID_PRIMARY}" || echo "${VPC_ID_SECONDARY}")
+    [ -z "${vpc_id}" ] && continue
+    for eni in $(aws ec2 describe-network-interfaces --filters Name=vpc-id,Values="${vpc_id}" Name=status,Values=available \
+      --region "${region}" --query "NetworkInterfaces[].NetworkInterfaceId" --output text 2>/dev/null); do
+      aws ec2 delete-network-interface --network-interface-id "${eni}" --region "${region}" 2>/dev/null || true
+    done
+  done
 
   for entry in ${failed_list}; do
     stack="${entry%%:*}"; region="${entry##*:}"
