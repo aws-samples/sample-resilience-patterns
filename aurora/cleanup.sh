@@ -107,6 +107,18 @@ done
 for stack in ${SECONDARY_STACKS}; do
   aws cloudformation wait stack-delete-complete --stack-name "${stack}" --region "${SECONDARY_REGION}" 2>/dev/null || true &
 done
+# Wait for instances first (must finish before clusters can delete)
+for entry in ${RDS_INSTANCES}; do
+  inst="${entry%%:*}"; region="${entry##*:}"
+  aws rds wait db-instance-deleted --db-instance-identifier "${inst}" --region "${region}" 2>/dev/null || true &
+done
+wait
+# Re-issue cluster deletes (may have failed earlier if instances were still deleting)
+for entry in ${RDS_CLUSTERS}; do
+  cluster="${entry%%:*}"; region="${entry##*:}"
+  aws rds delete-db-cluster --db-cluster-identifier "${cluster}" --skip-final-snapshot --region "${region}" 2>/dev/null || true
+done
+# Now wait for clusters
 for entry in ${RDS_CLUSTERS}; do
   cluster="${entry%%:*}"; region="${entry##*:}"
   echo "  Waiting for cluster ${cluster}..."
