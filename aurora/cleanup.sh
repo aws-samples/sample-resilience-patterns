@@ -168,15 +168,21 @@ for attempt in 1 2 3 4 5; do
   [ -z "${failed_list}" ] && break
   echo "  [attempt ${attempt}] $(echo ${failed_list} | wc -w | tr -d ' ') stacks"
 
-  # Clean ENIs before retrying (canary ENIs may have appeared since Phase 3)
+  # Clean ENIs before retrying — wait until VPCs are empty (canary ENIs release async)
   for region in ${REGIONS}; do
     vpc_id=$([ "${region}" = "${PRIMARY_REGION}" ] && echo "${VPC_ID_PRIMARY}" || echo "${VPC_ID_SECONDARY}")
     [ -z "${vpc_id}" ] && continue
-    for eni in $(aws ec2 describe-network-interfaces --filters Name=vpc-id,Values="${vpc_id}" Name=status,Values=available \
-      --region "${region}" --query "NetworkInterfaces[].NetworkInterfaceId" --output text 2>/dev/null); do
-      aws ec2 delete-network-interface --network-interface-id "${eni}" --region "${region}" 2>/dev/null || true
-    done
+    for _ in $(seq 1 18); do  # 18 × 10s = 3 min max per region
+      enis=$(aws ec2 describe-network-interfaces --filters Name=vpc-id,Values="${vpc_id}" \
+        --region "${region}" --query "NetworkInterfaces[].NetworkInterfaceId" --output text 2>/dev/null)
+      [ -z "${enis}" ] && break
+      for eni in ${enis}; do
+        aws ec2 delete-network-interface --network-interface-id "${eni}" --region "${region}" 2>/dev/null || true
+      done
+      sleep 10
+    done &
   done
+  wait
 
   for entry in ${failed_list}; do
     stack="${entry%%:*}"; region="${entry##*:}"
