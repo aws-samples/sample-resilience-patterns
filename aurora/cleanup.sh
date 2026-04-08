@@ -204,4 +204,14 @@ for attempt in 1 2 3 4 5; do
 done
 
 rm -rf cdk.out cdk.out.*/
+
+# Final wait — catch any stacks still deleting
+for stack in ${PRIMARY_STACKS}; do
+  aws cloudformation wait stack-delete-complete --stack-name "${stack}" --region "${PRIMARY_REGION}" 2>/dev/null || true &
+done
+for stack in ${SECONDARY_STACKS}; do
+  aws cloudformation wait stack-delete-complete --stack-name "${stack}" --region "${SECONDARY_REGION}" 2>/dev/null || true &
+done
+wait
+
 echo "✅ Cleanup complete"
