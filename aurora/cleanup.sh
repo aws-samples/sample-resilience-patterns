@@ -205,11 +205,23 @@ done
 
 rm -rf cdk.out cdk.out.*/
 
-# Final wait — catch any stacks still deleting
+# Final pass — retain-resources on anything still DELETE_FAILED, then wait
 for stack in ${PRIMARY_STACKS}; do
+  s=$(aws cloudformation describe-stacks --stack-name "${stack}" --region "${PRIMARY_REGION}" --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "GONE")
+  if [ "${s}" = "DELETE_FAILED" ]; then
+    res=$(aws cloudformation describe-stack-events --stack-name "${stack}" --region "${PRIMARY_REGION}" \
+      --query "StackEvents[?ResourceStatus=='DELETE_FAILED' && LogicalResourceId!='${stack}'].LogicalResourceId" --output text 2>/dev/null || echo "")
+    [ -n "${res}" ] && aws cloudformation delete-stack --stack-name "${stack}" --region "${PRIMARY_REGION}" --retain-resources ${res} 2>/dev/null || true
+  fi
   aws cloudformation wait stack-delete-complete --stack-name "${stack}" --region "${PRIMARY_REGION}" 2>/dev/null || true &
 done
 for stack in ${SECONDARY_STACKS}; do
+  s=$(aws cloudformation describe-stacks --stack-name "${stack}" --region "${SECONDARY_REGION}" --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "GONE")
+  if [ "${s}" = "DELETE_FAILED" ]; then
+    res=$(aws cloudformation describe-stack-events --stack-name "${stack}" --region "${SECONDARY_REGION}" \
+      --query "StackEvents[?ResourceStatus=='DELETE_FAILED' && LogicalResourceId!='${stack}'].LogicalResourceId" --output text 2>/dev/null || echo "")
+    [ -n "${res}" ] && aws cloudformation delete-stack --stack-name "${stack}" --region "${SECONDARY_REGION}" --retain-resources ${res} 2>/dev/null || true
+  fi
   aws cloudformation wait stack-delete-complete --stack-name "${stack}" --region "${SECONDARY_REGION}" 2>/dev/null || true &
 done
 wait
