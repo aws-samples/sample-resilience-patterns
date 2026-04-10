@@ -49,7 +49,7 @@ for region in ${REGIONS}; do
   vpc_id=$([ "${region}" = "${PRIMARY_REGION}" ] && echo "${VPC_ID_PRIMARY}" || echo "${VPC_ID_SECONDARY}")
   [ -z "${vpc_id}" ] && continue
   for canary in $(aws synthetics describe-canaries --region "${region}" \
-    --query "Canaries[].Name" --output text 2>/dev/null); do
+    --query "Canaries[].Name" --output text 2>/dev/null || echo ""); do
     fn_arn=$(aws synthetics get-canary --name "${canary}" --region "${region}" \
       --query "Canary.EngineArn" --output text 2>/dev/null || echo "")
     if [ -n "${fn_arn}" ]; then
@@ -67,7 +67,7 @@ for region in ${REGIONS}; do
   vpc_id=$([ "${region}" = "${PRIMARY_REGION}" ] && echo "${VPC_ID_PRIMARY}" || echo "${VPC_ID_SECONDARY}")
   [ -z "${vpc_id}" ] && continue
   for fn in $(aws lambda list-functions --region "${region}" \
-    --query "Functions[?VpcConfig.VpcId=='${vpc_id}'].FunctionName" --output text 2>/dev/null); do
+    --query "Functions[?VpcConfig.VpcId=='${vpc_id}'].FunctionName" --output text 2>/dev/null || echo ""); do
     echo "  Detaching: ${fn} (${region})"
     aws lambda update-function-configuration --function-name "${fn}" --vpc-config SubnetIds=[],SecurityGroupIds=[] --region "${region}" 2>/dev/null || true &
   done
@@ -135,7 +135,7 @@ for region in ${REGIONS}; do
   # Wait until VPC has zero ENIs (up to 5 min)
   for _ in $(seq 1 30); do
     enis=$(aws ec2 describe-network-interfaces --filters Name=vpc-id,Values="${vpc_id}" \
-      --region "${region}" --query "NetworkInterfaces[].NetworkInterfaceId" --output text 2>/dev/null)
+      --region "${region}" --query "NetworkInterfaces[].NetworkInterfaceId" --output text 2>/dev/null || echo "")
     [ -z "${enis}" ] && break
     for eni in ${enis}; do
       aws ec2 delete-network-interface --network-interface-id "${eni}" --region "${region}" 2>/dev/null || true
