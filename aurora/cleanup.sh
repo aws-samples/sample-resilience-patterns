@@ -43,21 +43,17 @@ for stack_region in "${PROJECT}-db-primary:${PRIMARY_REGION}" "${PROJECT}-db-sec
   done
 done
 
-# --- Phase 0: Delete canary Lambda functions directly (starts ENI release immediately) ---
-echo "Phase 0: Deleting canary Lambdas to start ENI release..."
+# --- Phase 0: Delete canary Lambdas + synthetics stacks FIRST (starts ENI release timer) ---
+echo "Phase 0: Deleting canary Lambdas and synthetics stacks..."
 for region in ${REGIONS}; do
   vpc_id=$([ "${region}" = "${PRIMARY_REGION}" ] && echo "${VPC_ID_PRIMARY}" || echo "${VPC_ID_SECONDARY}")
   [ -z "${vpc_id}" ] && continue
   for fn in $(aws lambda list-functions --region "${region}" \
     --query "Functions[?VpcConfig.VpcId=='${vpc_id}' && starts_with(FunctionName,'cwsyn-')].FunctionName" --output text 2>/dev/null || echo ""); do
-    echo "  Deleting: ${fn} (${region})"
+    echo "  Deleting Lambda: ${fn} (${region})"
     aws lambda delete-function --function-name "${fn}" --region "${region}" 2>/dev/null || true &
   done
 done
-wait
-
-# --- Phase 1: Delete synthetics stacks FIRST (starts ENI release timer) ---
-echo "Phase 1: Deleting synthetics stacks first..."
 aws cloudformation delete-stack --stack-name "${PROJECT}-synthetics-primary" --region "${PRIMARY_REGION}" 2>/dev/null || true &
 aws cloudformation delete-stack --stack-name "${PROJECT}-synthetics-secondary" --region "${SECONDARY_REGION}" 2>/dev/null || true &
 wait
@@ -65,8 +61,8 @@ aws cloudformation wait stack-delete-complete --stack-name "${PROJECT}-synthetic
 aws cloudformation wait stack-delete-complete --stack-name "${PROJECT}-synthetics-secondary" --region "${SECONDARY_REGION}" 2>/dev/null || true &
 wait
 
-# --- Phase 2: Delete all other non-VPC stacks + nuke RDS ---
-echo "Phase 2: Deleting remaining stacks + RDS..."
+# --- Phase 1: Delete all other non-VPC stacks + nuke RDS ---
+echo "Phase 1: Deleting remaining stacks + RDS..."
 for stack in ${NON_VPC_PRIMARY}; do
   aws cloudformation delete-stack --stack-name "${stack}" --region "${PRIMARY_REGION}" 2>/dev/null || true &
 done
@@ -93,7 +89,7 @@ aws rds delete-global-cluster --global-cluster-identifier "${GLOBAL_CLUSTER_ID}"
 wait
 
 # --- Phase 2: Wait for non-VPC stacks + RDS ---
-echo "Phase 3: Waiting for stacks + RDS..."
+echo "Phase 2: Waiting for stacks + RDS..."
 for stack in ${NON_VPC_PRIMARY}; do
   aws cloudformation wait stack-delete-complete --stack-name "${stack}" --region "${PRIMARY_REGION}" 2>/dev/null || true &
 done
@@ -119,7 +115,7 @@ wait
 aws rds delete-global-cluster --global-cluster-identifier "${GLOBAL_CLUSTER_ID}" --region "${PRIMARY_REGION}" 2>/dev/null || true
 
 # --- Phase 3: Clean ENIs then delete VPC stacks ---
-echo "Phase 4: Cleaning ENIs and deleting VPC stacks..."
+echo "Phase 3: Cleaning ENIs and deleting VPC stacks..."
 for region in ${REGIONS}; do
   vpc_id=$([ "${region}" = "${PRIMARY_REGION}" ] && echo "${VPC_ID_PRIMARY}" || echo "${VPC_ID_SECONDARY}")
   [ -z "${vpc_id}" ] && continue
