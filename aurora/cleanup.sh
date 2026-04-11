@@ -43,33 +43,15 @@ for stack_region in "${PROJECT}-db-primary:${PRIMARY_REGION}" "${PROJECT}-db-sec
   done
 done
 
-# --- Phase 0: Stop canaries + remove VPC config from Lambdas ---
-echo "Phase 0: Stopping canaries and detaching Lambdas from VPCs..."
-for region in ${REGIONS}; do
-  vpc_id=$([ "${region}" = "${PRIMARY_REGION}" ] && echo "${VPC_ID_PRIMARY}" || echo "${VPC_ID_SECONDARY}")
-  [ -z "${vpc_id}" ] && continue
-  for canary in $(aws synthetics describe-canaries --region "${region}" \
-    --query "Canaries[].Name" --output text 2>/dev/null || echo ""); do
-    fn_arn=$(aws synthetics get-canary --name "${canary}" --region "${region}" \
-      --query "Canary.EngineArn" --output text 2>/dev/null || echo "")
-    if [ -n "${fn_arn}" ]; then
-      fn_vpc=$(aws lambda get-function-configuration --function-name "${fn_arn}" --region "${region}" \
-        --query "VpcConfig.VpcId" --output text 2>/dev/null || echo "")
-      if [ "${fn_vpc}" = "${vpc_id}" ]; then
-        echo "  Stopping canary: ${canary} (${region})"
-        aws synthetics stop-canary --name "${canary}" --region "${region}" 2>/dev/null || true
-      fi
-    fi
-  done
-done
-sleep 10
+# --- Phase 0: Delete canary Lambda functions directly (starts ENI release immediately) ---
+echo "Phase 0: Deleting canary Lambdas to start ENI release..."
 for region in ${REGIONS}; do
   vpc_id=$([ "${region}" = "${PRIMARY_REGION}" ] && echo "${VPC_ID_PRIMARY}" || echo "${VPC_ID_SECONDARY}")
   [ -z "${vpc_id}" ] && continue
   for fn in $(aws lambda list-functions --region "${region}" \
-    --query "Functions[?VpcConfig.VpcId=='${vpc_id}'].FunctionName" --output text 2>/dev/null || echo ""); do
-    echo "  Detaching: ${fn} (${region})"
-    aws lambda update-function-configuration --function-name "${fn}" --vpc-config SubnetIds=[],SecurityGroupIds=[] --region "${region}" 2>/dev/null || true &
+    --query "Functions[?VpcConfig.VpcId=='${vpc_id}' && starts_with(FunctionName,'cwsyn-')].FunctionName" --output text 2>/dev/null || echo ""); do
+    echo "  Deleting: ${fn} (${region})"
+    aws lambda delete-function --function-name "${fn}" --region "${region}" 2>/dev/null || true &
   done
 done
 wait
