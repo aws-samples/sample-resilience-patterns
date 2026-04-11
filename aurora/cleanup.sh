@@ -141,8 +141,8 @@ echo "Phase 4: Cleaning ENIs and deleting VPC stacks..."
 for region in ${REGIONS}; do
   vpc_id=$([ "${region}" = "${PRIMARY_REGION}" ] && echo "${VPC_ID_PRIMARY}" || echo "${VPC_ID_SECONDARY}")
   [ -z "${vpc_id}" ] && continue
-  # Wait until VPC has zero ENIs (up to 20 min — Lambda ENI release can take this long)
-  for _ in $(seq 1 120); do
+  # Wait until VPC has zero ENIs (up to 30 min — Synthetics Lambda ENIs can take this long)
+  for _ in $(seq 1 180); do
     enis=$(aws ec2 describe-network-interfaces --filters Name=vpc-id,Values="${vpc_id}" \
       --region "${region}" --query "NetworkInterfaces[].NetworkInterfaceId" --output text 2>/dev/null || echo "")
     [ -z "${enis}" ] && break
