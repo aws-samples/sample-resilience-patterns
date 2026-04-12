@@ -127,4 +127,8 @@ jobs:
 
       - name: Cleanup on success
         if: success()
-        run: ./cleanup.sh
+        run: |
+          ./cleanup.sh
+          # Second pass — catches VPC stacks that failed due to slow ENI release
+          sleep 60
+          ./cleanup.sh
