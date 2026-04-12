@@ -114,37 +114,50 @@ done
 wait
 aws rds delete-global-cluster --global-cluster-identifier "${GLOBAL_CLUSTER_ID}" --region "${PRIMARY_REGION}" 2>/dev/null || true
 
-# --- Phase 3: Clean ENIs then delete VPC stacks ---
+# --- Phase 3: Clean ENIs then delete VPC stacks (retry until clean) ---
 echo "Phase 3: Cleaning ENIs and deleting VPC stacks..."
-for region in ${REGIONS}; do
-  vpc_id=$([ "${region}" = "${PRIMARY_REGION}" ] && echo "${VPC_ID_PRIMARY}" || echo "${VPC_ID_SECONDARY}")
-  [ -z "${vpc_id}" ] && continue
-  # Wait until VPC has zero ENIs (up to 30 min — Synthetics Lambda ENIs can take this long)
-  for _ in $(seq 1 180); do
-    enis=$(aws ec2 describe-network-interfaces --filters Name=vpc-id,Values="${vpc_id}" \
-      --region "${region}" --query "NetworkInterfaces[].NetworkInterfaceId" --output text 2>/dev/null || echo "")
-    [ -z "${enis}" ] && break
-    for eni in ${enis}; do
-      aws ec2 delete-network-interface --network-interface-id "${eni}" --region "${region}" 2>/dev/null || true
-    done
-    sleep 10
+ALL_VPC_STACKS="${VPC_STACKS_PRIMARY} ${VPC_STACKS_SECONDARY}"
+for attempt in $(seq 1 5); do
+  # Check if any VPC stacks still exist
+  remaining=""
+  for stack in ${VPC_STACKS_PRIMARY}; do
+    s=$(aws cloudformation describe-stacks --stack-name "${stack}" --region "${PRIMARY_REGION}" --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "GONE")
+    [ "${s}" != "GONE" ] && remaining="${remaining} ${stack}:${PRIMARY_REGION}"
   done
+  for stack in ${VPC_STACKS_SECONDARY}; do
+    s=$(aws cloudformation describe-stacks --stack-name "${stack}" --region "${SECONDARY_REGION}" --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "GONE")
+    [ "${s}" != "GONE" ] && remaining="${remaining} ${stack}:${SECONDARY_REGION}"
+  done
+  [ -z "${remaining}" ] && break
+  echo "  [attempt ${attempt}] $(echo ${remaining} | wc -w | tr -d ' ') VPC stacks remaining"
+
+  # Wait for ENIs to be gone, deleting as they become available
+  for region in ${REGIONS}; do
+    vpc_id=$([ "${region}" = "${PRIMARY_REGION}" ] && echo "${VPC_ID_PRIMARY}" || echo "${VPC_ID_SECONDARY}")
+    [ -z "${vpc_id}" ] && continue
+    for _ in $(seq 1 60); do  # 60 × 10s = 10 min per attempt
+      enis=$(aws ec2 describe-network-interfaces --filters Name=vpc-id,Values="${vpc_id}" \
+        --region "${region}" --query "NetworkInterfaces[].NetworkInterfaceId" --output text 2>/dev/null || echo "")
+      [ -z "${enis}" ] && break
+      for eni in ${enis}; do
+        aws ec2 delete-network-interface --network-interface-id "${eni}" --region "${region}" 2>/dev/null || true
+      done
+      sleep 10
+    done
+  done
+
+  # Delete/retry VPC stacks
+  for entry in ${remaining}; do
+    stack="${entry%%:*}"; region="${entry##*:}"
+    aws cloudformation delete-stack --stack-name "${stack}" --region "${region}" 2>/dev/null || true &
+  done
+  wait
+  for entry in ${remaining}; do
+    stack="${entry%%:*}"; region="${entry##*:}"
+    aws cloudformation wait stack-delete-complete --stack-name "${stack}" --region "${region}" 2>/dev/null || true &
+  done
+  wait
 done
-# Now delete VPC stacks (ENIs are gone, SGs/subnets should delete cleanly)
-for stack in ${VPC_STACKS_PRIMARY}; do
-  aws cloudformation delete-stack --stack-name "${stack}" --region "${PRIMARY_REGION}" 2>/dev/null || true &
-done
-for stack in ${VPC_STACKS_SECONDARY}; do
-  aws cloudformation delete-stack --stack-name "${stack}" --region "${SECONDARY_REGION}" 2>/dev/null || true &
-done
-wait
-for stack in ${VPC_STACKS_PRIMARY}; do
-  aws cloudformation wait stack-delete-complete --stack-name "${stack}" --region "${PRIMARY_REGION}" 2>/dev/null || true &
-done
-for stack in ${VPC_STACKS_SECONDARY}; do
-  aws cloudformation wait stack-delete-complete --stack-name "${stack}" --region "${SECONDARY_REGION}" 2>/dev/null || true &
-done
-wait
 
 rm -rf cdk.out cdk.out.*/
 echo "✅ Cleanup complete"
