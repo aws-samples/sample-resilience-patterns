@@ -113,6 +113,7 @@ export class SyntheticsStack extends cdk.Stack {
         schedule: synthetics.Schedule.rate(cdk.Duration.minutes(5)),
         artifactsBucketLocation: { bucket: artifactBucket },
         startAfterCreation: true,
+        provisionedResourceCleanup: true,
         vpc,
         vpcSubnets: { subnets: vpc.isolatedSubnets },
         securityGroups: [syntheticsSg],
