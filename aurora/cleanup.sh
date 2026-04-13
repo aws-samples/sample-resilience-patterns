@@ -117,7 +117,8 @@ aws rds delete-global-cluster --global-cluster-identifier "${GLOBAL_CLUSTER_ID}"
 # --- Phase 3: Clean ENIs then delete VPC stacks (retry until clean) ---
 echo "Phase 3: Cleaning ENIs and deleting VPC stacks..."
 ALL_VPC_STACKS="${VPC_STACKS_PRIMARY} ${VPC_STACKS_SECONDARY}"
-for attempt in $(seq 1 5); do
+PHASE3_START=$(date +%s)
+for attempt in $(seq 1 999); do
   # Check if any VPC stacks still exist
   remaining=""
   for stack in ${VPC_STACKS_PRIMARY}; do
@@ -129,13 +130,16 @@ for attempt in $(seq 1 5); do
     [ "${s}" != "GONE" ] && remaining="${remaining} ${stack}:${SECONDARY_REGION}"
   done
   [ -z "${remaining}" ] && break
+  # Time limit: 90 min total for Phase 3
+  elapsed=$(( $(date +%s) - PHASE3_START ))
+  if [ ${elapsed} -gt 5400 ]; then echo "  Phase 3 time limit (90 min) reached"; break; fi
   echo "  [attempt ${attempt}] $(echo ${remaining} | wc -w | tr -d ' ') VPC stacks remaining"
 
   # Wait for ENIs to be gone, deleting as they become available
   for region in ${REGIONS}; do
     vpc_id=$([ "${region}" = "${PRIMARY_REGION}" ] && echo "${VPC_ID_PRIMARY}" || echo "${VPC_ID_SECONDARY}")
     [ -z "${vpc_id}" ] && continue
-    for _ in $(seq 1 60); do  # 60 × 10s = 10 min per attempt
+    for _ in $(seq 1 12); do  # 12 × 10s = 2 min per attempt
       enis=$(aws ec2 describe-network-interfaces --filters Name=vpc-id,Values="${vpc_id}" \
         --region "${region}" --query "NetworkInterfaces[].NetworkInterfaceId" --output text 2>/dev/null || echo "")
       [ -z "${enis}" ] && break
