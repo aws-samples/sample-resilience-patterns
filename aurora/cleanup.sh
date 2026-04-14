@@ -136,6 +136,7 @@ for attempt in $(seq 1 999); do
   echo "  [attempt ${attempt}] $(echo ${remaining} | wc -w | tr -d ' ') VPC stacks remaining"
 
   # Wait for ENIs to be gone, deleting as they become available
+  all_enis_gone=true
   for region in ${REGIONS}; do
     vpc_id=$([ "${region}" = "${PRIMARY_REGION}" ] && echo "${VPC_ID_PRIMARY}" || echo "${VPC_ID_SECONDARY}")
     [ -z "${vpc_id}" ] && continue
@@ -148,19 +149,25 @@ for attempt in $(seq 1 999); do
       done
       sleep 10
     done
+    # Check if ENIs are actually gone
+    remaining_enis=$(aws ec2 describe-network-interfaces --filters Name=vpc-id,Values="${vpc_id}" \
+      --region "${region}" --query "length(NetworkInterfaces[])" --output text 2>/dev/null || echo "0")
+    [ "${remaining_enis}" != "0" ] && all_enis_gone=false
   done
 
-  # Delete/retry VPC stacks
-  for entry in ${remaining}; do
-    stack="${entry%%:*}"; region="${entry##*:}"
-    aws cloudformation delete-stack --stack-name "${stack}" --region "${region}" 2>/dev/null || true &
-  done
-  wait
-  for entry in ${remaining}; do
-    stack="${entry%%:*}"; region="${entry##*:}"
-    aws cloudformation wait stack-delete-complete --stack-name "${stack}" --region "${region}" 2>/dev/null || true &
-  done
-  wait
+  # Only attempt stack delete if all ENIs are gone OR stack hasn't been tried yet
+  if [ "${all_enis_gone}" = "true" ] || [ "${attempt}" = "1" ]; then
+    for entry in ${remaining}; do
+      stack="${entry%%:*}"; region="${entry##*:}"
+      aws cloudformation delete-stack --stack-name "${stack}" --region "${region}" 2>/dev/null || true &
+    done
+    wait
+    for entry in ${remaining}; do
+      stack="${entry%%:*}"; region="${entry##*:}"
+      aws cloudformation wait stack-delete-complete --stack-name "${stack}" --region "${region}" 2>/dev/null || true &
+    done
+    wait
+  fi
 done
 
 rm -rf cdk.out cdk.out.*/
