@@ -33,28 +33,43 @@ jobs:
       - name: Get account ID
         id: account
         run: echo "id=$(aws sts get-caller-identity --query Account --output text)" >> $GITHUB_OUTPUT
-      - name: Deploy via bootstrap
+      - name: Deploy via bootstrap (first attempt)
+        id: deploy1
+        continue-on-error: true
         run: |
           ACCOUNT_ID=${{ steps.account.outputs.id }}
-          CDK_ARGS="-c stack=bootstrap -c project=aurora -c primaryRegion=us-east-1 -c secondaryRegion=us-west-2 -c accountId=$ACCOUNT_ID --require-approval never"
-          deploy_bootstrap() { npx cdk deploy aurora-bootstrap $CDK_ARGS; }
-          # First attempt may timeout on fresh deploy (Aurora creation ~15min pushes CodeBuild past timeout).
-          # On retry most stacks exist so CodeBuild finishes in ~5min.
-          if ! deploy_bootstrap; then
-            echo "First attempt failed — waiting for stack to stabilize..."
-            # Wait for any in-progress operation to finish
-            aws cloudformation wait stack-rollback-complete --stack-name aurora-bootstrap --region us-east-1 2>/dev/null || true
+          npx cdk deploy aurora-bootstrap \
+            -c stack=bootstrap -c project=aurora -c primaryRegion=us-east-1 -c secondaryRegion=us-west-2 \
+            -c accountId=$ACCOUNT_ID --require-approval never
+
+      - name: Clean failed bootstrap
+        if: steps.deploy1.outcome == 'failure'
+        run: |
+          echo "Waiting for rollback..."
+          aws cloudformation wait stack-rollback-complete --stack-name aurora-bootstrap --region us-east-1 2>/dev/null || true
+          STATUS=$(aws cloudformation describe-stacks --stack-name aurora-bootstrap --region us-east-1 --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "GONE")
+          echo "Stack: $STATUS"
+          if [ "$STATUS" != "GONE" ]; then
+            aws cloudformation delete-stack --stack-name aurora-bootstrap --region us-east-1 2>/dev/null || true
             aws cloudformation wait stack-delete-complete --stack-name aurora-bootstrap --region us-east-1 2>/dev/null || true
-            # Delete if still exists
-            STATUS=$(aws cloudformation describe-stacks --stack-name aurora-bootstrap --region us-east-1 --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "GONE")
-            if [ "$STATUS" != "GONE" ]; then
-              echo "Stack in $STATUS — deleting..."
-              aws cloudformation delete-stack --stack-name aurora-bootstrap --region us-east-1 2>/dev/null || true
-              aws cloudformation wait stack-delete-complete --stack-name aurora-bootstrap --region us-east-1 2>/dev/null || true
-            fi
-            echo "Retrying deploy..."
-            deploy_bootstrap
           fi
+
+      - name: Refresh credentials for retry
+        if: steps.deploy1.outcome == 'failure'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::563688183446:role/github-actions-aurora
+          aws-region: us-east-1
+          role-duration-seconds: 7200
+
+      - name: Deploy via bootstrap (retry)
+        if: steps.deploy1.outcome == 'failure'
+        run: |
+          ACCOUNT_ID=${{ steps.account.outputs.id }}
+          npx cdk deploy aurora-bootstrap \
+            -c stack=bootstrap -c project=aurora -c primaryRegion=us-east-1 -c secondaryRegion=us-west-2 \
+            -c accountId=$ACCOUNT_ID --require-approval never
+
       - name: Verify canaries
         run: |
           echo "Waiting for canaries to run..."
