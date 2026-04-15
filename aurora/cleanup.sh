@@ -114,7 +114,31 @@ done
 wait
 aws rds delete-global-cluster --global-cluster-identifier "${GLOBAL_CLUSTER_ID}" --region "${PRIMARY_REGION}" 2>/dev/null || true
 
-# --- Phase 3: Clean ENIs then delete VPC stacks (retry until clean) ---
+# --- Phase 2b: Retry any DELETE_FAILED non-VPC stacks ---
+echo "Phase 2b: Retrying failed non-VPC stacks..."
+for stack in ${NON_VPC_PRIMARY}; do
+  s=$(aws cloudformation describe-stacks --stack-name "${stack}" --region "${PRIMARY_REGION}" --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "GONE")
+  if [ "${s}" = "DELETE_FAILED" ]; then
+    echo "  Retrying ${stack}"
+    res=$(aws cloudformation describe-stack-events --stack-name "${stack}" --region "${PRIMARY_REGION}" \
+      --query "StackEvents[?ResourceStatus=='DELETE_FAILED' && LogicalResourceId!='${stack}'].LogicalResourceId" --output text 2>/dev/null || echo "")
+    [ -n "${res}" ] && aws cloudformation delete-stack --stack-name "${stack}" --region "${PRIMARY_REGION}" --retain-resources ${res} 2>/dev/null || true
+    [ -z "${res}" ] && aws cloudformation delete-stack --stack-name "${stack}" --region "${PRIMARY_REGION}" 2>/dev/null || true
+    aws cloudformation wait stack-delete-complete --stack-name "${stack}" --region "${PRIMARY_REGION}" 2>/dev/null || true &
+  fi
+done
+for stack in ${NON_VPC_SECONDARY}; do
+  s=$(aws cloudformation describe-stacks --stack-name "${stack}" --region "${SECONDARY_REGION}" --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "GONE")
+  if [ "${s}" = "DELETE_FAILED" ]; then
+    echo "  Retrying ${stack}"
+    res=$(aws cloudformation describe-stack-events --stack-name "${stack}" --region "${SECONDARY_REGION}" \
+      --query "StackEvents[?ResourceStatus=='DELETE_FAILED' && LogicalResourceId!='${stack}'].LogicalResourceId" --output text 2>/dev/null || echo "")
+    [ -n "${res}" ] && aws cloudformation delete-stack --stack-name "${stack}" --region "${SECONDARY_REGION}" --retain-resources ${res} 2>/dev/null || true
+    [ -z "${res}" ] && aws cloudformation delete-stack --stack-name "${stack}" --region "${SECONDARY_REGION}" 2>/dev/null || true
+    aws cloudformation wait stack-delete-complete --stack-name "${stack}" --region "${SECONDARY_REGION}" 2>/dev/null || true &
+  fi
+done
+wait
 echo "Phase 3: Cleaning ENIs and deleting VPC stacks..."
 ALL_VPC_STACKS="${VPC_STACKS_PRIMARY} ${VPC_STACKS_SECONDARY}"
 PHASE3_START=$(date +%s)
@@ -171,4 +195,19 @@ for attempt in $(seq 1 999); do
 done
 
 rm -rf cdk.out cdk.out.*/
-echo "✅ Cleanup complete"
+
+# --- Final verification: fail if any stacks remain ---
+echo "Verifying cleanup..."
+ALL_STACKS="${NON_VPC_PRIMARY} ${NON_VPC_SECONDARY} ${VPC_STACKS_PRIMARY} ${VPC_STACKS_SECONDARY} ${PROJECT}-synthetics-primary ${PROJECT}-synthetics-secondary"
+leftover=""
+for stack in ${ALL_STACKS}; do
+  for region in ${PRIMARY_REGION} ${SECONDARY_REGION}; do
+    s=$(aws cloudformation describe-stacks --stack-name "${stack}" --region "${region}" --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "GONE")
+    [ "${s}" != "GONE" ] && leftover="${leftover} ${stack}(${region}:${s})"
+  done
+done
+if [ -n "${leftover}" ]; then
+  echo "❌ Cleanup incomplete — stacks remaining:${leftover}"
+  exit 1
+fi
+echo "✅ Cleanup complete — all stacks deleted"
