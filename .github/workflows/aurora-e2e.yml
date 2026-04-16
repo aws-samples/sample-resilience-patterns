@@ -33,37 +33,7 @@ jobs:
       - name: Get account ID
         id: account
         run: echo "id=$(aws sts get-caller-identity --query Account --output text)" >> $GITHUB_OUTPUT
-      - name: Deploy via bootstrap (first attempt)
-        id: deploy1
-        continue-on-error: true
-        run: |
-          ACCOUNT_ID=${{ steps.account.outputs.id }}
-          npx cdk deploy aurora-bootstrap \
-            -c stack=bootstrap -c project=aurora -c primaryRegion=us-east-1 -c secondaryRegion=us-west-2 \
-            -c accountId=$ACCOUNT_ID --require-approval never
-
-      - name: Clean failed bootstrap
-        if: steps.deploy1.outcome == 'failure'
-        run: |
-          echo "Waiting for rollback..."
-          aws cloudformation wait stack-rollback-complete --stack-name aurora-bootstrap --region us-east-1 2>/dev/null || true
-          STATUS=$(aws cloudformation describe-stacks --stack-name aurora-bootstrap --region us-east-1 --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "GONE")
-          echo "Stack: $STATUS"
-          if [ "$STATUS" != "GONE" ]; then
-            aws cloudformation delete-stack --stack-name aurora-bootstrap --region us-east-1 2>/dev/null || true
-            aws cloudformation wait stack-delete-complete --stack-name aurora-bootstrap --region us-east-1 2>/dev/null || true
-          fi
-
-      - name: Refresh credentials for retry
-        if: steps.deploy1.outcome == 'failure'
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::563688183446:role/github-actions-aurora
-          aws-region: us-east-1
-          role-duration-seconds: 7200
-
-      - name: Deploy via bootstrap (retry)
-        if: steps.deploy1.outcome == 'failure'
+      - name: Deploy via bootstrap
         run: |
           ACCOUNT_ID=${{ steps.account.outputs.id }}
           npx cdk deploy aurora-bootstrap \
