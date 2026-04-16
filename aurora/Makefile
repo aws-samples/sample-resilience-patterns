@@ -22,10 +22,26 @@ define vpc_ctx
 -c syntheticsSgId=$(call so,$(1),$(2),SyntheticsSgId)
 endef
 
-deploy: deploy-vpc deploy-vpc-peering deploy-database deploy-schema \
-	deploy-aurora-app deploy-dns deploy-failover-plan deploy-dns-with-hc \
-	deploy-synthetics deploy-monitoring deploy-reconciliation deploy-loadgen deploy-chaos
+deploy: deploy-vpc deploy-wave2 deploy-schema deploy-aurora-app \
+	deploy-dns deploy-failover-plan deploy-dns-with-hc deploy-wave3
 	@echo "✅ All stacks deployed"
+
+# Wave 2: vpc-peering + database in parallel (both depend only on VPCs)
+deploy-wave2:
+	@echo "═══ Wave 2: VPC peering + database (parallel) ═══"
+	@$(MAKE) deploy-vpc-peering &
+	@$(MAKE) deploy-database &
+	@wait
+
+# Wave 3: synthetics + monitoring + reconciliation + loadgen + chaos in parallel
+deploy-wave3:
+	@echo "═══ Wave 3: remaining stacks (parallel) ═══"
+	@$(MAKE) deploy-synthetics &
+	@$(MAKE) deploy-monitoring &
+	@$(MAKE) deploy-reconciliation &
+	@$(MAKE) deploy-loadgen &
+	@$(MAKE) deploy-chaos &
+	@wait
 
 deploy-vpc:
 	@echo "═══ Deploying VPCs ═══"
@@ -209,4 +225,4 @@ clean:
 
 .PHONY: deploy deploy-vpc deploy-vpc-peering deploy-database deploy-schema deploy-aurora-app \
 	deploy-dns deploy-failover-plan deploy-dns-with-hc deploy-synthetics deploy-monitoring \
-	deploy-reconciliation deploy-loadgen deploy-chaos clean
+	deploy-reconciliation deploy-loadgen deploy-chaos deploy-wave2 deploy-wave3 clean
