@@ -30,9 +30,7 @@ deploy: deploy-vpc deploy-wave2 deploy-schema deploy-aurora-app \
 # Wave 2: vpc-peering + database in parallel (both depend only on VPCs)
 deploy-wave2:
 	@echo "═══ Wave 2: VPC peering + database (parallel) ═══"
-	@$(MAKE) deploy-vpc-peering &
-	@$(MAKE) deploy-database &
-	@wait
+	@$(MAKE) deploy-vpc-peering & $(MAKE) deploy-database & wait
 
 deploy-vpc:
 	@echo "═══ Deploying VPCs ═══"
