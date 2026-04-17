@@ -119,18 +119,33 @@ export class BootstrapStack extends cdk.Stack {
       role: triggerRole,
       timeout: cdk.Duration.seconds(30),
       code: cdk.aws_lambda.Code.fromInline(`
-import boto3, json, cfnresponse
+import boto3, json, urllib.request
 def handler(event, context):
-    if event['RequestType'] == 'Delete':
-        cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
-        return
+    status = 'SUCCESS'
+    data = {}
+    physical_id = event.get('PhysicalResourceId', 'build-trigger')
     try:
-        cb = boto3.client('codebuild')
-        resp = cb.start_build(projectName=event['ResourceProperties']['ProjectName'])
-        build_id = resp['build']['id']
-        cfnresponse.send(event, context, cfnresponse.SUCCESS, {'BuildId': build_id}, build_id)
+        if event['RequestType'] != 'Delete':
+            cb = boto3.client('codebuild')
+            resp = cb.start_build(projectName=event['ResourceProperties']['ProjectName'])
+            physical_id = resp['build']['id']
+            data = {'BuildId': physical_id}
     except Exception as e:
-        cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
+        status = 'FAILED'
+        data = {'Error': str(e)}
+    body = json.dumps({
+        'Status': status,
+        'Reason': json.dumps(data),
+        'PhysicalResourceId': physical_id,
+        'StackId': event['StackId'],
+        'RequestId': event['RequestId'],
+        'LogicalResourceId': event['LogicalResourceId'],
+        'Data': data,
+    }).encode()
+    req = urllib.request.Request(event['ResponseURL'], data=body, method='PUT')
+    req.add_header('Content-Type', '')
+    req.add_header('Content-Length', str(len(body)))
+    urllib.request.urlopen(req)
 `),
     });
 
