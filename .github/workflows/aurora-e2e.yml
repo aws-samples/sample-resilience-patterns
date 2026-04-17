@@ -24,21 +24,101 @@ jobs:
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::190334034435:role/github-actions-aws-samples_sample-resilience-patterns
+          role-to-assume: arn:aws:iam::563688183446:role/github-actions-aurora
           aws-region: us-east-1
+          role-duration-seconds: 7200
 
       - run: npm ci
       - run: npx projen test
+      - name: Get account ID
+        id: account
+        run: echo "id=$(aws sts get-caller-identity --query Account --output text)" >> $GITHUB_OUTPUT
       - name: Deploy via bootstrap
-        run: npx cdk deploy aurora-bootstrap --require-approval never
+        run: |
+          ACCOUNT_ID=${{ steps.account.outputs.id }}
+          npx cdk deploy aurora-bootstrap \
+            -c stack=bootstrap -c project=aurora -c primaryRegion=us-east-1 -c secondaryRegion=us-west-2 \
+            -c accountId=$ACCOUNT_ID --require-approval never
+
       - name: Verify canaries
         run: |
           echo "Waiting for canaries to run..."
           sleep 360
-          # Check canary status
-          for region in us-east-1 us-west-2; do
-            aws synthetics get-canary --name aurora-al-${region: -4} --region $region --query 'Canary.Status.State' --output text || true
+          for canary in aurora-rd-local-e1 aurora-wr-local-e1; do
+            aws synthetics get-canary-runs --name $canary --region us-east-1 --query 'CanaryRuns[0].Status.State' --output text || true
           done
+
+      - name: Refresh AWS credentials (pre-failover)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::563688183446:role/github-actions-aurora
+          aws-region: us-east-1
+          role-duration-seconds: 7200
+
+      - name: Load test + failover exercise
+        run: |
+          ACCOUNT_ID=${{ steps.account.outputs.id }}
+          PLAN_ARN=$(aws cloudformation describe-stacks --stack-name aurora-failover-plan --region us-east-1 \
+            --query "Stacks[0].Outputs[?OutputKey=='PlanArn'].OutputValue" --output text)
+          SSM_DOC=$(aws cloudformation describe-stack-resources --stack-name aurora-loadgen --region us-east-1 \
+            --query "StackResources[?ResourceType=='AWS::SSM::Document'].PhysicalResourceId" --output text)
+
+          wait_for_plan() {
+            echo "  Waiting for plan execution to complete..."
+            for i in $(seq 1 30); do
+              STATUS=$(aws arc-region-switch list-plan-executions --plan-arn "$PLAN_ARN" --region us-east-1 \
+                --query "items[?executionId=='$1'].executionState" --output text 2>/dev/null || echo "UNKNOWN")
+              echo "  [$i] status=$STATUS"
+              if echo "$STATUS" | grep -qi "succeeded\|failed\|completed"; then break; fi
+              sleep 30
+            done
+          }
+
+          echo "Starting 1-min load test via SSM: $SSM_DOC"
+          aws ssm start-automation-execution \
+            --document-name "$SSM_DOC" \
+            --parameters '{"RequestsPerSecond":["10"],"DurationSeconds":["60"],"TargetApp":["aurora"],"OperationMix":["50,20,10,20"]}' \
+            --region us-east-1 || true
+
+          echo "Running ARC failover exercise..."
+
+          echo "1/4: Deactivate us-east-1"
+          EXEC_ID=$(aws arc-region-switch start-plan-execution \
+            --plan-arn "$PLAN_ARN" --target-region us-east-1 --action deactivate \
+            --region us-west-2 --query 'executionId' --output text)
+          echo "  Execution: $EXEC_ID"
+          wait_for_plan "$EXEC_ID"
+
+          echo "2/4: Activate us-east-1"
+          EXEC_ID=$(aws arc-region-switch start-plan-execution \
+            --plan-arn "$PLAN_ARN" --target-region us-east-1 --action activate \
+            --region us-east-1 --query 'executionId' --output text)
+          echo "  Execution: $EXEC_ID"
+          wait_for_plan "$EXEC_ID"
+
+          echo "3/4: Deactivate us-west-2"
+          EXEC_ID=$(aws arc-region-switch start-plan-execution \
+            --plan-arn "$PLAN_ARN" --target-region us-west-2 --action deactivate \
+            --region us-east-1 --query 'executionId' --output text)
+          echo "  Execution: $EXEC_ID"
+          wait_for_plan "$EXEC_ID"
+
+          echo "4/4: Activate us-west-2"
+          EXEC_ID=$(aws arc-region-switch start-plan-execution \
+            --plan-arn "$PLAN_ARN" --target-region us-west-2 --action activate \
+            --region us-west-2 --query 'executionId' --output text)
+          echo "  Execution: $EXEC_ID"
+          wait_for_plan "$EXEC_ID"
+
+          echo "Failover exercise complete"
+      - name: Refresh AWS credentials (pre-cleanup)
+        if: always()
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::563688183446:role/github-actions-aurora
+          aws-region: us-east-1
+          role-duration-seconds: 7200
+
       - name: Cleanup on success
         if: success()
         run: ./cleanup.sh

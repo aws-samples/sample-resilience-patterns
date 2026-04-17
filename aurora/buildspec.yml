@@ -1,0 +1,35 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+    commands:
+      - npm ci
+      - npm install -g aws-cdk ts-node
+  build:
+    commands:
+      - |
+        for dir in lambda/schema-migration lambda/aurora-app lambda/rpo-monitor lambda/reconciliation lambda/loadgen lambda/dns-status; do
+          if [ -f "$dir/requirements.txt" ]; then
+            echo "Installing deps for $dir..."
+            pip install -r "$dir/requirements.txt" -t "$dir/" --platform manylinux2014_x86_64 --implementation cp --python-version 3.12 --only-binary=:all: --quiet
+          fi
+        done
+      - make deploy
+  post_build:
+    commands:
+      - |
+        if [ "$CODEBUILD_BUILD_SUCCEEDING" = "1" ]; then
+          STATUS="SUCCESS"
+          DATA="Deploy completed successfully"
+        else
+          STATUS="FAILURE"
+          DATA="Deploy failed — check CodeBuild logs"
+        fi
+        # Signal the CloudFormation WaitCondition
+        if [ -n "$WAIT_HANDLE_URL" ]; then
+          curl -s -X PUT -H "Content-Type:" \
+            --data-binary "{\"Status\":\"$STATUS\",\"Reason\":\"$DATA\",\"UniqueId\":\"deploy\",\"Data\":\"$DATA\"}" \
+            "$WAIT_HANDLE_URL" || echo "Warning: failed to signal WaitCondition"
+        fi

@@ -1,0 +1,106 @@
+import * as cdk from 'aws-cdk-lib';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
+import * as path from 'path';
+
+import { importVpc, importSg, VpcImportProps } from './imports';
+
+export interface LoadGenStackProps extends cdk.StackProps {
+  readonly project: string;
+  readonly vpcImport: VpcImportProps;
+  readonly lambdaSgId: string;
+  readonly auroraAlbDns: string;
+}
+
+export class LoadGenStack extends cdk.Stack {
+  constructor(scope: cdk.App, id: string, props: LoadGenStackProps) {
+    super(scope, id, props);
+
+    const vpc = importVpc(this, props.vpcImport);
+    const lambdaSg = importSg(this, 'LambdaSg', props.lambdaSgId);
+
+    const loadGenFn = new lambda.Function(this, 'LoadGenFunction', {
+      functionName: `${props.project}-loadgen`,
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'loadgen')),
+      vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      securityGroups: [lambdaSg],
+      timeout: cdk.Duration.minutes(15),
+      memorySize: 512,
+      reservedConcurrentExecutions: 10,
+      environment: {
+        AURORA_ALB_DNS: props.auroraAlbDns,
+      },
+    });
+
+    loadGenFn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['cloudwatch:PutMetricData'],
+      resources: ['*'],
+    }));
+
+    const automationRole = new iam.Role(this, 'AutomationRole', {
+      assumedBy: new iam.ServicePrincipal('ssm.amazonaws.com'),
+    });
+
+    automationRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['lambda:InvokeFunction'],
+      resources: [loadGenFn.functionArn],
+    }));
+
+    const scriptCode = [
+      'def handler(event, context):',
+      '  import boto3, json',
+      '  client = boto3.client("lambda")',
+      '  payload = json.dumps({k: event[k] for k in ["rps","duration","target","mix"]})',
+      '  resp = client.invoke(FunctionName=event["FunctionName"], InvocationType="Event", Payload=payload)',
+      '  return {"StatusCode": resp["StatusCode"]}',
+    ].join('\n');
+
+    new ssm.CfnDocument(this, 'LoadGenDoc', {
+      documentType: 'Automation',
+      content: {
+        schemaVersion: '0.3',
+        description: 'Generate sustained CRUD load against Aurora app',
+        assumeRole: automationRole.roleArn,
+        parameters: {
+          RequestsPerSecond: { type: 'String', default: '10', description: 'Target RPS' },
+          DurationSeconds: { type: 'String', default: '300', description: 'Test duration in seconds' },
+          TargetApp: { type: 'String', default: 'aurora', description: 'Target application' },
+          OperationMix: { type: 'String', default: '50,20,10,20', description: 'insert,update,delete,query percentages' },
+        },
+        mainSteps: [
+          {
+            name: 'InvokeLambdaAsync',
+            action: 'aws:executeScript',
+            timeoutSeconds: 30,
+            inputs: {
+              Runtime: 'python3.11',
+              Handler: 'handler',
+              InputPayload: {
+                FunctionName: loadGenFn.functionName,
+                rps: '{{RequestsPerSecond}}',
+                duration: '{{DurationSeconds}}',
+                target: '{{TargetApp}}',
+                mix: '{{OperationMix}}',
+              },
+              Script: scriptCode,
+            },
+          },
+          {
+            name: 'WaitForLoadTest',
+            action: 'aws:sleep',
+            inputs: {
+              Duration: 'PT{{DurationSeconds}}S',
+            },
+          },
+        ],
+      },
+    });
+
+    new cdk.CfnOutput(this, 'LoadGenFunctionArn', { value: loadGenFn.functionArn });
+  }
+}
