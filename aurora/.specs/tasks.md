@@ -12,10 +12,11 @@ must have corresponding tests written and passing (`npx projen test`) before mov
 
 ## Phase 2: Bootstrap Stack (CodeBuild)
 
-- [x] 2.1 Create lib/bootstrap-stack.ts — CodeBuild project (standard:7.0, SMALL, 60-min timeout), local CMK, scoped IAM role (sts:AssumeRole cdk-*, cloudformation describe/list, ssm:GetParameter cdk-bootstrap/*, ec2/rds describe, arc-region-switch list), artifact bucket (KMS, block public, enforce SSL), source upload (BucketDeployment), build trigger (onEvent + isComplete, 30s poll, 60min timeout)
-- [x] 2.2 Create buildspec.yml — npm ci, global install aws-cdk + ts-node, pip install Lambda deps (iterates schema-migration, aurora-app, rpo-monitor, reconciliation, loadgen, dns-status — installs if requirements.txt exists), make deploy
-- [x] 2.3 Create lambda/build-trigger/index.py — on_event starts CodeBuild, is_complete polls BatchGetBuilds (SUCCEEDED/IN_PROGRESS/fail)
+- [x] 2.1 Create lib/bootstrap-stack.ts — CodeBuild project (standard:7.0, SMALL, 150-min timeout), local CMK, scoped IAM role (sts:AssumeRole cdk-*, cloudformation describe/list, ssm:GetParameter cdk-bootstrap/*, ec2/rds describe, arc-region-switch list), artifact bucket (KMS, block public, enforce SSL), source upload (BucketDeployment), WaitCondition + CfnWaitConditionHandle pattern with inline Lambda trigger (starts build, returns immediately via urllib/cfnresponse), 150-min WaitCondition timeout
+- [x] 2.2 Create buildspec.yml — npm ci, global install aws-cdk + ts-node, pip install Lambda deps (iterates schema-migration, aurora-app, rpo-monitor, reconciliation, loadgen, dns-status — installs if requirements.txt exists), make deploy. post_build phase signals WaitCondition via curl to WAIT_HANDLE_URL — SUCCESS if CODEBUILD_BUILD_SUCCEEDING=1, FAILURE otherwise.
+- [x] 2.3 Inline trigger Lambda in bootstrap-stack.ts — starts CodeBuild build, responds to CloudFormation via urllib.request (no polling, no isComplete handler). lambda/build-trigger/index.py is no longer used.
 - [x] 2.4 Wire BootstrapStack in bin/app.ts (target=bootstrap)
+- [x] 2.5 Migrate from cr.Provider (onEvent + isComplete polling) to WaitCondition pattern — eliminates 1-hour CloudFormation custom resource timeout limit
 - [x] ✅ Tests pass: bootstrap.test.ts (7 tests)
 
 ## Phase 3: VPC Stack (Per Region)
@@ -93,7 +94,8 @@ must have corresponding tests written and passing (`npx projen test`) before mov
 - [x] 10.4 KMS-encrypted artifact bucket (`${project}-canary-${region}-${account}`)
 - [x] 10.5 6 CloudWatch alarms (SuccessPercent < 100%, treat missing: ignore)
 - [x] 10.6 All canaries VPC-deployed with Synthetics SG
-- [x] 10.7 Wire SyntheticsStack (x2 regions) in bin/app.ts (target=synthetics-primary, synthetics-secondary)
+- [x] 10.7 All canaries have `provisionedResourceCleanup: true` — ensures Synthetics deletes Lambda functions when canary is deleted, releasing Hyperplane ENIs
+- [x] 10.8 Wire SyntheticsStack (x2 regions) in bin/app.ts (target=synthetics-primary, synthetics-secondary)
 - [x] ✅ Tests pass: synthetics.test.ts (5 tests)
 
 ## Phase 11: Monitoring Stack (Per Region)
@@ -150,7 +152,9 @@ must have corresponding tests written and passing (`npx projen test`) before mov
 - [x] 15.4 `vpc_ctx` macro for passing VPC/SG context to all VPC-dependent stacks
 - [x] 15.5 Two-phase DNS deployment: deploy → plan → capture health checks → re-deploy
 - [x] 15.6 VPC peering acceptance + secondary route creation via AWS CLI
-- [x] 15.7 Create cleanup.sh for reliable teardown (reverse order, global cluster detach with 60s wait)
+- [x] 15.7 `deploy-wave2` target runs vpc-peering + database in parallel (single shell line with `&` + `wait`), saving ~15 min on fresh deploys
+- [x] 15.8 Individual targets have NO inter-target dependencies — deploy target enforces order via prerequisite list
+- [x] 15.9 Create cleanup.sh — phased teardown with ENI cleanup, RDS API nuke, explicit stack lists, final verification
 
 ## Phase 16: Security Hardening & Open-Source Compliance
 
@@ -165,15 +169,16 @@ must have corresponding tests written and passing (`npx projen test`) before mov
 ## Phase 17: GitHub Actions CI/CD
 
 - [x] 17.1 Build workflow (`aurora-build.yml`): compile + test + synth on pushes to non-main branches
-- [x] 17.2 E2E workflow (`aurora-e2e.yml`): deploy via bootstrap, verify canaries, load test + ARC failover exercise, cleanup on success. 2h session, account 563688183446
+- [x] 17.2 E2E workflow (`aurora-e2e.yml`): single deploy step (no retry logic). Deploy via bootstrap, verify canaries, load test + ARC failover exercise. Credential refresh (role-duration-seconds: 7200) before failover and cleanup steps. Cleanup on success. Account 563688183446.
 - [x] 17.3 Cleanup workflow (`aurora-cleanup.yml`): manual trigger only
 - [x] 17.4 AWS OIDC authentication (id-token: write, contents: read)
 - [x] 17.5 Status badges in repo root README
+- [x] 17.6 github-actions-aurora IAM role has: ec2:DescribeNetworkInterfaces, ec2:DeleteNetworkInterface, ec2:DetachNetworkInterface, lambda:ListFunctions, lambda:DeleteFunction
 
 ## Phase 18: CDK Assertion Tests
 
 - [x] 18.1 79 tests across 13 suites
-- [x] 18.2 bootstrap.test.ts (7) — CodeBuild project, KMS-encrypted artifact bucket, scoped IAM role, build trigger Lambdas, custom resource
+- [x] 18.2 bootstrap.test.ts (7) — CodeBuild project, KMS-encrypted artifact bucket, scoped IAM role, WaitCondition, inline trigger Lambda, custom resource
 - [x] 18.3 vpc.test.ts (8) — CIDR, isolated subnets, no IGW/NAT, 5 SGs, cross-region CIDR rules, S3 gateway, 7 interface endpoints
 - [x] 18.4 database.test.ts (7) — global cluster, primary cluster, writer instance (db.r6g.large), KMS, secret name, subnet group, deletion protection
 - [x] 18.5 database-replica.test.ts (5) — secondary cluster, global cluster membership, no MasterUsername/Password/DatabaseName, reader instance, regional KMS

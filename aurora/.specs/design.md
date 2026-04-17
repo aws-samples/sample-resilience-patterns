@@ -49,12 +49,14 @@
 ## CDK Stacks
 
 ### BootstrapStack (primary region)
-- CodeBuild project (`${project}-deploy`, aws/codebuild/standard:7.0, SMALL compute, 60-min timeout)
+- CodeBuild project (`${project}-deploy`, aws/codebuild/standard:7.0, SMALL compute, 150-min timeout)
 - S3 artifact bucket encrypted with local CMK (`${project}-codebuild-${account}`)
 - BucketDeployment to upload source as CDK asset (excludes .git, node_modules, cdk.out, cdk.out.*, dist, .specs)
 - IAM role: sts:AssumeRole on cdk-*, cloudformation:DescribeStacks/ListStacks/DescribeStackResources, ssm:GetParameter on cdk-bootstrap/*, ec2/rds describe ops, arc-region-switch list ops
-- Build trigger: onEvent Lambda (starts build) + isComplete Lambda (polls status), 30s query interval, 60min total timeout
-- buildspec.yml: npm ci, global install aws-cdk + ts-node, pip install Lambda deps (iterates schema-migration, aurora-app, rpo-monitor, reconciliation, loadgen, dns-status — installs if requirements.txt exists), make deploy
+- WaitCondition + CfnWaitConditionHandle pattern: lightweight inline Lambda trigger starts CodeBuild and returns immediately via urllib/cfnresponse. CodeBuild signals WaitCondition via curl to WAIT_HANDLE_URL in buildspec post_build phase. 150-min WaitCondition timeout (9000 seconds). No 1-hour CloudFormation custom resource limit.
+- Trigger Lambda: inline Python 3.12, 30s timeout, starts CodeBuild build, responds to CloudFormation via urllib.request (no polling, no isComplete handler)
+- WAIT_HANDLE_URL passed to CodeBuild as environment variable
+- buildspec.yml: npm ci, global install aws-cdk + ts-node, pip install Lambda deps (iterates schema-migration, aurora-app, rpo-monitor, reconciliation, loadgen, dns-status — installs if requirements.txt exists), make deploy. post_build phase signals WaitCondition via curl — SUCCESS if CODEBUILD_BUILD_SUCCEEDING=1, FAILURE otherwise.
 
 ### VpcStack (per region)
 - VPC with 2 AZs, isolated subnets only (/23 CIDR, /24 subnets)
@@ -125,6 +127,7 @@
 - KMS-encrypted artifact bucket (`${project}-canary-${region}-${account}`)
 - 6 CloudWatch alarms (SuccessPercent < 100%, treat missing: ignore)
 - All canaries VPC-deployed with Synthetics SG
+- All canaries have `provisionedResourceCleanup: true` — ensures Synthetics deletes Lambda functions when canary is deleted, releasing Hyperplane ENIs
 - Canary names: `${project}-${suffix}` (truncated to 21 chars), region suffix: -e1 (us-east-1), -w2 (us-west-2)
 
 ### MonitoringStack (per region)
@@ -174,9 +177,9 @@
 ```
 deploy-vpc                  (parallel: vpc-primary + vpc-secondary)
     │
-deploy-vpc-peering          (sequential: peering + accept + routes via CLI)
-    │
-deploy-database             (sequential: db-primary, then db-secondary)
+deploy-wave2                (parallel: vpc-peering + database — saves ~15 min on fresh deploys)
+    │                       vpc-peering: sequential (peering + accept + routes via CLI)
+    │                       database: sequential (db-primary, then db-secondary)
     │
 deploy-schema               (sequential: schema migration against primary writer)
     │
@@ -201,6 +204,8 @@ deploy-loadgen              (sequential: load generation Lambda + SSM doc)
     │
 deploy-chaos                (parallel: chaos-primary + chaos-secondary)
 ```
+
+Individual targets have NO inter-target dependencies — the `deploy` target enforces order via its prerequisite list. The `deploy-wave2` target runs `$(MAKE) deploy-vpc-peering & $(MAKE) deploy-database & wait` in a single shell line.
 
 ## Cross-Stack Data Flow
 
@@ -249,22 +254,36 @@ Indexes: idx_orders_region, idx_orders_status, idx_orders_created_at, idx_repl_t
 
 ## Cleanup
 
-Standalone `cleanup.sh` script (reverse deployment order):
-1. Delete stuck stacks (ROLLBACK_COMPLETE, ROLLBACK_FAILED)
-2. Chaos stacks (parallel)
-3. Reconciliation stacks (parallel)
-4. Monitoring stacks (parallel)
-5. Load gen stack
-6. Synthetics stacks (parallel)
-7. Failover plan
-8. DNS stack
-9. App stacks (parallel)
-10. Schema stack
-11. Database: detach all members from global cluster, wait 60s, delete global cluster, then delete db-secondary, then db-primary
-12. VPC peering
-13. VPC stacks
-14. Bootstrap stack
-15. Clean local cdk.out directories
+Standalone `cleanup.sh` script with phased approach:
+
+- **Phase 0**: Delete cwsyn-* Lambda functions (filtered by VPC ID) + delete synthetics stacks and wait. Starts ENI release timer as early as possible.
+- **Phase 1**: Fire delete on all non-VPC stacks + nuke RDS instances/clusters directly via RDS API (bypassing CloudFormation). Detach members from global cluster, delete instances, delete clusters.
+- **Phase 2**: Wait for non-VPC stacks + RDS. Waits for instances first, then re-issues cluster deletes (instances must be gone before cluster delete succeeds), then waits for clusters. Final global cluster delete.
+- **Phase 2b**: Retry any DELETE_FAILED non-VPC stacks with `--retain-resources` on the failed logical resources.
+- **Phase 3**: ENI cleanup loop — polls every 10s, deletes available ENIs, 90-min time limit. Deletes VPC stacks only when all ENIs are gone (skips stack delete if ENIs still exist to avoid 16-min CloudFormation blind spots). First attempt always deletes stacks regardless.
+
+Key design decisions:
+- Uses explicit stack list from CDK app (no pattern matching)
+- Uses stack resource lookups for RDS identifiers (no name matching)
+- Scoped safely: Lambdas filtered by VPC ID, stacks by explicit list, RDS by stack resources, ENIs by VPC ID
+- Final verification: exits non-zero if any stacks remain
+
+## GitHub Actions
+
+### aurora-build.yml
+- Triggers on pushes to non-main branches touching aurora/**
+- Steps: checkout, setup node 20, npm ci, test, cdk synth
+
+### aurora-e2e.yml
+- Triggers on pull_request (aurora/**) and workflow_dispatch
+- Single deploy step (no retry logic)
+- Credential refresh (role-duration-seconds: 7200) before failover and cleanup steps
+- github-actions-aurora IAM role has: ec2:DescribeNetworkInterfaces, ec2:DeleteNetworkInterface, ec2:DetachNetworkInterface, lambda:ListFunctions, lambda:DeleteFunction
+- Steps: checkout, setup node, configure AWS credentials (2h session, account 563688183446), npm ci, test, deploy via bootstrap, verify canaries (6-min wait), refresh credentials, load test + ARC failover exercise (4-step: deactivate e1 → activate e1 → deactivate w2 → activate w2), refresh credentials, cleanup on success
+
+### aurora-cleanup.yml
+- Manual trigger only (workflow_dispatch)
+- Runs cleanup.sh
 
 ## Project Structure
 
@@ -280,7 +299,7 @@ aurora/
 │   └── app.ts                    # CDK app entry point, cdk-nag opt-in, stack wiring by -c stack=
 ├── lib/
 │   ├── imports.ts                # VPC/SG import helpers (importVpc, importSg, VpcImportProps)
-│   ├── bootstrap-stack.ts        # CodeBuild project + local CMK + build trigger
+│   ├── bootstrap-stack.ts        # CodeBuild project + local CMK + WaitCondition + inline trigger Lambda
 │   ├── vpc-stack.ts              # VPC per region (isolated subnets, 8 endpoints, 5 SGs)
 │   ├── vpc-peering-stack.ts      # Cross-region VPC peering connection
 │   ├── database-stack.ts         # Aurora Global DB primary cluster + secret replication
@@ -295,7 +314,7 @@ aurora/
 │   ├── loadgen-stack.ts          # Load generation Lambda + SSM doc
 │   └── chaos-stack.ts            # FIS experiment templates
 ├── lambda/
-│   ├── build-trigger/index.py    # CodeBuild start (on_event) + poll (is_complete)
+│   ├── build-trigger/index.py    # UNUSED — trigger is now inline Lambda in bootstrap-stack.ts
 │   ├── schema-migration/
 │   │   ├── index.py              # Database schema + stored procedures (on_event)
 │   │   └── requirements.txt      # psycopg2-binary==2.9.10
@@ -327,8 +346,8 @@ aurora/
 │   ├── reconciliation.test.ts    # 4 tests
 │   └── loadgen.test.ts           # 5 tests
 ├── Makefile                      # Parallel deploys, variable capture, vpc_ctx macro
-├── buildspec.yml                 # CodeBuild: npm ci, ts-node, pip install, make deploy
-├── cleanup.sh                    # Reliable teardown (reverse order, global cluster detach)
+├── buildspec.yml                 # CodeBuild: npm ci, ts-node, pip install, make deploy, post_build signals WaitCondition
+├── cleanup.sh                    # Phased teardown (ENI cleanup, RDS API nuke, explicit stack lists)
 ├── .checkov.yaml                 # Checkov skip rules (CKV_AWS_116, CKV_AWS_173)
 ├── cdk.json
 ├── tsconfig.json

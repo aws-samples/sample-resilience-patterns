@@ -48,6 +48,7 @@
 - Canary artifacts stored in S3 (KMS encrypted, block public access, enforce SSL)
 - CloudWatch alarm on canary SuccessPercent per canary (threshold: 100%, treat missing: ignore)
 - All canaries VPC-deployed with Synthetics SG
+- All canaries have `provisionedResourceCleanup: true` — ensures Synthetics deletes Lambda functions when canary is deleted, releasing Hyperplane ENIs
 - All testing flows through private hosted zone DNS records
 - Canary names truncated to 21 characters
 
@@ -160,18 +161,19 @@ Combined dashboard (`${project}-combined`) in us-east-1 with 7 widgets:
 
 - Single CDK stack deployed locally that creates CodeBuild project
 - Source uploaded via CDK BucketDeployment asset (excludes .git, node_modules, cdk.out, cdk.out.*, dist, .specs)
-- CodeBuild triggered via Lambda-backed custom resource (onEvent starts build, isComplete polls status, 30s poll interval, 60min total timeout)
+- WaitCondition + CfnWaitConditionHandle pattern: lightweight inline Lambda trigger starts CodeBuild and returns immediately via urllib/cfnresponse. CodeBuild signals WaitCondition via curl to WAIT_HANDLE_URL in buildspec post_build phase. 150-min WaitCondition timeout. No 1-hour CloudFormation custom resource limit.
 - Artifact bucket encrypted with local CMK (key rotation enabled)
 - CodeBuild role scoped to: sts:AssumeRole on cdk-*, cloudformation:DescribeStacks/ListStacks/DescribeStackResources, ssm:GetParameter on cdk-bootstrap/*, ec2/rds describe ops, arc-region-switch list ops
-- buildspec.yml: npm ci, aws-cdk + ts-node global install, pip install Lambda deps (iterates schema-migration, aurora-app, rpo-monitor, reconciliation, loadgen, dns-status — installs if requirements.txt exists), make deploy
-- CodeBuild image: aws/codebuild/standard:7.0, SMALL compute, 60-min timeout
+- buildspec.yml: npm ci, aws-cdk + ts-node global install, pip install Lambda deps (iterates schema-migration, aurora-app, rpo-monitor, reconciliation, loadgen, dns-status — installs if requirements.txt exists), make deploy. post_build phase signals WaitCondition via curl — SUCCESS if CODEBUILD_BUILD_SUCCEEDING=1, FAILURE otherwise.
+- CodeBuild image: aws/codebuild/standard:7.0, SMALL compute, 150-min timeout
 
 ### FR-14: GitHub Actions CI/CD
 
 - `aurora-build.yml`: compile + test + synth on pushes to non-main branches touching aurora/**
-- `aurora-e2e.yml`: deploy all stacks via bootstrap, verify canaries, run load test + ARC failover exercise (4-step: deactivate e1 → activate e1 → deactivate w2 → activate w2), cleanup on success. 2h session (role-duration-seconds: 7200), account 563688183446
+- `aurora-e2e.yml`: single deploy step (no retry logic). Deploy all stacks via bootstrap, verify canaries, run load test + ARC failover exercise (4-step: deactivate e1 → activate e1 → deactivate w2 → activate w2). Credential refresh (role-duration-seconds: 7200) before failover and cleanup steps. Cleanup on success. Account 563688183446.
 - `aurora-cleanup.yml`: manual trigger only, runs cleanup.sh
 - AWS OIDC authentication (id-token: write, contents: read)
+- github-actions-aurora IAM role has: ec2:DescribeNetworkInterfaces, ec2:DeleteNetworkInterface, ec2:DetachNetworkInterface, lambda:ListFunctions, lambda:DeleteFunction
 
 ### FR-15: Projen Project Management
 
@@ -183,11 +185,13 @@ Combined dashboard (`${project}-combined`) in us-east-1 with 7 widgets:
 ### FR-16: Makefile Orchestration
 
 - Parallel deploy targets using separate `-o cdk.out.*` directories
+- `deploy-wave2` target runs vpc-peering + database in parallel (`$(MAKE) deploy-vpc-peering & $(MAKE) deploy-database & wait` in single shell line), saving ~15 min on fresh deploys
+- Individual targets have NO inter-target dependencies — the `deploy` target enforces order via its prerequisite list
 - Deployment order respects cross-stack dependencies
 - Shell-based variable capture via `aws cloudformation describe-stacks`
 - PID-based `wait` for parallel failure propagation
 - VPC peering acceptance + secondary route creation via AWS CLI in Makefile
-- cleanup.sh for reliable teardown (reverse order, global cluster detach with 60s wait)
+- cleanup.sh for reliable phased teardown
 
 ### FR-17: Chaos Engineering (Amazon FIS)
 
