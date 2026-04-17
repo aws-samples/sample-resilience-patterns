@@ -4,8 +4,6 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
-import * as lambda from 'aws-cdk-lib/aws-lambda';
-import * as cr from 'aws-cdk-lib/custom-resources';
 import * as path from 'path';
 
 export interface BootstrapStackProps extends cdk.StackProps {
@@ -63,7 +61,6 @@ export class BootstrapStack extends cdk.Stack {
       resources: [`arn:aws:ssm:*:${this.account}:parameter/cdk-bootstrap/*`],
     }));
 
-    // Makefile needs these for VPC peering route setup and output capture
     buildRole.addToPolicy(new iam.PolicyStatement({
       actions: [
         'ec2:DescribeRouteTables', 'ec2:CreateRoute',
@@ -81,6 +78,9 @@ export class BootstrapStack extends cdk.Stack {
 
     artifactBucket.grantRead(buildRole);
 
+    // WaitCondition: CodeBuild signals when deploy completes (no 1-hour Lambda limit)
+    const waitHandle = new cdk.CfnWaitConditionHandle(this, 'DeployWaitHandle');
+
     const cbProject = new codebuild.Project(this, 'DeployProject', {
       projectName: `${props.project}-deploy`,
       source: codebuild.Source.s3({
@@ -96,53 +96,61 @@ export class BootstrapStack extends cdk.Stack {
         PRIMARY_REGION: { value: props.primaryRegion },
         SECONDARY_REGION: { value: props.secondaryRegion },
         ACCOUNT_ID: { value: this.account },
+        WAIT_HANDLE_URL: { value: waitHandle.ref },
       },
       role: buildRole,
       buildSpec: codebuild.BuildSpec.fromSourceFilename('buildspec.yml'),
       timeout: cdk.Duration.minutes(150),
     });
 
-    const triggerFn = new lambda.Function(this, 'BuildTriggerFunction', {
-      runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'index.on_event',
-      code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'build-trigger')),
-      timeout: cdk.Duration.minutes(1),
+    // Trigger build via custom resource (lightweight — just starts the build, doesn't wait)
+    const triggerRole = new iam.Role(this, 'TriggerRole', {
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole')],
     });
-
-    triggerFn.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['codebuild:StartBuild', 'codebuild:BatchGetBuilds'],
+    triggerRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['codebuild:StartBuild'],
       resources: [cbProject.projectArn],
     }));
 
-    const isCompleteFn = new lambda.Function(this, 'BuildIsCompleteFunction', {
-      runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'index.is_complete',
-      code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'build-trigger')),
+    const triggerFn = new cdk.aws_lambda.Function(this, 'BuildTriggerFunction', {
+      runtime: cdk.aws_lambda.Runtime.PYTHON_3_12,
+      handler: 'index.handler',
+      role: triggerRole,
       timeout: cdk.Duration.seconds(30),
+      code: cdk.aws_lambda.Code.fromInline(`
+import boto3, json, cfnresponse
+def handler(event, context):
+    if event['RequestType'] == 'Delete':
+        cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+        return
+    try:
+        cb = boto3.client('codebuild')
+        resp = cb.start_build(projectName=event['ResourceProperties']['ProjectName'])
+        build_id = resp['build']['id']
+        cfnresponse.send(event, context, cfnresponse.SUCCESS, {'BuildId': build_id}, build_id)
+    except Exception as e:
+        cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
+`),
     });
 
-    isCompleteFn.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['codebuild:BatchGetBuilds'],
-      resources: [cbProject.projectArn],
-    }));
-
-    const buildProvider = new cr.Provider(this, 'BuildProvider', {
-      onEventHandler: triggerFn,
-      isCompleteHandler: isCompleteFn,
-      queryInterval: cdk.Duration.seconds(30),
-      totalTimeout: cdk.Duration.minutes(150),
-    });
-
-    const buildTrigger = new cdk.CustomResource(this, 'BuildTrigger', {
-      serviceToken: buildProvider.serviceToken,
+    const trigger = new cdk.CustomResource(this, 'BuildTrigger', {
+      serviceToken: triggerFn.functionArn,
       properties: {
         ProjectName: cbProject.projectName,
         Timestamp: Date.now().toString(),
       },
     });
+    trigger.node.addDependency(sourceDeployment);
+    trigger.node.addDependency(cbProject);
 
-    buildTrigger.node.addDependency(sourceDeployment);
-    buildTrigger.node.addDependency(cbProject);
+    // WaitCondition: waits for CodeBuild to signal completion (up to 150 min)
+    const waitCondition = new cdk.CfnWaitCondition(this, 'DeployWaitCondition', {
+      handle: waitHandle.ref,
+      timeout: '9000', // 150 minutes in seconds
+      count: 1,
+    });
+    waitCondition.addDependency(trigger.node.defaultChild as cdk.CfnResource);
 
     new cdk.CfnOutput(this, 'ArtifactBucketName', { value: artifactBucket.bucketName });
     new cdk.CfnOutput(this, 'ProjectName', { value: cbProject.projectName });

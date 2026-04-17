@@ -17,3 +17,19 @@ phases:
           fi
         done
       - make deploy
+  post_build:
+    commands:
+      - |
+        if [ "$CODEBUILD_BUILD_SUCCEEDING" = "1" ]; then
+          STATUS="SUCCESS"
+          DATA="Deploy completed successfully"
+        else
+          STATUS="FAILURE"
+          DATA="Deploy failed — check CodeBuild logs"
+        fi
+        # Signal the CloudFormation WaitCondition
+        if [ -n "$WAIT_HANDLE_URL" ]; then
+          curl -s -X PUT -H "Content-Type:" \
+            --data-binary "{\"Status\":\"$STATUS\",\"Reason\":\"$DATA\",\"UniqueId\":\"deploy\",\"Data\":\"$DATA\"}" \
+            "$WAIT_HANDLE_URL" || echo "Warning: failed to signal WaitCondition"
+        fi
