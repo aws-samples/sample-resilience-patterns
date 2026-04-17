@@ -24,6 +24,12 @@ export class RegionalBucketStack extends cdk.Stack {
       enforceSSL: true,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
+      lifecycleRules: [{
+        id: 'expire-logs-24h',
+        enabled: true,
+        expiration: cdk.Duration.days(1),
+        abortIncompleteMultipartUploadAfter: cdk.Duration.days(1),
+      }],
     });
 
     this.bucket = new s3.Bucket(this, 'Bucket', {

@@ -105,6 +105,41 @@ MRAP also supports [active-active configuration](https://docs.aws.amazon.com/Ama
 
 For production workloads where RTO must be near-zero and you can tolerate proximity-based write distribution, active-active is the better choice. For workloads requiring deterministic write control — regulatory compliance, ordered event processing, simplified debugging — active-passive with ARC provides explicit failover with full operational visibility.
 
+
+## Dashboard
+
+A single combined dashboard (`s3mrap-replication`) is deployed in us-east-1 and shows both replication directions.
+
+### Layout
+
+```
+┌───────────────────────────────────────────────────────────┐
+│ MRAP Traffic Dial (%)                                     │
+│ Shows active/passive routing weight per region            │
+├───────────────────────────────────────────────────────────┤
+│ ── us-east-1 → us-west-2 ──                              │
+├───────────────────┬───────────────────┬───────────────────┤
+│ Replication       │ Bytes Pending     │ Operations        │
+│ Latency           │                   │ (Pending + Failed)│
+├───────────────────┴───────────────────┴───────────────────┤
+│ ── us-west-2 → us-east-1 ──                              │
+├───────────────────┬───────────────────┬───────────────────┤
+│ Replication       │ Bytes Pending     │ Operations        │
+│ Latency           │                   │ (Pending + Failed)│
+└───────────────────┴───────────────────┴───────────────────┘
+```
+
+### Widget Details
+
+| Widget | Type | What it shows | How to read it |
+|--------|------|---------------|----------------|
+| **MRAP Traffic Dial (%)** | SingleValue | Current MRAP routing weight per region. Published by the MRAP monitor Lambda every 1 minute from `GetMultiRegionAccessPointRoutes`. | `100/0` = active/passive (all traffic to primary). After ARC failover, flips to `0/100`. Values between indicate a transition. |
+| **Replication Latency** | Graph | Time for S3 to replicate objects from source to destination region (`ReplicationLatency` metric). One graph per direction. | Normally seconds to low minutes. The 15-minute RTC SLA means values should stay below 900s. Sustained values >900s trigger an alarm. |
+| **Bytes Pending** | Graph | Total bytes queued for replication but not yet delivered (`BytesPendingReplication` metric). One graph per direction. | `0` = fully caught up. Spikes during bulk uploads are expected. Sustained values >1GB trigger an alarm. |
+| **Operations** | Graph | Pending and failed replication operations. Left axis: `OperationsPendingReplication` (queued). Right axis: `OperationsFailedReplication` (errors). One graph per direction. | Pending operations rise during writes and drain as replication catches up. Failed operations should be `0` — any non-zero value triggers an alarm and sends an SNS notification. |
+
+Each replication direction (us-east-1 → us-west-2 and us-west-2 → us-east-1) has its own row of three graphs, separated by a text header. This shows bidirectional CRR health at a glance.
+
 ## Demo Walkthrough
 
 ### 1. Verify Replication

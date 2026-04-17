@@ -1,0 +1,3 @@
+skip-check:
+  - CKV_AWS_116  # Lambda DLQ not needed — custom resource Lambdas are invoked synchronously by CloudFormation
+  - CKV_AWS_173  # Lambda env vars contain resource ARNs/endpoints, not secrets
