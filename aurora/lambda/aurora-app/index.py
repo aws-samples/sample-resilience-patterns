@@ -41,7 +41,8 @@ def handler(event, context):
         conn = get_write_connection() if method in ('POST', 'PUT', 'DELETE') else get_read_connection()
         try:
             conn.autocommit = True
-            with conn.cursor() as cur:
+            cur = conn.cursor()
+            try:
                 if path == '/orders' and method == 'POST':
                     cur.execute("SELECT sp_insert_order(%s, %s, %s) AS id",
                                 (body.get('region', os.environ.get('AWS_REGION')),
@@ -70,6 +71,8 @@ def handler(event, context):
 
                 else:
                     return respond(404, {'error': 'not found'})
+            finally:
+                cur.close()
         finally:
             conn.close()
 

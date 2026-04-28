@@ -19,9 +19,11 @@ def get_credentials(secret_arn, region=None):
 def get_order_ids(host, port, user, password, dbname):
     conn = pg8000.dbapi.connect(host=host, port=int(port), user=user, password=password, database=dbname, ssl_context=True)
     try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT id FROM orders WHERE deleted_at IS NULL ORDER BY id")
-            return {str(row[0]) for row in cur.fetchall()}
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM orders WHERE deleted_at IS NULL ORDER BY id")
+        result = {str(row[0]) for row in cur.fetchall()}
+        cur.close()
+        return result
     finally:
         conn.close()
 

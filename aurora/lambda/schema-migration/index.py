@@ -103,8 +103,9 @@ def on_event(event, context):
     conn = pg8000.dbapi.connect(host=host, port=int(port), user=user, password=password, database=dbname, ssl_context=True)
     try:
         conn.autocommit = True
-        with conn.cursor() as cur:
-            cur.execute(SCHEMA_SQL)
+        cur = conn.cursor()
+        cur.execute(SCHEMA_SQL)
+        cur.close()
         logger.info('Schema migration completed successfully')
     finally:
         conn.close()
