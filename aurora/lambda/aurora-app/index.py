@@ -16,13 +16,13 @@ def _get_secret():
 def get_read_connection():
     secret = _get_secret()
     host = os.environ.get('DB_READ_HOST', secret['host'])
-    return pg8000.dbapi.connect(host=host, port=secret['port'], user=secret['username'], password=secret['password'], database=secret['dbname'])
+    return pg8000.dbapi.connect(host=host, port=int(secret['port']), user=secret['username'], password=secret['password'], database=secret['dbname'], ssl_context=True)
 
 
 def get_write_connection():
     secret = _get_secret()
     host = os.environ.get('DB_WRITE_HOST', secret['host'])
-    return pg8000.dbapi.connect(host=host, port=secret['port'], user=secret['username'], password=secret['password'], database=secret['dbname'])
+    return pg8000.dbapi.connect(host=host, port=int(secret['port']), user=secret['username'], password=secret['password'], database=secret['dbname'], ssl_context=True)
 
 
 def handler(event, context):
