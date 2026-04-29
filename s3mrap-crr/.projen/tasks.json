@@ -198,7 +198,7 @@
       },
       "steps": [
         {
-          "exec": "npx npm-check-updates@18 --upgrade --target=minor --peer --no-deprecated --dep=dev,peer,prod,optional --filter=@types/jest,@types/node,esbuild,jest,projen,ts-jest,ts-node,typescript,cdk-nag"
+          "exec": "npx npm-check-updates@20 --upgrade --target=minor --peer --no-deprecated --dep=dev,peer,prod,optional --filter=@types/jest,@types/node,esbuild,jest,projen,ts-jest,ts-node,typescript,cdk-nag"
         },
         {
           "exec": "npm install"
