@@ -24,7 +24,7 @@ jobs:
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::563688183446:role/github-actions-aurora
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-aurora
           aws-region: us-east-1
           role-duration-seconds: 7200
 
@@ -51,7 +51,7 @@ jobs:
       - name: Refresh AWS credentials (pre-failover)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::563688183446:role/github-actions-aurora
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-aurora
           aws-region: us-east-1
           role-duration-seconds: 7200
 
@@ -115,7 +115,7 @@ jobs:
         if: always()
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::563688183446:role/github-actions-aurora
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-aurora
           aws-region: us-east-1
           role-duration-seconds: 7200
 

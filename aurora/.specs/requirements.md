@@ -170,7 +170,7 @@ Combined dashboard (`${project}-combined`) in us-east-1 with 7 widgets:
 ### FR-14: GitHub Actions CI/CD
 
 - `aurora-build.yml`: compile + test + synth on pushes to non-main branches touching aurora/**
-- `aurora-e2e.yml`: single deploy step (no retry logic). Deploy all stacks via bootstrap, verify canaries, run load test + ARC failover exercise (4-step: deactivate e1 → activate e1 → deactivate w2 → activate w2). Credential refresh (role-duration-seconds: 7200) before failover and cleanup steps. Cleanup on success. Account 563688183446.
+- `aurora-e2e.yml`: single deploy step (no retry logic). Deploy all stacks via bootstrap, verify canaries, run load test + ARC failover exercise (4-step: deactivate e1 → activate e1 → deactivate w2 → activate w2). Credential refresh (role-duration-seconds: 7200) before failover and cleanup steps. Cleanup on success. Account 123456789012.
 - `aurora-cleanup.yml`: manual trigger only, runs cleanup.sh
 - AWS OIDC authentication (id-token: write, contents: read)
 - github-actions-aurora IAM role has: ec2:DescribeNetworkInterfaces, ec2:DeleteNetworkInterface, ec2:DetachNetworkInterface, lambda:ListFunctions, lambda:DeleteFunction

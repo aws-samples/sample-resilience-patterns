@@ -279,7 +279,7 @@ Key design decisions:
 - Single deploy step (no retry logic)
 - Credential refresh (role-duration-seconds: 7200) before failover and cleanup steps
 - github-actions-aurora IAM role has: ec2:DescribeNetworkInterfaces, ec2:DeleteNetworkInterface, ec2:DetachNetworkInterface, lambda:ListFunctions, lambda:DeleteFunction
-- Steps: checkout, setup node, configure AWS credentials (2h session, account 563688183446), npm ci, test, deploy via bootstrap, verify canaries (6-min wait), refresh credentials, load test + ARC failover exercise (4-step: deactivate e1 → activate e1 → deactivate w2 → activate w2), refresh credentials, cleanup on success
+- Steps: checkout, setup node, configure AWS credentials (2h session, account 123456789012), npm ci, test, deploy via bootstrap, verify canaries (6-min wait), refresh credentials, load test + ARC failover exercise (4-step: deactivate e1 → activate e1 → deactivate w2 → activate w2), refresh credentials, cleanup on success
 
 ### aurora-cleanup.yml
 - Manual trigger only (workflow_dispatch)

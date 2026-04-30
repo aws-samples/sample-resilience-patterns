@@ -169,7 +169,7 @@ must have corresponding tests written and passing (`npx projen test`) before mov
 ## Phase 17: GitHub Actions CI/CD
 
 - [x] 17.1 Build workflow (`aurora-build.yml`): compile + test + synth on pushes to non-main branches
-- [x] 17.2 E2E workflow (`aurora-e2e.yml`): single deploy step (no retry logic). Deploy via bootstrap, verify canaries, load test + ARC failover exercise. Credential refresh (role-duration-seconds: 7200) before failover and cleanup steps. Cleanup on success. Account 563688183446.
+- [x] 17.2 E2E workflow (`aurora-e2e.yml`): single deploy step (no retry logic). Deploy via bootstrap, verify canaries, load test + ARC failover exercise. Credential refresh (role-duration-seconds: 7200) before failover and cleanup steps. Cleanup on success. Account 123456789012.
 - [x] 17.3 Cleanup workflow (`aurora-cleanup.yml`): manual trigger only
 - [x] 17.4 AWS OIDC authentication (id-token: write, contents: read)
 - [x] 17.5 Status badges in repo root README
