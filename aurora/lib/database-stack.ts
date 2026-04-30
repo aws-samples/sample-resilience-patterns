@@ -32,14 +32,12 @@ export class DatabaseStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    this.globalCluster = new rds.CfnGlobalCluster(this, 'GlobalCluster', {
-      globalClusterIdentifier: props.globalClusterIdentifier,
-      engine: 'aurora-postgresql',
-      engineVersion: '16.6',
-      storageEncrypted: true,
-      deletionProtection: false,
-    });
-
+    // Create the primary DBCluster FIRST as a standalone cluster.
+    // Do NOT set GlobalClusterIdentifier on the CfnDBCluster — this avoids
+    // the CFN delete-time race where the DBCluster handler looks up the
+    // referenced global cluster, gets a 404 after the global cluster is
+    // deleted, and misinterprets it as "cluster already deleted". See
+    // commit message for commit adding this comment for full analysis.
     this.cluster = new rds.DatabaseCluster(this, 'PrimaryCluster', {
       engine: rds.DatabaseClusterEngine.auroraPostgres({
         version: rds.AuroraPostgresEngineVersion.VER_16_6,
@@ -61,10 +59,20 @@ export class DatabaseStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // Attach to global cluster
-    const cfnCluster = this.cluster.node.defaultChild as rds.CfnDBCluster;
-    cfnCluster.globalClusterIdentifier = props.globalClusterIdentifier;
-    cfnCluster.addDependency(this.globalCluster);
+    // Promote the existing DBCluster into a global cluster by setting
+    // SourceDBClusterIdentifier. The GlobalCluster resource DependsOn
+    // the DBCluster, so CFN creates the DBCluster first, then wraps it.
+    // On delete: CFN deletes GlobalCluster first (before DBCluster),
+    // which is a clean AWS API operation when the source cluster is
+    // still alive. DBCluster then deletes normally with no global
+    // reference to race against.
+    this.globalCluster = new rds.CfnGlobalCluster(this, 'GlobalCluster', {
+      globalClusterIdentifier: props.globalClusterIdentifier,
+      sourceDbClusterIdentifier: this.cluster.clusterArn,
+      deletionProtection: false,
+      // engine/engineVersion/storageEncrypted are inherited from the source
+    });
+    this.globalCluster.addDependency(this.cluster.node.defaultChild as cdk.CfnResource);
 
     this.secret = this.cluster.secret!;
 
