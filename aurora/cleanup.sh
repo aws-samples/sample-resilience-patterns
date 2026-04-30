@@ -34,6 +34,68 @@ stack_status() {
     --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "GONE"
 }
 
+# Recover a cluster stuck in inaccessible-encryption-credentials-recoverable.
+# Root cause: CFN deleted the stack, which scheduled the DB's KMS key for
+# deletion. RDS then transitioned any lingering cluster/instance state into the
+# "inaccessible" state, blocking subnet group delete.
+# Fix: cancel the key deletion, force-delete instance + cluster via API, then
+# re-schedule key deletion with minimum window (7 days, AWS minimum).
+# See: https://repost.aws/knowledge-center/rds-aurora-inaccessible-state
+recover_inaccessible_cluster() {
+  local region=$1 cluster_id=$2
+  local status
+  status=$(aws rds describe-db-clusters --db-cluster-identifier "${cluster_id}" --region "${region}" \
+    --query "DBClusters[0].Status" --output text 2>/dev/null || echo "GONE")
+  if [ "${status}" != "inaccessible-encryption-credentials-recoverable" ]; then
+    return 0
+  fi
+  echo "  [recover:${region}] Cluster ${cluster_id} is inaccessible — recovering..."
+  local kms_key instances
+  kms_key=$(aws rds describe-db-clusters --db-cluster-identifier "${cluster_id}" --region "${region}" \
+    --query "DBClusters[0].KmsKeyId" --output text 2>/dev/null || echo "")
+  instances=$(aws rds describe-db-clusters --db-cluster-identifier "${cluster_id}" --region "${region}" \
+    --query "DBClusters[0].DBClusterMembers[].DBInstanceIdentifier" --output text 2>/dev/null || echo "")
+  if [ -n "${kms_key}" ] && [ "${kms_key}" != "None" ]; then
+    local key_id="${kms_key##*key/}"
+    echo "  [recover:${region}] Cancelling KMS key deletion for ${key_id}..."
+    aws kms cancel-key-deletion --key-id "${key_id}" --region "${region}" 2>/dev/null || true
+    sleep 15
+  fi
+  for inst in ${instances}; do
+    echo "  [recover:${region}] Force-deleting instance ${inst}..."
+    aws rds delete-db-instance --db-instance-identifier "${inst}" --skip-final-snapshot \
+      --delete-automated-backups --region "${region}" 2>/dev/null || true
+  done
+  for inst in ${instances}; do
+    aws rds wait db-instance-deleted --db-instance-identifier "${inst}" --region "${region}" 2>/dev/null || true
+  done
+  echo "  [recover:${region}] Force-deleting cluster ${cluster_id}..."
+  aws rds delete-db-cluster --db-cluster-identifier "${cluster_id}" --skip-final-snapshot \
+    --delete-automated-backups --region "${region}" 2>/dev/null || true
+  aws rds wait db-cluster-deleted --db-cluster-identifier "${cluster_id}" --region "${region}" 2>/dev/null || true
+  if [ -n "${kms_key}" ] && [ "${kms_key}" != "None" ]; then
+    local key_id="${kms_key##*key/}"
+    echo "  [recover:${region}] Re-scheduling KMS key ${key_id} deletion (7-day window)..."
+    aws kms schedule-key-deletion --key-id "${key_id}" --pending-window-in-days 7 \
+      --region "${region}" 2>/dev/null || true
+  fi
+}
+
+# Delete the DB subnet group directly via RDS API.
+# Why: CFN delete-stack triggers both DB subnet group delete AND KMS key
+# ScheduleKeyDeletion. The key going to PendingDeletion transitions any
+# lingering RDS state to "inaccessible-encryption-credentials-recoverable",
+# which blocks the subnet group delete. By deleting the subnet group before
+# the stack delete, we avoid the race entirely.
+delete_db_subnet_group() {
+  local stack=$1 region=$2
+  local sg_name
+  sg_name=$(stack_resources "${stack}" "${region}" "AWS::RDS::DBSubnetGroup" | tr '\t' '\n' | head -1)
+  [ -z "${sg_name}" ] && return 0
+  echo "  [subnet-group:${region}] Deleting DB subnet group ${sg_name}..."
+  aws rds delete-db-subnet-group --db-subnet-group-name "${sg_name}" --region "${region}" 2>/dev/null || true
+}
+
 # Delete a stack with automatic --retain-resources fallback for DELETE_FAILED retries.
 # Skips already-deleted stacks. Safe to call on stacks that don't exist.
 delete_stack_robust() {
@@ -161,6 +223,18 @@ drain_cluster() {
 branch_b() {
   echo "  [B] Starting RDS pipeline..."
 
+  # Step 0: Recover any clusters stuck in inaccessible-encryption-credentials-recoverable.
+  # This handles the case where a previous cleanup run got partway through and
+  # CFN scheduled the DB KMS key for deletion, leaving zombie cluster state.
+  # Must happen BEFORE global-cluster dismantle (inaccessible clusters can't
+  # be removed from a global cluster).
+  if [ -n "${PRIMARY_CLUSTERS}" ]; then
+    recover_inaccessible_cluster "${PRIMARY_REGION}" "${PRIMARY_CLUSTERS}"
+  fi
+  if [ -n "${SECONDARY_CLUSTERS}" ]; then
+    recover_inaccessible_cluster "${SECONDARY_REGION}" "${SECONDARY_CLUSTERS}"
+  fi
+
   # Step 1: Dismantle global cluster FIRST.
   # AWS won't let you remove the last member via remove-from-global-cluster.
   # Strategy: remove all non-primary (secondary) clusters, then delete the
@@ -222,7 +296,16 @@ branch_b() {
   fi
   wait
 
-  # Step 3: Delete the now-empty RDS CFN stacks in parallel.
+  # Step 3: Delete DB subnet groups DIRECTLY before CFN stack delete.
+  # This avoids the race where CFN schedules KMS key deletion and the cluster
+  # transitions to inaccessible-encryption-credentials-recoverable before the
+  # subnet group delete completes.
+  for entry in ${RDS_STACKS}; do
+    stack="${entry%%:*}"; region="${entry##*:}"
+    delete_db_subnet_group "${stack}" "${region}"
+  done
+
+  # Step 4: Delete the now-empty RDS CFN stacks in parallel.
   echo "  [B] Deleting RDS CFN stacks (empty shells)..."
   for entry in ${RDS_STACKS}; do
     stack="${entry%%:*}"; region="${entry##*:}"
