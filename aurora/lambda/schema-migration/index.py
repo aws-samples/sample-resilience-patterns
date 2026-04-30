@@ -2,7 +2,7 @@ import json
 import logging
 import os
 import boto3
-import psycopg2
+import pg8000.dbapi
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -100,11 +100,12 @@ def on_event(event, context):
         return {'PhysicalResourceId': 'schema-migration'}
 
     host, port, user, password, dbname = get_db_credentials()
-    conn = psycopg2.connect(host=host, port=port, user=user, password=password, dbname=dbname)
+    conn = pg8000.dbapi.connect(host=host, port=int(port), user=user, password=password, database=dbname, ssl_context=True)
     try:
         conn.autocommit = True
-        with conn.cursor() as cur:
-            cur.execute(SCHEMA_SQL)
+        cur = conn.cursor()
+        cur.execute(SCHEMA_SQL)
+        cur.close()
         logger.info('Schema migration completed successfully')
     finally:
         conn.close()

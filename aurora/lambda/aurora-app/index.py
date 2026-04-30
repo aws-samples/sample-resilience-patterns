@@ -2,8 +2,7 @@ import json
 import logging
 import os
 import boto3
-import psycopg2
-import psycopg2.extras
+import pg8000.dbapi
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -17,13 +16,13 @@ def _get_secret():
 def get_read_connection():
     secret = _get_secret()
     host = os.environ.get('DB_READ_HOST', secret['host'])
-    return psycopg2.connect(host=host, port=secret['port'], user=secret['username'], password=secret['password'], dbname=secret['dbname'])
+    return pg8000.dbapi.connect(host=host, port=int(secret['port']), user=secret['username'], password=secret['password'], database=secret['dbname'], ssl_context=True)
 
 
 def get_write_connection():
     secret = _get_secret()
     host = os.environ.get('DB_WRITE_HOST', secret['host'])
-    return psycopg2.connect(host=host, port=secret['port'], user=secret['username'], password=secret['password'], dbname=secret['dbname'])
+    return pg8000.dbapi.connect(host=host, port=int(secret['port']), user=secret['username'], password=secret['password'], database=secret['dbname'], ssl_context=True)
 
 
 def handler(event, context):
@@ -42,19 +41,22 @@ def handler(event, context):
         conn = get_write_connection() if method in ('POST', 'PUT', 'DELETE') else get_read_connection()
         try:
             conn.autocommit = True
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur = conn.cursor()
+            try:
                 if path == '/orders' and method == 'POST':
                     cur.execute("SELECT sp_insert_order(%s, %s, %s) AS id",
                                 (body.get('region', os.environ.get('AWS_REGION')),
                                  body.get('status', 'PENDING'),
                                  json.dumps(body.get('payload', {}))))
-                    result = cur.fetchone()
+                    cols = [d[0] for d in cur.description]
+                    result = dict(zip(cols, cur.fetchone()))
                     return respond(201, {'id': str(result['id'])})
 
                 elif path == '/orders' and method == 'GET':
                     cur.execute("SELECT * FROM sp_query_orders(%s, %s, %s)",
                                 (params.get('region'), params.get('status'), params.get('since')))
-                    rows = cur.fetchall()
+                    cols = [d[0] for d in cur.description]
+                    rows = [dict(zip(cols, row)) for row in cur.fetchall()]
                     return respond(200, {'orders': [serialize(r) for r in rows]})
 
                 elif method == 'PUT' and '/status' in path:
@@ -69,6 +71,8 @@ def handler(event, context):
 
                 else:
                     return respond(404, {'error': 'not found'})
+            finally:
+                cur.close()
         finally:
             conn.close()
 

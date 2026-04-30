@@ -17,19 +17,34 @@ function createStack() {
 describe('DatabaseStack', () => {
   const template = createStack();
 
-  test('creates Aurora Global Cluster', () => {
+  test('creates Aurora Global Cluster that adopts the primary DBCluster', () => {
+    // GlobalCluster uses SourceDBClusterIdentifier to promote the existing
+    // primary cluster — NOT engine/version/storageEncrypted (those inherit
+    // from the source). This pattern avoids the CFN delete-time race.
     template.hasResourceProperties('AWS::RDS::GlobalCluster', {
       GlobalClusterIdentifier: 'test-global-cluster',
-      Engine: 'aurora-postgresql',
-      StorageEncrypted: true,
+      SourceDBClusterIdentifier: Match.anyValue(),
     });
   });
 
-  test('creates primary Aurora cluster attached to global cluster', () => {
+  test('primary DBCluster has no GlobalClusterIdentifier (delete-race fix)', () => {
+    // The primary cluster MUST NOT carry a GlobalClusterIdentifier prop.
+    // If it did, CFN's DBCluster handler would look up the global on delete,
+    // get a 404 when the global is deleted first, and misinterpret that as
+    // "cluster already deleted" — leaking the real cluster.
     template.hasResourceProperties('AWS::RDS::DBCluster', {
-      GlobalClusterIdentifier: 'test-global-cluster',
       Engine: 'aurora-postgresql',
       DatabaseName: 'orders',
+      GlobalClusterIdentifier: Match.absent(),
+    });
+  });
+
+  test('GlobalCluster depends on DBCluster (correct delete ordering)', () => {
+    // DependsOn means CFN creates DBCluster first, then wraps it with
+    // GlobalCluster. On delete, CFN deletes GlobalCluster first — a clean
+    // AWS API op when the source cluster is still alive.
+    template.hasResource('AWS::RDS::GlobalCluster', {
+      DependsOn: Match.arrayWith([Match.stringLikeRegexp('PrimaryCluster.*')]),
     });
   });
 
