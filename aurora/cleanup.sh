@@ -124,7 +124,8 @@ branch_a() {
 #     → wait db-cluster-deleted
 # -----------------------------------------------------------------------------
 
-# Drain one cluster: remove from global, delete all its instances, wait, delete cluster, wait.
+# Drain one cluster: delete all its instances, wait, delete cluster, wait.
+# NOTE: Global cluster must already be dismantled before calling this.
 drain_cluster() {
   local region=$1 cluster_id=$2
   shift 2
@@ -132,29 +133,7 @@ drain_cluster() {
 
   echo "  [B:${region}] Draining cluster ${cluster_id}..."
 
-  # Step 1: Remove from global cluster (idempotent — ignore if already removed)
-  local cluster_arn
-  cluster_arn=$(aws rds describe-db-clusters --db-cluster-identifier "${cluster_id}" --region "${region}" \
-    --query "DBClusters[0].DBClusterArn" --output text 2>/dev/null || echo "")
-  if [ -n "${cluster_arn}" ] && [ "${cluster_arn}" != "None" ]; then
-    local in_global
-    in_global=$(aws rds describe-db-clusters --db-cluster-identifier "${cluster_id}" --region "${region}" \
-      --query "DBClusters[0].GlobalClusterIdentifier" --output text 2>/dev/null || echo "")
-    if [ -n "${in_global}" ] && [ "${in_global}" != "None" ]; then
-      echo "  [B:${region}] Removing ${cluster_id} from global cluster..."
-      aws rds remove-from-global-cluster --global-cluster-identifier "${GLOBAL_CLUSTER_ID}" \
-        --db-cluster-identifier "${cluster_arn}" --region "${PRIMARY_REGION}" 2>/dev/null || true
-      # Wait for cluster to actually detach (polling; AWS takes a few seconds)
-      for _ in $(seq 1 30); do
-        in_global=$(aws rds describe-db-clusters --db-cluster-identifier "${cluster_id}" --region "${region}" \
-          --query "DBClusters[0].GlobalClusterIdentifier" --output text 2>/dev/null || echo "")
-        [ -z "${in_global}" ] || [ "${in_global}" = "None" ] && break
-        sleep 2
-      done
-    fi
-  fi
-
-  # Step 2: Delete all instances in this cluster (parallel within cluster)
+  # Step 1: Delete all instances in this cluster (parallel within cluster)
   for inst in ${instances}; do
     echo "  [B:${region}] Deleting instance ${inst}..."
     aws rds delete-db-instance --db-instance-identifier "${inst}" --skip-final-snapshot \
@@ -162,27 +141,79 @@ drain_cluster() {
   done
   wait
 
-  # Step 3: Wait for all instances deleted
+  # Step 2: Wait for all instances deleted
   for inst in ${instances}; do
     aws rds wait db-instance-deleted --db-instance-identifier "${inst}" --region "${region}" 2>/dev/null || true &
   done
   wait
   echo "  [B:${region}] Instances deleted for ${cluster_id}."
 
-  # Step 4: Delete the cluster
+  # Step 3: Delete the cluster
   echo "  [B:${region}] Deleting cluster ${cluster_id}..."
   aws rds delete-db-cluster --db-cluster-identifier "${cluster_id}" --skip-final-snapshot \
     --region "${region}" 2>/dev/null || true
 
-  # Step 5: Wait for cluster deleted
+  # Step 4: Wait for cluster deleted
   aws rds wait db-cluster-deleted --db-cluster-identifier "${cluster_id}" --region "${region}" 2>/dev/null || true
   echo "  [B:${region}] Cluster ${cluster_id} deleted."
 }
 
 branch_b() {
-  echo "  [B] Starting RDS pipeline (both clusters parallel)..."
+  echo "  [B] Starting RDS pipeline..."
 
-  # Run primary + secondary cluster pipelines in parallel
+  # Step 1: Dismantle global cluster FIRST.
+  # AWS won't let you remove the last member via remove-from-global-cluster.
+  # Strategy: remove all non-primary (secondary) clusters, then delete the
+  # global cluster itself (which implicitly detaches the primary).
+  echo "  [B] Dismantling global cluster ${GLOBAL_CLUSTER_ID}..."
+  # Remove secondary clusters from global (all non-writer members)
+  for arn in $(aws rds describe-global-clusters --global-cluster-identifier "${GLOBAL_CLUSTER_ID}" \
+    --region "${PRIMARY_REGION}" \
+    --query "GlobalClusters[0].GlobalClusterMembers[?IsWriter==\`false\`].DBClusterArn" \
+    --output text 2>/dev/null || echo ""); do
+    [ -z "${arn}" ] || [ "${arn}" = "None" ] && continue
+    echo "  [B] Removing secondary ${arn} from global..."
+    aws rds remove-from-global-cluster --global-cluster-identifier "${GLOBAL_CLUSTER_ID}" \
+      --db-cluster-identifier "${arn}" --region "${PRIMARY_REGION}" 2>/dev/null || true
+  done
+  # Wait for secondaries to detach
+  for _ in $(seq 1 30); do
+    members=$(aws rds describe-global-clusters --global-cluster-identifier "${GLOBAL_CLUSTER_ID}" \
+      --region "${PRIMARY_REGION}" \
+      --query "length(GlobalClusters[0].GlobalClusterMembers[?IsWriter==\`false\`])" \
+      --output text 2>/dev/null || echo "0")
+    [ "${members}" = "0" ] && break
+    sleep 2
+  done
+  # Now remove the primary (writer) cluster — must use remove-from-global-cluster
+  # on the last writer member, then delete the empty global cluster.
+  local writer_arn
+  writer_arn=$(aws rds describe-global-clusters --global-cluster-identifier "${GLOBAL_CLUSTER_ID}" \
+    --region "${PRIMARY_REGION}" \
+    --query "GlobalClusters[0].GlobalClusterMembers[0].DBClusterArn" \
+    --output text 2>/dev/null || echo "")
+  if [ -n "${writer_arn}" ] && [ "${writer_arn}" != "None" ]; then
+    echo "  [B] Removing writer ${writer_arn} from global..."
+    aws rds remove-from-global-cluster --global-cluster-identifier "${GLOBAL_CLUSTER_ID}" \
+      --db-cluster-identifier "${writer_arn}" --region "${PRIMARY_REGION}" 2>/dev/null || true
+    # Wait for detach
+    for _ in $(seq 1 30); do
+      remaining=$(aws rds describe-global-clusters --global-cluster-identifier "${GLOBAL_CLUSTER_ID}" \
+        --region "${PRIMARY_REGION}" \
+        --query "length(GlobalClusters[0].GlobalClusterMembers)" \
+        --output text 2>/dev/null || echo "0")
+      [ "${remaining}" = "0" ] && break
+      sleep 2
+    done
+  fi
+  # Delete the now-empty global cluster
+  echo "  [B] Deleting global cluster..."
+  aws rds delete-global-cluster --global-cluster-identifier "${GLOBAL_CLUSTER_ID}" \
+    --region "${PRIMARY_REGION}" 2>/dev/null || true
+  echo "  [B] Global cluster dismantled."
+
+  # Step 2: Drain both clusters in parallel (instances → clusters)
+  # Global cluster is gone, so no "last instance of master cluster" errors.
   if [ -n "${PRIMARY_CLUSTERS}" ]; then
     (drain_cluster "${PRIMARY_REGION}" "${PRIMARY_CLUSTERS}" ${PRIMARY_INSTANCES}) &
   fi
@@ -191,13 +222,7 @@ branch_b() {
   fi
   wait
 
-  # Join: delete global cluster (now empty)
-  echo "  [B] Deleting global cluster ${GLOBAL_CLUSTER_ID}..."
-  aws rds delete-global-cluster --global-cluster-identifier "${GLOBAL_CLUSTER_ID}" \
-    --region "${PRIMARY_REGION}" 2>/dev/null || true
-
-  # Delete the now-empty RDS CFN stacks in parallel. Resources are already gone,
-  # so CFN just updates its state — fast and reliable.
+  # Step 3: Delete the now-empty RDS CFN stacks in parallel.
   echo "  [B] Deleting RDS CFN stacks (empty shells)..."
   for entry in ${RDS_STACKS}; do
     stack="${entry%%:*}"; region="${entry##*:}"
