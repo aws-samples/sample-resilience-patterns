@@ -3,3 +3,9 @@
 !.projenrc.ts
 resilience-tests/
 .DS_Store
+cdk.out/
+node_modules/
+.env
+.env.*
+cdk.context.json
+*.js.map
