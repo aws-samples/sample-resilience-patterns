@@ -20,7 +20,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::563688183446:role/github-actions-aurora
           aws-region: us-east-1
@@ -44,7 +44,7 @@ jobs:
             aws synthetics get-canary-runs --name $canary --region us-east-1 --query 'CanaryRuns[0].Status.State' --output text || true
           done
       - name: Refresh AWS credentials (pre-failover)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::563688183446:role/github-actions-aurora
           aws-region: us-east-1
@@ -107,7 +107,7 @@ jobs:
           echo "Failover exercise complete"
       - name: Refresh AWS credentials (pre-cleanup)
         if: always()
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::563688183446:role/github-actions-aurora
           aws-region: us-east-1
