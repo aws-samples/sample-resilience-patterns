@@ -559,8 +559,10 @@ new YamlFile(root, '.github/dependabot.yml', {
       dependabotEntry('npm', '/'),
       // Per-pattern subproject dependencies.
       ...patterns.map((p) => dependabotEntry('npm', `/${p.outdir}`)),
-      // GitHub Actions versions in the workflow YAMLs.
-      dependabotEntry('github-actions', '/'),
+      // NOTE: github-actions is intentionally NOT watched by Dependabot.
+      // The workflow YAMLs are projen-generated; action versions are pinned
+      // in this .projenrc.ts. If Dependabot edited the YAML directly, the
+      // next `npx projen` would revert it. Bump action versions here instead.
     ],
   },
 });
