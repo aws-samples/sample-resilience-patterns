@@ -575,7 +575,10 @@ new YamlFile(root, '.github/dependabot.yml', {
 // Minor and major updates open PRs but require human review/merge.
 // ---------------------------------------------------------------------------
 const autoMergeWf = new github.GithubWorkflow(root.github!, 'dependabot-auto-merge');
-autoMergeWf.on({ pullRequest: {} });
+// pull_request_target gives the workflow a write-capable GITHUB_TOKEN even on Dependabot PRs
+// (pull_request downgrades Dependabot runs to a read-only token, so approve/auto-merge 403).
+// The patch-only metadata gate + dependabot[bot] actor guard below keep this safe.
+autoMergeWf.on({ pullRequestTarget: {} });
 autoMergeWf.addJobs({
   'auto-merge': {
     runsOn: ['ubuntu-latest'],
