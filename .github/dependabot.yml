@@ -35,13 +35,3 @@ updates:
           - patch
     open-pull-requests-limit: 5
     versioning-strategy: lockfile-only
-  - package-ecosystem: github-actions
-    directory: /
-    schedule:
-      interval: weekly
-    groups:
-      all-minor-and-patch:
-        update-types:
-          - minor
-          - patch
-    open-pull-requests-limit: 5

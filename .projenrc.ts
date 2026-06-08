@@ -122,16 +122,16 @@ const patterns: Pattern[] = [
     e2eRoleArn: `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-aurora`,
     awsRegion: 'us-east-1',
     buildSteps: [
-      { uses: 'actions/checkout@v4' },
-      { uses: 'actions/setup-node@v4', with: { 'node-version': '20' } },
+      { uses: 'actions/checkout@v6' },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
       { run: 'npm ci' },
       { run: 'npx projen test' },
       { run: 'npx cdk synth -c stack=bootstrap' },
     ],
     cleanupSteps: [
-      { uses: 'actions/checkout@v4' },
+      { uses: 'actions/checkout@v6' },
       {
-        uses: 'aws-actions/configure-aws-credentials@v4',
+        uses: 'aws-actions/configure-aws-credentials@v6',
         with: {
           'role-to-assume': `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-aurora`,
           'aws-region': 'us-east-1',
@@ -140,10 +140,10 @@ const patterns: Pattern[] = [
       { run: './cleanup.sh' },
     ],
     e2eSteps: [
-      { uses: 'actions/checkout@v4' },
-      { uses: 'actions/setup-node@v4', with: { 'node-version': '20' } },
+      { uses: 'actions/checkout@v6' },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
       {
-        uses: 'aws-actions/configure-aws-credentials@v4',
+        uses: 'aws-actions/configure-aws-credentials@v6',
         with: {
           'role-to-assume': `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-aurora`,
           'aws-region': 'us-east-1',
@@ -178,7 +178,7 @@ const patterns: Pattern[] = [
       },
       {
         name: 'Refresh AWS credentials (pre-failover)',
-        uses: 'aws-actions/configure-aws-credentials@v4',
+        uses: 'aws-actions/configure-aws-credentials@v6',
         with: {
           'role-to-assume': `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-aurora`,
           'aws-region': 'us-east-1',
@@ -247,7 +247,7 @@ const patterns: Pattern[] = [
       {
         name: 'Refresh AWS credentials (pre-cleanup)',
         if: 'always()',
-        uses: 'aws-actions/configure-aws-credentials@v4',
+        uses: 'aws-actions/configure-aws-credentials@v6',
         with: {
           'role-to-assume': `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-aurora`,
           'aws-region': 'us-east-1',
@@ -273,16 +273,16 @@ const patterns: Pattern[] = [
     e2eTimeoutMinutes: 45,
     cleanupTimeoutMinutes: 15,
     buildSteps: [
-      { uses: 'actions/checkout@v4' },
-      { uses: 'actions/setup-node@v4', with: { 'node-version': '20' } },
+      { uses: 'actions/checkout@v6' },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
       { run: 'npm ci' },
       { run: 'npx projen build' },
     ],
     cleanupSteps: [
-      { uses: 'actions/checkout@v4' },
+      { uses: 'actions/checkout@v6' },
       {
         name: 'Configure AWS credentials',
-        uses: 'aws-actions/configure-aws-credentials@v4',
+        uses: 'aws-actions/configure-aws-credentials@v6',
         with: {
           'role-to-assume': `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-s3mrap-crr`,
           'aws-region': 'us-east-1',
@@ -298,13 +298,13 @@ const patterns: Pattern[] = [
       },
     ],
     e2eSteps: [
-      { uses: 'actions/checkout@v4' },
-      { uses: 'actions/setup-node@v4', with: { 'node-version': '20' } },
+      { uses: 'actions/checkout@v6' },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
       { name: 'Install dependencies', run: 'npm ci' },
       { name: 'Build and test', run: 'npx projen build' },
       {
         name: 'Configure AWS credentials',
-        uses: 'aws-actions/configure-aws-credentials@v4',
+        uses: 'aws-actions/configure-aws-credentials@v6',
         with: {
           'role-to-assume': `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-s3mrap-crr`,
           'aws-region': 'us-east-1',
@@ -559,8 +559,10 @@ new YamlFile(root, '.github/dependabot.yml', {
       dependabotEntry('npm', '/'),
       // Per-pattern subproject dependencies.
       ...patterns.map((p) => dependabotEntry('npm', `/${p.outdir}`)),
-      // GitHub Actions versions in the workflow YAMLs.
-      dependabotEntry('github-actions', '/'),
+      // NOTE: github-actions is intentionally NOT watched by Dependabot.
+      // The workflow YAMLs are projen-generated; action versions are pinned
+      // in this .projenrc.ts. If Dependabot edited the YAML directly, the
+      // next `npx projen` would revert it. Bump action versions here instead.
     ],
   },
 });
@@ -586,7 +588,7 @@ autoMergeWf.addJobs({
       {
         name: 'Fetch Dependabot metadata',
         id: 'metadata',
-        uses: 'dependabot/fetch-metadata@v2',
+        uses: 'dependabot/fetch-metadata@v3',
         with: { 'github-token': '${{ secrets.GITHUB_TOKEN }}' },
       },
       {
