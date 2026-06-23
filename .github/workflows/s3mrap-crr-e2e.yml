@@ -29,6 +29,11 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::563688183446:role/github-actions-s3mrap-crr
           aws-region: us-east-1
+      - name: Pre-flight cleanup (idempotent)
+        run: |-
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          chmod +x cleanup.sh
+          ./cleanup.sh $ACCOUNT_ID || true
       - name: Deploy
         run: |-
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)

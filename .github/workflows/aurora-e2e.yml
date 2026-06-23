@@ -27,6 +27,8 @@ jobs:
           role-duration-seconds: 7200
       - run: npm ci
       - run: npx projen test
+      - name: Pre-flight cleanup (idempotent)
+        run: chmod +x cleanup.sh && ./cleanup.sh || true
       - name: Get account ID
         id: account
         run: echo "id=$(aws sts get-caller-identity --query Account --output text)" >> $GITHUB_OUTPUT

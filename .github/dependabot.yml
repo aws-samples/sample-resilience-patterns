@@ -6,6 +6,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    labels:
+      - auto-approve
+      - auto-merge
     groups:
       all-minor-and-patch:
         update-types:
@@ -17,6 +20,9 @@ updates:
     directory: /aurora
     schedule:
       interval: weekly
+    labels:
+      - auto-approve
+      - auto-merge
     groups:
       all-minor-and-patch:
         update-types:
@@ -28,6 +34,9 @@ updates:
     directory: /s3mrap-crr
     schedule:
       interval: weekly
+    labels:
+      - auto-approve
+      - auto-merge
     groups:
       all-minor-and-patch:
         update-types:
