@@ -7,7 +7,9 @@
 /.github/workflows/aurora-build.yml linguist-generated
 /.github/workflows/aurora-cleanup.yml linguist-generated
 /.github/workflows/aurora-e2e.yml linguist-generated
-/.github/workflows/dependabot-auto-merge.yml linguist-generated
+/.github/workflows/auto-approve.yml linguist-generated
+/.github/workflows/auto-merge.yml linguist-generated
+/.github/workflows/dependency-review.yml linguist-generated
 /.github/workflows/s3mrap-crr-build.yml linguist-generated
 /.github/workflows/s3mrap-crr-cleanup.yml linguist-generated
 /.github/workflows/s3mrap-crr-e2e.yml linguist-generated

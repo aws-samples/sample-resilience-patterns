@@ -153,6 +153,10 @@ const patterns: Pattern[] = [
       { run: 'npm ci' },
       { run: 'npx projen test' },
       {
+        name: 'Pre-flight cleanup (idempotent)',
+        run: 'chmod +x cleanup.sh && ./cleanup.sh || true',
+      },
+      {
         name: 'Get account ID',
         id: 'account',
         run: 'echo "id=$(aws sts get-caller-identity --query Account --output text)" >> $GITHUB_OUTPUT',
@@ -309,6 +313,14 @@ const patterns: Pattern[] = [
           'role-to-assume': `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-s3mrap-crr`,
           'aws-region': 'us-east-1',
         },
+      },
+      {
+        name: 'Pre-flight cleanup (idempotent)',
+        run: [
+          'ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)',
+          'chmod +x cleanup.sh',
+          './cleanup.sh $ACCOUNT_ID || true',
+        ].join('\n'),
       },
       {
         name: 'Deploy',
@@ -518,14 +530,11 @@ for (const p of patterns) {
 }
 
 // ---------------------------------------------------------------------------
-// Dependabot configuration — matches the pattern used by the sibling
-// aws-samples repos (microservice + serverless-batch):
-//   - lockfile-only versioning strategy for npm (don't touch declared ranges)
-//   - weekly schedule
-//   - all minor + patch updates grouped per ecosystem × directory
-//   - 5 open-pull-requests-limit per entry
-// Combined with the dependabot-auto-merge workflow below, patch updates
-// auto-merge end-to-end on green CI; minor updates require human review.
+// Dependabot configuration (label-driven auto-merge, all semver levels):
+//   - lockfile-only versioning strategy for npm
+//   - weekly schedule, grouped minor+patch per ecosystem × directory
+//   - 'auto-approve' + 'auto-merge' labels trigger the approval workflow
+//   - CI is the only gate — no semver filtering
 // ---------------------------------------------------------------------------
 const dependabotEntry = (
   ecosystem: 'npm' | 'github-actions',
@@ -535,6 +544,7 @@ const dependabotEntry = (
     'package-ecosystem': ecosystem,
     directory,
     schedule: { interval: 'weekly' },
+    labels: ['auto-approve', 'auto-merge'],
     groups: {
       'all-minor-and-patch': {
         'update-types': ['minor', 'patch'],
@@ -542,8 +552,6 @@ const dependabotEntry = (
     },
     'open-pull-requests-limit': 5,
   };
-  // lockfile-only is npm-specific (it locks transitive deps without changing
-  // declared package.json ranges). github-actions doesn't have a lockfile.
   if (ecosystem === 'npm') {
     entry['versioning-strategy'] = 'lockfile-only';
   }
@@ -555,63 +563,77 @@ new YamlFile(root, '.github/dependabot.yml', {
   obj: {
     version: 2,
     updates: [
-      // Root meta-project tooling (projen, ts-node, typescript).
       dependabotEntry('npm', '/'),
-      // Per-pattern subproject dependencies.
       ...patterns.map((p) => dependabotEntry('npm', `/${p.outdir}`)),
-      // NOTE: github-actions is intentionally NOT watched by Dependabot.
-      // The workflow YAMLs are projen-generated; action versions are pinned
-      // in this .projenrc.ts. If Dependabot edited the YAML directly, the
-      // next `npx projen` would revert it. Bump action versions here instead.
     ],
   },
 });
 
 // ---------------------------------------------------------------------------
-// Dependabot auto-merge workflow — mirrors the sibling aws-samples repos.
-// Approves and enables auto-merge on patch-only Dependabot PRs. Combined
-// with the branch protection bypass for the dependabot[bot] app (already
-// configured on this repo), this completes the full automation loop.
-// Minor and major updates open PRs but require human review/merge.
+// Auto-approve workflow: approves PRs with 'auto-approve' label from trusted
+// actors. Triggered on label, open, sync, ready_for_review events.
 // ---------------------------------------------------------------------------
-const autoMergeWf = new github.GithubWorkflow(root.github!, 'dependabot-auto-merge');
-// pull_request_target gives the workflow a write-capable GITHUB_TOKEN even on Dependabot PRs
-// (pull_request downgrades Dependabot runs to a read-only token, so approve/auto-merge 403).
-// The patch-only metadata gate + dependabot[bot] actor guard below keep this safe.
-autoMergeWf.on({ pullRequestTarget: {} });
+const autoApproveWf = new github.GithubWorkflow(root.github!, 'auto-approve');
+autoApproveWf.on({
+  pullRequestTarget: {
+    types: ['labeled', 'opened', 'synchronize', 'reopened', 'ready_for_review'],
+  },
+});
+autoApproveWf.addJobs({
+  approve: {
+    runsOn: ['ubuntu-latest'],
+    permissions: { pullRequests: github.workflows.JobPermission.WRITE },
+    if: "contains(github.event.pull_request.labels.*.name, 'auto-approve') && github.event.pull_request.user.login == 'dependabot[bot]'",
+    steps: [
+      {
+        name: 'Approve PR',
+        env: { GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}' },
+        run: 'gh pr review --approve "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}"',
+      },
+    ],
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Auto-merge workflow: enables squash auto-merge on every Dependabot PR.
+// GitHub will merge once required checks pass + approval is present.
+// ---------------------------------------------------------------------------
+const autoMergeWf = new github.GithubWorkflow(root.github!, 'auto-merge');
+autoMergeWf.on({
+  pullRequestTarget: {
+    types: ['opened', 'reopened', 'ready_for_review'],
+  },
+});
 autoMergeWf.addJobs({
-  'auto-merge': {
+  'enable-auto-merge': {
     runsOn: ['ubuntu-latest'],
     permissions: {
       contents: github.workflows.JobPermission.WRITE,
       pullRequests: github.workflows.JobPermission.WRITE,
     },
-    if: "github.actor == 'dependabot[bot]' && github.event.pull_request.user.login == 'dependabot[bot]'",
+    if: "github.event.pull_request.user.login == 'dependabot[bot]'",
     steps: [
       {
-        name: 'Fetch Dependabot metadata',
-        id: 'metadata',
-        uses: 'dependabot/fetch-metadata@v3',
-        with: { 'github-token': '${{ secrets.GITHUB_TOKEN }}' },
+        name: 'Enable auto-merge',
+        env: { GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}' },
+        run: 'gh pr merge --auto --squash "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}"',
       },
-      {
-        name: 'Approve patch updates',
-        if: "steps.metadata.outputs.update-type == 'version-update:semver-patch'",
-        env: {
-          PR_URL: '${{ github.event.pull_request.html_url }}',
-          GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}',
-        },
-        run: 'gh pr review --approve "$PR_URL"',
-      },
-      {
-        name: 'Enable auto-merge for patch updates',
-        if: "steps.metadata.outputs.update-type == 'version-update:semver-patch'",
-        env: {
-          PR_URL: '${{ github.event.pull_request.html_url }}',
-          GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}',
-        },
-        run: 'gh pr merge --auto --squash "$PR_URL"',
-      },
+    ],
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Dependency review: catches license violations + known CVEs on every PR.
+// ---------------------------------------------------------------------------
+const depReviewWf = new github.GithubWorkflow(root.github!, 'dependency-review');
+depReviewWf.on({ pullRequest: {} });
+depReviewWf.addJobs({
+  'dependency-review': {
+    runsOn: ['ubuntu-latest'],
+    permissions: { contents: github.workflows.JobPermission.READ },
+    steps: [
+      { uses: 'actions/checkout@v6' },
+      { uses: 'actions/dependency-review-action@v4' },
     ],
   },
 });

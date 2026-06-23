@@ -46,5 +46,7 @@ test-reports/
 !/.github/workflows/s3mrap-crr-e2e.yml
 !/.github/workflows/s3mrap-crr-cleanup.yml
 !/.github/dependabot.yml
-!/.github/workflows/dependabot-auto-merge.yml
+!/.github/workflows/auto-approve.yml
+!/.github/workflows/auto-merge.yml
+!/.github/workflows/dependency-review.yml
 !/.projenrc.ts
