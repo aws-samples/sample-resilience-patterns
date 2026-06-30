@@ -638,4 +638,36 @@ depReviewWf.addJobs({
   },
 });
 
+// ---------------------------------------------------------------------------
+// Retry auto-merge: re-enables auto-merge on Dependabot PRs after a check
+// suite completes (catches PRs where the initial auto-merge didn't stick due
+// to transient conflicts or incomplete checks at open time).
+// ---------------------------------------------------------------------------
+const retryAutoMergeWf = new github.GithubWorkflow(root.github!, 'retry-automerge');
+retryAutoMergeWf.on({
+  checkSuite: { types: ['completed'] },
+});
+retryAutoMergeWf.addJobs({
+  'retry-auto-merge': {
+    runsOn: ['ubuntu-latest'],
+    permissions: {
+      contents: github.workflows.JobPermission.WRITE,
+      pullRequests: github.workflows.JobPermission.WRITE,
+    },
+    if: "github.event.check_suite.app.slug == 'github-actions' && github.event.check_suite.conclusion == 'success'",
+    steps: [
+      {
+        name: 'Re-enable auto-merge on Dependabot PRs',
+        env: { GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}' },
+        run: [
+          'for pr in $(gh pr list --repo "${{ github.repository }}" --author "app/dependabot" --json number,autoMergeRequest --jq \'.[] | select(.autoMergeRequest == null) | .number\'); do',
+          '  echo "Re-enabling auto-merge on PR #$pr"',
+          '  gh pr merge --auto --squash "$pr" --repo "${{ github.repository }}" || true',
+          'done',
+        ].join('\n'),
+      },
+    ],
+  },
+});
+
 root.synth();

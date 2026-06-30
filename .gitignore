@@ -49,4 +49,5 @@ test-reports/
 !/.github/workflows/auto-approve.yml
 !/.github/workflows/auto-merge.yml
 !/.github/workflows/dependency-review.yml
+!/.github/workflows/retry-automerge.yml
 !/.projenrc.ts
