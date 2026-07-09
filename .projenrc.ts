@@ -600,8 +600,14 @@ autoApproveWf.addJobs({
 // ---------------------------------------------------------------------------
 const autoMergeWf = new github.GithubWorkflow(root.github!, 'auto-merge');
 autoMergeWf.on({
+  // 'synchronize' re-arms auto-merge on every push to the Dependabot branch
+  // (initial open + any rebase/force-push). This is the primary durable
+  // safety net: if the arming call flakes once at open time, the next push
+  // re-tries. Do NOT rely solely on retry-automerge (check_suite:completed) —
+  // its conclusion=='success' gate is skipped whenever a neutral/skipped
+  // check (e.g. CodeQL "skipping") is present in the suite.
   pullRequestTarget: {
-    types: ['opened', 'reopened', 'ready_for_review'],
+    types: ['opened', 'reopened', 'ready_for_review', 'synchronize'],
   },
 });
 autoMergeWf.addJobs({
@@ -654,7 +660,12 @@ retryAutoMergeWf.addJobs({
       contents: github.workflows.JobPermission.WRITE,
       pullRequests: github.workflows.JobPermission.WRITE,
     },
-    if: "github.event.check_suite.app.slug == 'github-actions' && github.event.check_suite.conclusion == 'success'",
+    // Only gate on the source app, NOT on conclusion == 'success'. A neutral/
+    // skipped check (e.g. CodeQL "skipping") makes the suite conclusion
+    // 'neutral', which previously skipped this job on every run. Enabling
+    // auto-merge is safe regardless: GitHub still only completes the merge
+    // once required checks pass + branch protection is satisfied.
+    if: "github.event.check_suite.app.slug == 'github-actions'",
     steps: [
       {
         name: 'Re-enable auto-merge on Dependabot PRs',
