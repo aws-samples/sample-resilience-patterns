@@ -116,6 +116,13 @@ deploy-failover-plan:
 		-c primaryClusterArn=$$P_CLUSTER_ARN -c secondaryClusterArn=$$S_CLUSTER_ARN \
 		--require-approval never
 
+deploy-ngrh:
+	@echo "═══ Deploying NGRH (ResilienceHubV2) model ═══"
+	@$(CDK) deploy $(PROJECT)-ngrh $(CDK_COMMON) -c stack=ngrh \
+		-o cdk.out.ngrh --require-approval never
+	@echo "NOTE: redeploy the tagged workload stacks (vpc, db, aurora-app) so the"
+	@echo "      'service' tags exist before NGRH tag-based discovery runs."
+
 deploy-dns-with-hc:
 	@echo "═══ Re-deploying DNS with ARC health check IDs ═══"
 	@PLAN_ARN=$(call so,$(PROJECT)-failover-plan,$(PRIMARY_REGION),PlanArn) && \
