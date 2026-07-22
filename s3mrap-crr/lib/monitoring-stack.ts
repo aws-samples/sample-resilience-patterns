@@ -149,14 +149,14 @@ export class MonitoringStack extends cdk.Stack {
 
     // Alarm on unexpected MRAP routing state: fires when the primary region is
     // not fully active (< 100%), which covers an unplanned failover, routing
-    // drift, or a both-regions-at-0% state. Missing data is not breaching (the
-    // monitor-errors alarm covers a dead monitor).
+    // drift, or a both-regions-at-0% state. Missing data is ignored (repo
+    // convention: alarm holds state; the monitor-errors alarm covers a dead monitor).
     const mrapDialDriftAlarm = new cloudwatch.Alarm(this, 'MrapDialDriftAlarm', {
       alarmName: `${props.project}-mrap-dial-drift-${props.destRegionLabel}`,
       metric: mrapDialPrimary,
       threshold: 100,
       evaluationPeriods: 2,
-      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      treatMissingData: cloudwatch.TreatMissingData.IGNORE,
       comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
     });
     mrapDialDriftAlarm.addAlarmAction(snsAction);
@@ -322,7 +322,7 @@ export class MonitoringStack extends cdk.Stack {
       metric: monitorFn.metricErrors({ period: cdk.Duration.minutes(1) }),
       threshold: 1,
       evaluationPeriods: 1,
-      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      treatMissingData: cloudwatch.TreatMissingData.IGNORE,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
     });
     monitorErrorsAlarm.addAlarmAction(snsAction);
