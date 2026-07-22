@@ -8,6 +8,7 @@ import { RoutingLambdaStack } from '../lib/routing-lambda-stack';
 import { FailoverStack } from '../lib/failover-stack';
 import { MonitoringStack } from '../lib/monitoring-stack';
 import { KmsStack, KmsReplicaStack } from '../lib/kms-stack';
+import { NgrhStack } from '../lib/ngrh-stack';
 
 const app = new cdk.App();
 
@@ -42,6 +43,10 @@ const secondaryRoutingLambdaArn = `arn:aws:lambda:${secondaryRegion}:${accountId
 const encryptionKeyId = app.node.tryGetContext('encryptionKeyId') || 'PLACEHOLDER';
 const encryptionKeyArnPrimary = `arn:aws:kms:${primaryRegion}:${accountId}:key/${encryptionKeyId}`;
 const encryptionKeyArnSecondary = `arn:aws:kms:${secondaryRegion}:${accountId}:key/${encryptionKeyId}`;
+
+// global-routing stack ARN — resolved after that stack deploys, passed via context so the
+// NGRH model can discover the untaggable MRAP via a CloudFormation-stack input source.
+const globalRoutingStackArn = app.node.tryGetContext('globalRoutingStackArn') || process.env.GLOBAL_ROUTING_STACK_ARN || '';
 
 const routingLambdaProps = {
   project,
@@ -160,3 +165,20 @@ if (targetStack === 'monitoring-secondary' || targetStack === 'all') {
     env: { account: accountId, region: secondaryRegion },
   }));
 }
+
+// NGRH (Next-Gen Resilience Hub / ResilienceHubV2) model
+if (targetStack === 'ngrh') {
+  addSuppressions(new NgrhStack(app, `${project}-ngrh`, {
+    project, primaryRegion, secondaryRegion, globalRoutingStackArn,
+    env: { account: accountId, region: primaryRegion },
+  }));
+}
+
+// NGRH tag-based discovery: tag the target stack's resources for the s3mrap service.
+// Redeploy these stacks after adding the NGRH model so the tags exist before discovery.
+// NOTE: `failover` is intentionally NOT wholesale-tagged here — its load-test harness is
+// excluded (topology-only). The ARC Region Switch Plan + its execution role are tagged
+// surgically inside failover-stack.ts instead.
+const s3mrapSvcTargets = ['bucket-primary', 'bucket-secondary', 'routing-primary', 'routing-secondary', 'global-routing', 'monitoring-primary', 'monitoring-secondary'];
+if (s3mrapSvcTargets.includes(targetStack)) cdk.Tags.of(app).add('service', project);
+if (targetStack === 'kms' || targetStack === 'kms-replica') cdk.Tags.of(app).add('service', 'shared');

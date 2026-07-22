@@ -71,6 +71,11 @@ deploy-monitoring:
 	$(CDK) deploy $(PROJECT)-monitoring-secondary $(CDK_CONTEXT) -c stack=monitoring-secondary --require-approval never &
 	wait
 
+deploy-ngrh:
+	@GR_STACK_ARN=$$(aws cloudformation describe-stacks --stack-name $(PROJECT)-global-routing --region $(PRIMARY_REGION) --query 'Stacks[0].StackId' --output text) && \
+	$(CDK) deploy $(PROJECT)-ngrh $(CDK_CONTEXT) -c stack=ngrh -c globalRoutingStackArn=$$GR_STACK_ARN --require-approval never -o cdk.out.ngrh
+	@echo "NOTE: tag the s3 buckets / routing+monitor Lambdas / KMS with service=$(PROJECT) (and shared) before NGRH discovery runs. MRAP is discovered via the global-routing CFN stack input source."
+
 .PHONY: deploy
 deploy: deploy-kms deploy-buckets deploy-routing deploy-routing-lambdas deploy-failover-and-monitoring
 	@echo "OK: All stacks deployed"
