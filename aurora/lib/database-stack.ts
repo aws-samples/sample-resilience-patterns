@@ -40,7 +40,7 @@ export class DatabaseStack extends cdk.Stack {
     // commit message for commit adding this comment for full analysis.
     this.cluster = new rds.DatabaseCluster(this, 'PrimaryCluster', {
       engine: rds.DatabaseClusterEngine.auroraPostgres({
-        version: rds.AuroraPostgresEngineVersion.VER_16_6,
+        version: rds.AuroraPostgresEngineVersion.VER_16_8,
       }),
       writer: rds.ClusterInstance.provisioned('Writer', {
         instanceType: ec2.InstanceType.of(ec2.InstanceClass.R6G, ec2.InstanceSize.LARGE),

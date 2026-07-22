@@ -30,7 +30,7 @@ export class DatabaseReplicaStack extends cdk.Stack {
 
     this.cluster = new rds.DatabaseCluster(this, 'SecondaryCluster', {
       engine: rds.DatabaseClusterEngine.auroraPostgres({
-        version: rds.AuroraPostgresEngineVersion.VER_16_6,
+        version: rds.AuroraPostgresEngineVersion.VER_16_8,
       }),
       writer: rds.ClusterInstance.provisioned('Reader', {
         instanceType: ec2.InstanceType.of(ec2.InstanceClass.R6G, ec2.InstanceSize.LARGE),
