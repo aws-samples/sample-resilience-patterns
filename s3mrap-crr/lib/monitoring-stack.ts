@@ -131,8 +131,7 @@ export class MonitoringStack extends cdk.Stack {
 
     const customNamespace = `${props.project}`;
 
-    if (props.createDashboard !== false) {
-      const mrapDialPrimary = new cloudwatch.Metric({
+    const mrapDialPrimary = new cloudwatch.Metric({
       namespace: customNamespace,
       metricName: 'MrapTrafficDial',
       dimensionsMap: { Region: props.primaryRegion },
@@ -147,6 +146,23 @@ export class MonitoringStack extends cdk.Stack {
       statistic: 'Average',
       period: cdk.Duration.minutes(1),
     });
+
+    // Alarm on unexpected MRAP routing state: fires when the primary region is
+    // not fully active (< 100%), which covers an unplanned failover, routing
+    // drift, or a both-regions-at-0% state. Missing data is not breaching (the
+    // monitor-errors alarm covers a dead monitor).
+    const mrapDialDriftAlarm = new cloudwatch.Alarm(this, 'MrapDialDriftAlarm', {
+      alarmName: `${props.project}-mrap-dial-drift-${props.destRegionLabel}`,
+      metric: mrapDialPrimary,
+      threshold: 100,
+      evaluationPeriods: 2,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+    });
+    mrapDialDriftAlarm.addAlarmAction(snsAction);
+    mrapDialDriftAlarm.addOkAction(snsAction);
+
+    if (props.createDashboard !== false) {
 
     // --- Combined Dashboard (both replication directions) ---
     // Uses cross-region metric references for secondary region metrics
@@ -298,5 +314,18 @@ export class MonitoringStack extends cdk.Stack {
       schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
       targets: [new targets.LambdaFunction(monitorFn)],
     });
+
+    // Detect a failing MRAP monitor (it now re-raises on error, so the Lambda
+    // Errors metric increments and this alarm fires instead of silently going stale).
+    const monitorErrorsAlarm = new cloudwatch.Alarm(this, 'MrapMonitorErrorsAlarm', {
+      alarmName: `${props.project}-mrap-monitor-errors-${props.destRegionLabel}`,
+      metric: monitorFn.metricErrors({ period: cdk.Duration.minutes(1) }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+    });
+    monitorErrorsAlarm.addAlarmAction(snsAction);
+    monitorErrorsAlarm.addOkAction(snsAction);
   }
 }
