@@ -27,7 +27,7 @@ def handler(event, context):
         )
     except Exception as e:
         logger.error(f'Failed to get MRAP routes: {e}')
-        return {'statusCode': 500, 'error': str(e)}
+        raise
 
     metric_data = []
     for route in resp.get('Routes', []):

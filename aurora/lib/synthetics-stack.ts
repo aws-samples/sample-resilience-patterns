@@ -95,13 +95,16 @@ export class SyntheticsStack extends cdk.Stack {
     const runtime = new synthetics.Runtime('syn-python-selenium-10.0', synthetics.RuntimeFamily.PYTHON);
 
     const regionCode = this.region === 'us-east-1' ? 'e1' : 'w2';
+    // Short suffixes: canary names cap at 21 chars, and the e2e passes a
+    // sha-suffixed project (e.g. aurora-a1b2c3, 13 chars). 13 + 1 + 6 = 20.
+    // rdl/rdr/rdg = read local/remote/global; wrl/wrr/wrg = write.
     const canaries: { suffix: string; code: string }[] = [
-      { suffix: `rd-local-${regionCode}`, code: readOnlyCode(props.localRecordName) },
-      { suffix: `rd-remote-${regionCode}`, code: readOnlyCode(props.remoteRecordName) },
-      { suffix: `rd-global-${regionCode}`, code: readOnlyCode(props.dnsRecordName) },
-      { suffix: `wr-local-${regionCode}`, code: writeCode(props.localRecordName) },
-      { suffix: `wr-remote-${regionCode}`, code: writeCode(props.remoteRecordName) },
-      { suffix: `wr-global-${regionCode}`, code: writeCode(props.dnsRecordName) },
+      { suffix: `rdl-${regionCode}`, code: readOnlyCode(props.localRecordName) },
+      { suffix: `rdr-${regionCode}`, code: readOnlyCode(props.remoteRecordName) },
+      { suffix: `rdg-${regionCode}`, code: readOnlyCode(props.dnsRecordName) },
+      { suffix: `wrl-${regionCode}`, code: writeCode(props.localRecordName) },
+      { suffix: `wrr-${regionCode}`, code: writeCode(props.remoteRecordName) },
+      { suffix: `wrg-${regionCode}`, code: writeCode(props.dnsRecordName) },
     ];
 
     for (const { suffix, code } of canaries) {

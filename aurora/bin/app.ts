@@ -15,6 +15,7 @@ import { MonitoringStack } from '../lib/monitoring-stack';
 import { ReconciliationStack } from '../lib/reconciliation-stack';
 import { LoadGenStack } from '../lib/loadgen-stack';
 import { ChaosStack } from '../lib/chaos-stack';
+import { NgrhStack } from '../lib/ngrh-stack';
 import { VpcImportProps } from '../lib/imports';
 
 const app = new cdk.App();
@@ -170,5 +171,20 @@ if (target === 'loadgen') {
 // ─── Chaos ───
 if (target === 'chaos-primary') suppress(new ChaosStack(app, `${project}-chaos-primary`, { project, targetRegion: secondaryRegion, env: env(primaryRegion) }));
 if (target === 'chaos-secondary') suppress(new ChaosStack(app, `${project}-chaos-secondary`, { project, targetRegion: primaryRegion, env: env(secondaryRegion) }));
+
+// ─── NGRH (Next-Gen Resilience Hub / ResilienceHubV2) model ───
+if (target === 'ngrh') {
+  suppress(new NgrhStack(app, `${project}-ngrh`, { project, primaryRegion, secondaryRegion, env: env(primaryRegion) }));
+}
+
+// ─── NGRH tag-based discovery ───
+// The ResilienceHubV2 Service discovers its resources by the `service` tag.
+// Only the target stack exists in this synth, so tagging the app scope tags
+// that stack's resources. Redeploy these stacks after adding the NGRH model
+// so the tags exist before NGRH discovery runs.
+const svcTargets = ['aurora-app-primary', 'aurora-app-secondary', 'db-primary', 'db-secondary'];
+const sharedTargets = ['vpc-primary', 'vpc-secondary'];
+if (svcTargets.includes(target)) cdk.Tags.of(app).add('service', `${project}-app`);
+if (sharedTargets.includes(target)) cdk.Tags.of(app).add('service', 'shared');
 
 app.synth();

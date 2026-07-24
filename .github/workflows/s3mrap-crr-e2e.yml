@@ -29,6 +29,10 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::563688183446:role/github-actions-s3mrap-crr
           aws-region: us-east-1
+      - name: Set sha-suffixed project name
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: echo "PROJECT=s3mrap-$(echo $HEAD_SHA | cut -c1-6)" >> $GITHUB_ENV
       - name: Pre-flight cleanup (idempotent)
         run: |-
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
@@ -37,7 +41,7 @@ jobs:
       - name: Deploy
         run: |-
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          npx cdk deploy s3mrap-bootstrap -c accountId=$ACCOUNT_ID --require-approval never
+          npx cdk deploy $PROJECT-bootstrap -c project=$PROJECT -c accountId=$ACCOUNT_ID --require-approval never
       - name: Run load test with mid-flight failover
         run: |-
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
@@ -140,4 +144,3 @@ jobs:
     timeout-minutes: 45
 env:
   AWS_REGION: us-east-1
-  PROJECT: s3mrap

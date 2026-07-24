@@ -153,6 +153,14 @@ const patterns: Pattern[] = [
       { run: 'npm ci' },
       { run: 'npx projen test' },
       {
+        // Unique per-run stack names (like the microservice repo's ENV suffix):
+        // prevents fixed-name collisions when a prior run's teardown was
+        // interrupted or failed. Sha passed via env to avoid script injection.
+        name: 'Set sha-suffixed project name',
+        env: { HEAD_SHA: '${{ github.event.pull_request.head.sha || github.sha }}' },
+        run: 'echo "PROJECT=aurora-$(echo $HEAD_SHA | cut -c1-6)" >> $GITHUB_ENV',
+      },
+      {
         name: 'Pre-flight cleanup (idempotent)',
         run: 'chmod +x cleanup.sh && ./cleanup.sh || true',
       },
@@ -165,8 +173,8 @@ const patterns: Pattern[] = [
         name: 'Deploy via bootstrap',
         run: [
           'ACCOUNT_ID=${{ steps.account.outputs.id }}',
-          'npx cdk deploy aurora-bootstrap \\',
-          '  -c stack=bootstrap -c project=aurora -c primaryRegion=us-east-1 -c secondaryRegion=us-west-2 \\',
+          'npx cdk deploy $PROJECT-bootstrap \\',
+          '  -c stack=bootstrap -c project=$PROJECT -c primaryRegion=us-east-1 -c secondaryRegion=us-west-2 \\',
           '  -c accountId=$ACCOUNT_ID --require-approval never',
         ].join('\n'),
       },
@@ -175,7 +183,7 @@ const patterns: Pattern[] = [
         run: [
           'echo "Waiting for canaries to run..."',
           'sleep 360',
-          'for canary in aurora-rd-local-e1 aurora-wr-local-e1; do',
+          'for canary in $PROJECT-rdl-e1 $PROJECT-wrl-e1; do',
           '  aws synthetics get-canary-runs --name $canary --region us-east-1 --query \'CanaryRuns[0].Status.State\' --output text || true',
           'done',
         ].join('\n'),
@@ -193,9 +201,9 @@ const patterns: Pattern[] = [
         name: 'Load test + failover exercise',
         run: [
           'ACCOUNT_ID=${{ steps.account.outputs.id }}',
-          'PLAN_ARN=$(aws cloudformation describe-stacks --stack-name aurora-failover-plan --region us-east-1 \\',
+          'PLAN_ARN=$(aws cloudformation describe-stacks --stack-name $PROJECT-failover-plan --region us-east-1 \\',
           '  --query "Stacks[0].Outputs[?OutputKey==\'PlanArn\'].OutputValue" --output text)',
-          'SSM_DOC=$(aws cloudformation describe-stack-resources --stack-name aurora-loadgen --region us-east-1 \\',
+          'SSM_DOC=$(aws cloudformation describe-stack-resources --stack-name $PROJECT-loadgen --region us-east-1 \\',
           '  --query "StackResources[?ResourceType==\'AWS::SSM::Document\'].PhysicalResourceId" --output text)',
           '',
           'wait_for_plan() {',
@@ -273,7 +281,7 @@ const patterns: Pattern[] = [
     outdir: 's3mrap-crr',
     e2eRoleArn: `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-s3mrap-crr`,
     awsRegion: 'us-east-1',
-    e2eEnv: { AWS_REGION: 'us-east-1', PROJECT: 's3mrap' },
+    e2eEnv: { AWS_REGION: 'us-east-1' },
     e2eTimeoutMinutes: 45,
     cleanupTimeoutMinutes: 15,
     buildSteps: [
@@ -315,6 +323,14 @@ const patterns: Pattern[] = [
         },
       },
       {
+        // Unique per-run stack names (like the microservice repo's ENV suffix):
+        // prevents fixed-name collisions when a prior run's teardown was
+        // interrupted or failed. Sha passed via env to avoid script injection.
+        name: 'Set sha-suffixed project name',
+        env: { HEAD_SHA: '${{ github.event.pull_request.head.sha || github.sha }}' },
+        run: 'echo "PROJECT=s3mrap-$(echo $HEAD_SHA | cut -c1-6)" >> $GITHUB_ENV',
+      },
+      {
         name: 'Pre-flight cleanup (idempotent)',
         run: [
           'ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)',
@@ -326,7 +342,7 @@ const patterns: Pattern[] = [
         name: 'Deploy',
         run: [
           'ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)',
-          'npx cdk deploy s3mrap-bootstrap -c accountId=$ACCOUNT_ID --require-approval never',
+          'npx cdk deploy $PROJECT-bootstrap -c project=$PROJECT -c accountId=$ACCOUNT_ID --require-approval never',
         ].join('\n'),
       },
       {

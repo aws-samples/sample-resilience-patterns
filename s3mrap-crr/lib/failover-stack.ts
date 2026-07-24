@@ -115,6 +115,11 @@ export class FailoverStack extends cdk.Stack {
       resources: [props.primaryRoutingLambdaArn, props.secondaryRoutingLambdaArn],
     }));
 
+    // Topology-only tagging: the ARC Region Switch Plan + its execution role are part of the
+    // s3mrap resilience topology and are tagged for NGRH discovery. The load-test harness
+    // (LoadTestFunction / LoadTestDocument, below) is deliberately left untagged.
+    cdk.Tags.of(arcExecutionRole).add('service', props.project);
+
     new cdk.CfnResource(this, 'ArcRegionSwitchPlan', {
       type: 'AWS::ARCRegionSwitch::Plan',
       properties: {
@@ -123,6 +128,10 @@ export class FailoverStack extends cdk.Stack {
         PrimaryRegion: props.primaryRegion,
         Regions: [props.primaryRegion, props.secondaryRegion],
         ExecutionRole: arcExecutionRole.roleArn,
+        // Explicit tag: this is a generic CfnResource, so cdk.Tags.of(app) (aspect-based,
+        // needs a TagManager) does NOT propagate to it. NGRH tag-based discovery needs
+        // the ARC Region Switch Plan tagged into the s3mrap service. Tags shape is a map.
+        Tags: { service: props.project },
         Workflows: [{
           WorkflowTargetAction: 'activate',
           WorkflowDescription: 'Update MRAP routing to send traffic to the activating region',
