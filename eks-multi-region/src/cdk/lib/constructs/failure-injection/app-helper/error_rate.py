@@ -1,7 +1,7 @@
 """Reusable error-rate knob reader (5s TTL cache).
 
-Lifted from five-nines ``src/lambda/backend/handler.py:9-44``; the hardcoded
-``Name="/five-nines-demo/error-rate"`` is now read from the ``ERROR_RATE_PARAM``
+Lifted from the predecessor project ``src/lambda/backend/handler.py:9-44``; the hardcoded
+``Name="/the predecessor project-demo/error-rate"`` is now read from the ``ERROR_RATE_PARAM``
 environment variable that the ``FailureInjectionParameter`` construct injects.
 
 Wire (in the demo's CDK stack)::
@@ -16,7 +16,7 @@ Then in the demo's handler::
             return {"statusCode": 500, "body": '{"error":"Internal Server Error"}'}
         ...  # normal path
 
-Gotcha (five-nines AGENTS.md:39): after injecting failure, wait ~5s before
+Gotcha (a lesson from the predecessor project): after injecting failure, wait ~5s before
 expecting full effect — that's the TTL.
 """
 import os
@@ -71,5 +71,5 @@ def get_error_rate() -> int:
 
 
 def should_fail() -> bool:
-    """Convenience: True for ~error_rate% of calls (five-nines handler.py:39)."""
+    """Convenience: True for ~error_rate% of calls (the predecessor project handler.py:39)."""
     return random.randint(0, 99) < get_error_rate()

@@ -48,7 +48,7 @@ IMAGE_TAG="${IMAGE_TAG:-v3.5.0}"
 
 # The ARM64 CHILD digest, NOT the index digest.
 #
-# The same trap as karpenter (AGENTS.md bug class 10): build/mirror-images.sh copies only
+# The same trap as karpenter (docs/lessons.md #10): build/mirror-images.sh copies only
 # linux/arm64 by default, so the multi-platform INDEX digest does not exist in our ECR
 # mirror. Point at the index and every controller pod fails to pull with "manifest unknown",
 # which reads as a mirror that never ran rather than a digest that cannot resolve.
@@ -128,7 +128,7 @@ echo "Rendering..."
 # `aws-load-balancer-tls` Secret and the matching CA into every webhook `caBundle`. Committing
 # that would put a live TLS private key into git history -- a one-way door in a shared repo.
 #
-# ARCC names this exactly: SAX-02 Outcome 3 lists "Storing certificates and private keys in
+# The rule is explicit: no secrets in version control -- "Storing certificates and private keys in
 # version control systems" as its FIRST common pitfall, and SAX-05 Outcome 2 requires secrets
 # live in Secrets Manager or KMS and "never hardcode in source code". The other vendored
 # manifests in this repo commit only EMPTY Secret shells (argocd-secret, tls.key = 0 bytes) --
@@ -186,7 +186,7 @@ STRIP
   echo "#   LBC_CLUSTER_NAME  LBC_REGION  LBC_VPC_ID  LBC_IMAGE_REPO  LBC_CONTROLLER_ROLE_ARN"
   echo "#"
   echo "# NO KEY MATERIAL IS COMMITTED. The chart's self-signed Secret was STRIPPED and every"
-  echo "# caBundle blanked (ARCC SAX-02 Outcome 3: private keys must not live in version"
+  echo "# caBundle blanked (the no-secrets-in-version-control rule: private keys must not live in version"
   echo "# control; SAX-05 Outcome 2: secrets belong in Secrets Manager/KMS). The installer"
   echo "# generates the CA + serving cert in-cluster, creates the aws-load-balancer-tls Secret"
   echo "# and injects the caBundle."

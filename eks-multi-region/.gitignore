@@ -12,7 +12,6 @@
 .pnp.*
 !/.yarnrc.yml
 !/package.json
-!/LICENSE
 !/.npmignore
 logs
 *.log

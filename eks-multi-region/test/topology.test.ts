@@ -382,6 +382,91 @@ describe('deploy parameter contract', () => {
   });
 });
 
+describe('operator entry points mirror the deploy rail (Makefile, cleanup.sh, verify-stacks.sh)', () => {
+  // The rail in .projen/tasks.json is the single source of truth for WHICH stacks exist
+  // and WHERE. cleanup.sh and verify-stacks.sh each carry their own region:stack list --
+  // a human-readable one an operator can run without Node -- so they must be derived-equal
+  // to the rail or a renamed/added stack silently escapes teardown (bug class 4: a contract
+  // spread across files with nothing checking it). Both lists are rendered by running the
+  // scripts' own array declarations through bash with the rail's env, not by regex.
+  const tasks = JSON.parse(
+    fs.readFileSync(path.join(__dirname, '..', '.projen', 'tasks.json'), 'utf8'),
+  );
+  const railPairs = (): Set<string> => {
+    const out = new Set<string>();
+    for (const s of tasks.tasks.deploy.steps as Array<{ exec?: string }>) {
+      const e = s.exec ?? '';
+      const r = /AWS_REGION=\\?"([a-z0-9-]+)/.exec(e);
+      const n = /STACK_NAME=\\?"([^"\\]+)/.exec(e);
+      if (r && n) out.add(`${r[1]}:${n[1].replace('$PROJECT_NAME', APP_ID)}`);
+    }
+    return out;
+  };
+  const env = {
+    ...process.env,
+    PROJECT_NAME: APP_ID,
+    PRIMARY_REGION: REGIONS[0].name,
+    SECONDARY_REGION: REGIONS[1].name,
+    ASSETS_BUCKET_PREFIX: 'x',
+  };
+  // Run a bash snippet from a temp file (the existing python probes do the same) rather
+  // than through `bash -c` quoting, which is where a first version of this test lost the
+  // output silently.
+  const runBash = (script: string): string[] => {
+    const f = path.join(__dirname, `entrypoint-probe-${process.pid}.sh`);
+    fs.writeFileSync(f, script);
+    try {
+      return execSync(`bash ${f}`, { encoding: 'utf8', env }).trim().split('\n').filter(Boolean);
+    } finally {
+      fs.unlinkSync(f);
+    }
+  };
+
+  it('the rail deploys the twelve stacks this test expects to exist', () => {
+    // Anti-vacuity: if the rail parser matched nothing, both derived comparisons below
+    // would pass on empty sets.
+    expect(railPairs().size).toBe(12);
+  });
+
+  it('verify-stacks.sh checks exactly the stacks the rail deploys, in their regions', () => {
+    // Evaluate the script's OWN array declaration (everything before its first AWS call),
+    // then print the expanded entries -- so the assertion is against what bash sees, not
+    // against a regex approximation of it.
+    const src = fs.readFileSync(path.join(__dirname, '..', 'build', 'verify-stacks.sh'), 'utf8');
+    const cut = src.indexOf('bad=0');
+    expect(cut).toBeGreaterThan(0);
+    const pairs = runBash(`${src.slice(0, cut)}\nprintf '%s\\n' "\${STACKS[@]}"\n`);
+    expect(pairs.sort()).toEqual([...railPairs()].sort());
+  });
+
+  it('cleanup.sh deletes exactly the stacks the rail deploys, in their regions', () => {
+    // cleanup.sh lists its stacks inline in delete_wave calls rather than one array, so
+    // extract every "$REGION:$PROJECT-..." literal and expand it the same way.
+    const src = fs.readFileSync(path.join(__dirname, '..', 'cleanup.sh'), 'utf8');
+    const literals = [...src.matchAll(/"\$(PRIMARY|SECONDARY|OBSERVER):\$PROJECT-[^"]+"/g)].map((m) => m[0]);
+    expect(literals.length).toBe(12);
+    const pairs = runBash([
+      `PROJECT=${APP_ID}`, `PRIMARY=${REGIONS[0].name}`, `SECONDARY=${REGIONS[1].name}`, 'OBSERVER=us-east-1',
+      ...literals.map((l) => `echo ${l}`),
+    ].join('\n'));
+    expect(pairs.sort()).toEqual([...railPairs()].sort());
+    // And the two load-bearing orderings are literally present: secondarydb before
+    // globaldata, and the region stacks in the LAST wave.
+    expect(src.indexOf('$PROJECT-secondarydb')).toBeLessThan(src.indexOf('$PROJECT-globaldata'));
+    expect(src.lastIndexOf('delete_wave')).toBe(src.lastIndexOf('delete_wave "$PRIMARY:$PROJECT-region-$PRIMARY"'));
+  });
+
+  it('the shell entry points parse and the Makefile targets the e2e workflow calls exist', () => {
+    for (const f of ['cleanup.sh', 'build/verify-stacks.sh', 'build/tunnel.sh']) {
+      execSync(`bash -n ${path.join(__dirname, '..', f)}`);
+    }
+    const mk = fs.readFileSync(path.join(__dirname, '..', 'Makefile'), 'utf8');
+    for (const target of ['buckets', 'mirror', 'deploy', 'verify', 'clean', 'build']) {
+      expect({ target, defined: new RegExp(`^${target}:`, 'm').test(mk) }).toEqual({ target, defined: true });
+    }
+  });
+});
+
 describe('observability wiring (coherence finding C-1)', () => {
   it('gives each region a DISTINCT dashboard name', () => {
     // The green stub used `${appId}-demo`, identical in both regions, which would
@@ -1610,7 +1695,7 @@ describe('global routing (step 4b)', () => {
     // routing policies, so latency->failover is legal only as a SINGLE change batch
     // covering both. CloudFormation updates separate RecordSet resources INDIVIDUALLY --
     // exactly the rejected case -- so the pair must stay in one RecordSetGroup. Proven
-    // live 2026-08-31: see AGENTS.md bug class 17 experiments
+    // live 2026-08-31: see docs/lessons.md #17 experiments
     // A-D. Splitting this back into per-region resources makes the stack un-updatable.
     // The records live in the FAILOVER stack, not the dns stack: the plan and the records
     // are a mutual contract, and co-locating them is what lets the template own the health
@@ -2177,7 +2262,7 @@ print(json.dumps({
   });
 
   test('importing the app module cannot hang or raise, with or without IMDS', () => {
-    // AGENTS.md bug class 14: a green image build does not prove a startable image. NODE_AZ
+    // docs/lessons.md #14: a green image build does not prove a startable image. NODE_AZ
     // is resolved at IMPORT scope from IMDS, and a blocking or raising read there would hang
     // or break EVERY container start. The in-image smoke test
     // (`RUN AWS_REGION=smoke ... python -c "import server, schema"`, src/app/Dockerfile:52)
@@ -3383,7 +3468,7 @@ describe('ARC Region Switch skeleton (step 7)', () => {
     const simulate = statements.filter((s: any) =>
       JSON.stringify(s.Action).includes('iam:SimulatePrincipalPolicy'),
     );
-    // Scoped to a role ARN rather than '*' (ARCC SAX-08 Outcome 1).
+    // Scoped to a role ARN rather than '*' (least-privilege guidance).
     expect(simulate).toHaveLength(1);
     for (const s of simulate) {
       expect(s.Resource).not.toBe('*');
@@ -3981,7 +4066,7 @@ describe('third-party image mirror (step 10a)', () => {
 
     // 3. every consumed $PREFIX_KEY must exist. The negative lookahead skips
     //    $REGION_0_VPC_CIDR and friends -- underscore-separated names are CI variables
-    //    (.gitlab-ci.yml), not dotenv output keys.
+    //    (the CI workflow), not dotenv output keys.
     const missing: string[] = [];
     for (const [prefix, stackName] of prefixToStack) {
       expect(templates.has(stackName)).toBe(true);
@@ -4060,7 +4145,7 @@ describe('third-party image mirror (step 10a)', () => {
     // mirror decides what gets PUSHED to ECR, and the render script decides what the
     // committed manifest PULLS. Bump one without the other and the manifest points at an
     // image the mirror never pushed -- pods time out pulling, which reads as a network fault
-    // rather than a version mismatch (AGENTS.md bug class 10).
+    // rather than a version mismatch (docs/lessons.md #10).
     //
     // It also pins the arm64-child-not-index rule: mirror-images.sh copies only linux/arm64,
     // so the multi-platform INDEX digest does not exist in our ECR. Pointing the manifest at
@@ -4888,10 +4973,16 @@ describe('the ARC endpoint wrapper and operator runbook (step 9)', () => {
       'not quota headroom', // evaluation does not check quotas
       'regional data plane', // the endpoint rule
       'Writes recover, not just reads', // application vs platform recovery
-      '2 \u2192 4', // the replica-count check
+      '3 \u2192 5', // the replica-count check: floor 3, targetPercent 150
+      'compounds across a round trip', // targetPercent feeds the next execution's ask
+      'make clean', // teardown is one script, pinned to the rail's stack list
     ]) {
       expect(rb).toContain(fact);
     }
+    // The pre-fix arithmetic must not survive anywhere in the runbook: it described a
+    // 2-replica floor and 200%, and an operator reading it would expect the wrong numbers.
+    expect(rb).not.toContain('2 \u2192 4');
+    expect(rb).not.toContain('200%');
   });
 
   test('the runbook severity claims match the SHIPPED calibration, not a superseded one', () => {
@@ -5279,7 +5370,7 @@ describe('the Argo CD Application, the inert HPA and hpaName (steps 10d/10e)', (
     // needs, so the HPA must never scale below it. Left at 2, a quiet period lets the HPA drop
     // a pod and silently empty an AZ, and a fault aimed there injects cleanly and moves no
     // graph. Raising this dates the recorded narration's spoken 2 -> 4 -> 6 and perturbs the
-    // ARC 24-hour replica sample for about a day (AGENTS.md bug class 12) -- both known and
+    // ARC 24-hour replica sample for about a day (docs/lessons.md #12) -- both known and
     // accepted. Do NOT revert it to keep this assertion green.
     expect(app).toContain('minReplicas: 3');
   });
@@ -5806,7 +5897,7 @@ describe('AWS Load Balancer Controller install (single-AZ / zonal-shift feature)
   test('every LBC placeholder the manifest uses is supplied by a deploy step', () => {
     // A placeholder the manifest needs but no step supplies fails at DEPLOY, not at build:
     // render-manifest.py aborts on an unresolved placeholder several phases into a live
-    // deploy (AGENTS.md bug class 4). Derived from the manifest itself, so adding a
+    // deploy (docs/lessons.md #4). Derived from the manifest itself, so adding a
     // placeholder without threading it turns the gate red.
     const manifest = fs.readFileSync(
       path.join(__dirname, '..', 'src', 'lbc', 'lbc.yaml'), 'utf8');
@@ -5849,7 +5940,7 @@ describe('AWS Load Balancer Controller install (single-AZ / zonal-shift feature)
   });
 
   test('NO vendored manifest commits private key material', () => {
-    // ARCC SAX-02 Outcome 3 lists "Storing certificates and private keys in version control
+    // the no-secrets-in-version-control rule lists "Storing certificates and private keys in version control
     // systems" as its FIRST common pitfall; SAX-05 Outcome 2 requires secrets live in Secrets
     // Manager or KMS and "never hardcode in source code".
     //
@@ -5881,7 +5972,7 @@ describe('AWS Load Balancer Controller install (single-AZ / zonal-shift feature)
 
   test('the LBC manifest gets its OWN pass, and the installer generates the cert', () => {
     // The service webhook is failurePolicy: Fail and its caBundle is BLANKED at render time
-    // (no key material in git -- ARCC SAX-02 Outcome 3). A webhook registered with a blank CA
+    // (no key material in git -- the no-secrets-in-version-control rule). A webhook registered with a blank CA
     // makes EVERY Service create in the cluster fail, so the installer must generate the cert,
     // create the Secret, apply this manifest, patch the caBundle and WAIT -- all before the app
     // manifest. None of that is visible to synth: the template is identical either way.
@@ -6096,7 +6187,7 @@ describe('Service migration to ip targets (D6 — Argo is the other writer)', ()
    *  deliberately NAME the wrong values they exist to warn about -- an invented annotation, a
    *  prerequisite-violating attribute -- so a naive substring check matches the explanation
    *  rather than the configuration and fails for the wrong reason. This repo already carries the
-   *  same lesson in a comment-stripped SQL test (AGENTS.md bug class 16). */
+   *  same lesson in a comment-stripped SQL test (docs/lessons.md #16). */
   const stripComments = (y: string): string =>
     y.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
   const svcConfig = stripComments(svc);
@@ -6256,7 +6347,7 @@ describe('cluster-wide pod log shipping (fluent-bit)', () => {
   const namespaces = () => read('k8s', 'namespaces.yaml');
 
   test('the image is the mirrored ARM64 CHILD digest, matching images.json exactly', () => {
-    // THE CROSS-FILE CONTRACT, and AGENTS.md bug class 10. The mirror copies linux/arm64
+    // THE CROSS-FILE CONTRACT, and docs/lessons.md #10. The mirror copies linux/arm64
     // only, which pushes the CHILD manifest -- so the multi-platform INDEX digest never
     // lands in ECR. Referencing the index here would fail as a pull timeout, which reads
     // as a network fault on nodes that genuinely have no internet route. Same shape as the
@@ -6289,7 +6380,7 @@ describe('cluster-wide pod log shipping (fluent-bit)', () => {
   });
 
   test('the DaemonSet holds NO Kubernetes RBAC at all', () => {
-    // ARCC (Aristotle 509 / AWS-446): "Avoid granting DaemonSets excessive cluster-wide
+    // EKS security guidance: "Avoid granting DaemonSets excessive cluster-wide
     // Kubernetes permissions. As DaemonSets run on all nodes, a container breakout on any
     // node may allow an attacker to get hold of these permissions." The stock install
     // grants cluster-wide pod read for the `kubernetes` metadata filter; the path-regex
@@ -6361,7 +6452,7 @@ describe('cluster-wide pod log shipping (fluent-bit)', () => {
   test('the shipper role can do NOTHING but append to its own log group', () => {
     // The conventional attachment is CloudWatchAgentServerPolicy, which carries
     // logs:CreateLogGroup, cloudwatch:PutMetricData, ec2:DescribeTags and ssm:GetParameter
-    // on "*" -- exactly the "excessive AWS permissions on a DaemonSet" shape ARCC warns
+    // on "*" -- exactly the "excessive AWS permissions on a DaemonSet" shape AWS guidance warns
     // about. Derived from the SYNTHESIZED template so it fails if the construct widens,
     // and two-sided so it also fails if the grant disappears entirely.
     for (const region of REGIONS) {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Restore = inject 0. Param name is parameterized (read it from the
 # FailureInjectionParameter `ErrorRateParamName` CfnOutput).
-# Generalized from five-nines scripts/restore.sh:12-17.
+# Generalized from the predecessor project scripts/restore.sh:12-17.
 set -euo pipefail
 if [ $# -ne 2 ]; then
   echo "Usage: $0 <region> <param-name>"

@@ -70,6 +70,13 @@ root.package.addField('license', 'MIT');
 interface Pattern {
   /** Subdirectory name and CDK app name. */
   outdir: string;
+  /**
+   * When true, the pattern carries its OWN .projenrc.ts (its own package manager, CDK
+   * version, deploy rail) and the root generates only the three workflows and the
+   * dependabot entry -- NOT the subproject scaffolding. Two projen owners of one
+   * package.json would fight each other on every `npx projen`. Default false.
+   */
+  selfManaged?: boolean;
   /** GitHub Actions OIDC role ARN (per-pattern least-privilege). */
   e2eRoleArn: string;
   /** Primary AWS region for credential configuration. */
@@ -86,6 +93,11 @@ interface Pattern {
   cleanupTimeoutMinutes?: number;
   /** Optional env block applied to the e2e workflow. */
   e2eEnv?: Record<string, string>;
+  /**
+   * Runner label for all three jobs. Default 'ubuntu-latest'. eks-multi-region needs an
+   * arm64 runner: its container images are Graviton-only and kaniko cannot cross-build.
+   */
+  runsOn?: string;
 }
 
 // Common CDK app config — shared across all patterns.
@@ -464,25 +476,193 @@ const patterns: Pattern[] = [
       },
     ],
   },
+
+  // -------------------------------------------------------------------------
+  // eks-multi-region — multi-region EKS + ARC Region Switch + FIS demo.
+  //
+  // SELF-MANAGED: it has its own .projenrc.ts (yarn berry, aws-cdk-lib 2.248 for the
+  // ARC L1s, a multi-phase deploy rail with an in-VPC CodeBuild installer), so the root
+  // emits only its workflows. ARM64 RUNNERS: the app and load-generator images are
+  // Graviton-only and kaniko cannot cross-build.
+  //
+  // The e2e here is a DEPLOY-AND-TEAR-DOWN proof, not the failover exercise the aurora
+  // pattern runs: the rail takes ~90 minutes, and ARC's EKS scaling block sizes the
+  // standby from a 24-hour replica sample, so a same-run failover would scale nothing
+  // and prove nothing (see eks-multi-region/docs/runbook.md). The failover round trip is
+  // the operator's `build/arc-switch.sh`, run on day 2.
+  // -------------------------------------------------------------------------
+  {
+    outdir: 'eks-multi-region',
+    selfManaged: true,
+    runsOn: 'ubuntu-24.04-arm',
+    e2eRoleArn: `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-eks-multi-region`,
+    awsRegion: 'us-east-2',
+    e2eEnv: {
+      AWS_REGION: 'us-east-2',
+      AWS_DEFAULT_REGION: 'us-east-2',
+      // Two-tier permissions, the same shape `cdk deploy` gives the aurora pattern via
+      // the cdk-* bootstrap roles: the GitHub role holds only what the workflow's own
+      // shell steps call (change-sets, S3, ECR, CodeBuild, EKS describe, SSM, tags) plus
+      // iam:PassRole on THIS CloudFormation service role, which holds the broad
+      // resource permissions the stacks need. build/deploy-stack.sh passes it as
+      // --role-arn on every change-set when set.
+      ROLE_ARN: `arn:aws:iam::${E2E_ACCOUNT}:role/eks-multi-region-cfn-exec`,
+    },
+    e2eTimeoutMinutes: 180,
+    cleanupTimeoutMinutes: 60,
+    buildSteps: [
+      { uses: 'actions/checkout@v6' },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-python@v6', with: { 'python-version': '3.12' } },
+      // Pinned so a new cfn-lint rule cannot fail the build unannounced; the gate
+      // script FAILS (not skips) when the linter is missing because CFN_LINT_REQUIRED=1.
+      { name: 'Install cfn-lint (template lint gate)', run: 'pip install cfn-lint==1.45.0' },
+      { name: 'Install app deps (in-image smoke test)', run: 'pip install -r src/app/requirements.txt' },
+      { run: 'corepack enable && yarn install --immutable' },
+      {
+        name: 'CDK synth + cfn-lint + tests + asset staging',
+        env: { CFN_LINT_REQUIRED: '1' },
+        run: 'yarn ci:build:cdk',
+      },
+    ],
+    cleanupSteps: [
+      { uses: 'actions/checkout@v6' },
+      {
+        uses: 'aws-actions/configure-aws-credentials@v6',
+        with: {
+          'role-to-assume': `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-eks-multi-region`,
+          'aws-region': 'us-east-2',
+          'role-duration-seconds': 28800,
+        },
+      },
+      // ASSETS_BUCKET_PREFIX must match what the e2e used; for a manual run pass it via
+      // the workflow_dispatch environment or accept the default prefix.
+      { run: 'chmod +x cleanup.sh && ./cleanup.sh' },
+    ],
+    e2eSteps: [
+      { uses: 'actions/checkout@v6' },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-python@v6', with: { 'python-version': '3.12' } },
+      { run: 'pip install cfn-lint==1.45.0 && pip install -r src/app/requirements.txt' },
+      { run: 'corepack enable && yarn install --immutable' },
+      { name: 'Build gate', env: { CFN_LINT_REQUIRED: '1' }, run: 'yarn ci:build:cdk' },
+      {
+        uses: 'aws-actions/configure-aws-credentials@v6',
+        with: {
+          'role-to-assume': `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-eks-multi-region`,
+          'aws-region': 'us-east-2',
+          // The rail runs ~90 min after mirror + buckets; the other multi-region samples
+          // use 8h for the same reason. The role's MaxSessionDuration must allow it.
+          'role-duration-seconds': 28800,
+        },
+      },
+      {
+        // Unique per-run asset-bucket prefix so two runs cannot collide on S3 keys.
+        // The STACK names are fixed (the rail's stack ids are a cross-file contract
+        // pinned by tests), so this pattern runs ONE e2e at a time -- the workflow's
+        // concurrency group below enforces it.
+        name: 'Set sha-suffixed assets prefix',
+        env: { HEAD_SHA: '${{ github.event.pull_request.head.sha || github.sha }}' },
+        run: 'echo "ASSETS_BUCKET_PREFIX=eks-multi-region-$(echo $HEAD_SHA | cut -c1-6)" >> $GITHUB_ENV',
+      },
+      {
+        name: 'Pre-flight cleanup (idempotent)',
+        run: 'chmod +x cleanup.sh && ./cleanup.sh || true',
+      },
+      {
+        name: 'Create assets buckets',
+        run: 'make buckets',
+      },
+      {
+        name: 'Mirror pinned third-party images into this account (no NAT in the node subnets)',
+        run: 'make mirror',
+      },
+      {
+        name: 'Deploy the full rail',
+        run: 'make deploy',
+      },
+      {
+        // Adopted from sample-multi-region-resilient-microservice-on-aws: a failed e2e
+        // must leave a READABLE reason in the job log, not just a red X, because the
+        // stacks are gone by the time anyone looks (cleanup runs on success only, but a
+        // re-run's pre-flight cleanup deletes them).
+        name: 'Capture failure diagnostics',
+        if: 'failure()',
+        run: [
+          'set +e',
+          'PROJECT=eks-mr-demo',
+          'FAILED="StackStatus==\'CREATE_FAILED\' || StackStatus==\'ROLLBACK_IN_PROGRESS\' || StackStatus==\'ROLLBACK_COMPLETE\' || StackStatus==\'ROLLBACK_FAILED\' || StackStatus==\'UPDATE_ROLLBACK_COMPLETE\' || StackStatus==\'UPDATE_ROLLBACK_FAILED\' || StackStatus==\'CREATE_IN_PROGRESS\'"',
+          'for region in us-east-2 us-west-2 us-east-1; do',
+          '  echo "::group::$region -- stacks not in a *_COMPLETE state"',
+          '  aws cloudformation list-stacks --region "$region" --no-cli-pager \\',
+          '    --query "StackSummaries[?($FAILED) && starts_with(StackName, \'$PROJECT-\')].[StackName, StackStatus]" --output text',
+          '  echo "::endgroup::"',
+          '  for stack in $(aws cloudformation list-stacks --region "$region" --no-cli-pager \\',
+          '      --query "StackSummaries[?($FAILED) && starts_with(StackName, \'$PROJECT-\')].StackName" --output text); do',
+          '    echo "::group::$region $stack -- failure events"',
+          '    aws cloudformation describe-stack-events --stack-name "$stack" --region "$region" --no-cli-pager --max-items 40 \\',
+          '      --query "StackEvents[?contains(ResourceStatus, \'FAILED\') || contains(ResourceStatus, \'ROLLBACK\')].[Timestamp,LogicalResourceId,ResourceStatus,ResourceStatusReason]" --output text 2>&1 | head -40',
+          '    echo "::endgroup::"',
+          '  done',
+          'done',
+          // The in-VPC installer runs in CodeBuild; a failed build is the other place a
+          // rail failure hides. Surface the last build per installer project.
+          'echo "::group::CodeBuild installer builds (last 3 per region)"',
+          'for region in us-east-2 us-west-2; do',
+          '  for p in $(aws codebuild list-projects --region "$region" --query "projects[?starts_with(@, \'$PROJECT\')]" --output text); do',
+          '    ids=$(aws codebuild list-builds-for-project --project-name "$p" --region "$region" --max-items 3 --query ids --output text)',
+          '    [ -n "$ids" ] && aws codebuild batch-get-builds --ids $ids --region "$region" --query "builds[].[projectName,buildStatus,currentPhase,logs.deepLink]" --output text',
+          '  done',
+          'done',
+          'echo "::endgroup::"',
+        ].join('\n'),
+      },
+      {
+        name: 'Verify every stack is in a *_COMPLETE state',
+        run: 'make verify',
+      },
+      {
+        name: 'Refresh AWS credentials (pre-cleanup)',
+        if: 'always()',
+        uses: 'aws-actions/configure-aws-credentials@v6',
+        with: {
+          'role-to-assume': `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-eks-multi-region`,
+          'aws-region': 'us-east-2',
+          'role-duration-seconds': 28800,
+        },
+      },
+      {
+        name: 'Cleanup on success',
+        if: 'success()',
+        run: './cleanup.sh',
+      },
+    ],
+  },
 ];
 
 // ---------------------------------------------------------------------------
 // Generate one CDK subproject + 3 workflows per pattern.
 // ---------------------------------------------------------------------------
 for (const p of patterns) {
+  const runsOn = [p.runsOn ?? 'ubuntu-latest'];
   // Subproject scaffolding (cdk.json, tsconfig.json, package.json, .projen/).
   // The subproject's package.json + cdk.json + tsconfig.json are what
   // customers use. They are fully self-contained: `cd <outdir> && npm ci &&
   // npx cdk deploy` works without any reference to the root projenrc.
-  const subproject = new awscdk.AwsCdkTypeScriptApp({
-    parent: root,
-    outdir: p.outdir,
-    name: p.outdir,
-    ...SHARED_CDK_CONFIG,
-  });
-  // licensed:false makes projen set "license": "UNLICENSED" in package.json.
-  // Override to "MIT" so package.json matches the repo's root LICENSE.
-  subproject.package.addField('license', 'MIT');
+  //
+  // A selfManaged pattern owns these files through its OWN .projenrc.ts and is
+  // skipped here -- the root still emits its workflows + dependabot entry below.
+  if (!p.selfManaged) {
+    const subproject = new awscdk.AwsCdkTypeScriptApp({
+      parent: root,
+      outdir: p.outdir,
+      name: p.outdir,
+      ...SHARED_CDK_CONFIG,
+    });
+    // licensed:false makes projen set "license": "UNLICENSED" in package.json.
+    // Override to "MIT" so package.json matches the repo's root LICENSE.
+    subproject.package.addField('license', 'MIT');
+  }
 
   // ----------- Build workflow ---------------------------------------------
   const buildWf = new github.GithubWorkflow(root.github!, `${p.outdir}-build`);
@@ -497,7 +677,7 @@ for (const p of patterns) {
   buildWf.file?.addOverride('name', `${p.outdir}: build`);
   buildWf.addJobs({
     build: {
-      runsOn: ['ubuntu-latest'],
+      runsOn,
       permissions: { contents: github.workflows.JobPermission.READ },
       defaults: { run: { workingDirectory: p.outdir } },
       steps: p.buildSteps,
@@ -514,9 +694,15 @@ for (const p of patterns) {
   if (p.e2eEnv) {
     e2eWf.file?.addOverride('env', p.e2eEnv);
   }
+  if (p.selfManaged) {
+    // A self-managed rail has FIXED stack names (a cross-file contract its tests pin),
+    // so two e2e runs in one account would collide. Queue them; never cancel an
+    // in-flight one -- a half-torn-down rail is the worst state to leave behind.
+    e2eWf.file?.addOverride('concurrency', { group: `${p.outdir}-e2e`, 'cancel-in-progress': false });
+  }
   e2eWf.addJobs({
     e2e: {
-      runsOn: ['ubuntu-latest'],
+      runsOn,
       permissions: {
         idToken: github.workflows.JobPermission.WRITE,
         contents: github.workflows.JobPermission.READ,
@@ -533,7 +719,7 @@ for (const p of patterns) {
   cleanupWf.file?.addOverride('name', `${p.outdir}: cleanup`);
   cleanupWf.addJobs({
     cleanup: {
-      runsOn: ['ubuntu-latest'],
+      runsOn,
       permissions: {
         idToken: github.workflows.JobPermission.WRITE,
         contents: github.workflows.JobPermission.READ,

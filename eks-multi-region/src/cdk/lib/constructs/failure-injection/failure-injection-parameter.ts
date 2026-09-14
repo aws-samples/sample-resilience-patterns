@@ -7,9 +7,9 @@ import { Construct } from 'constructs';
  * Props for {@link FailureInjectionParameter}.
  *
  * DEFAULT failure-injection mechanism (failure-injection-changeset §2): a lightweight,
- * app-cooperative SSM "error-rate knob". Genericized lift of five-nines
- * `application-workload-stack.ts:47-51` — the only thing tying the source to five-nines
- * was the hardcoded parameter name `/five-nines-demo/error-rate`; here it is parameterized.
+ * app-cooperative SSM "error-rate knob". Genericized lift of the predecessor project
+ * `application-workload-stack.ts:47-51` — the only thing tying the source to the predecessor project
+ * was the hardcoded parameter name `/the predecessor project-demo/error-rate`; here it is parameterized.
  */
 export interface FailureInjectionParameterProps {
   /** Logical demo name; used to build the default parameter name. */
@@ -32,7 +32,7 @@ export interface FailureInjectionParameterProps {
    * e.g. `{ 'async-ingest': '0', 'queue': '0' }`
    *   -> `/${demoName}/async-ingest-error-rate`, `/${demoName}/queue-error-rate`
    *
-   * Generalizes the three-knob fan-out at five-nines
+   * Generalizes the three-knob fan-out at the predecessor project
    * `application-workload-stack.ts:47, :159-168`.
    * @default {}
    */
@@ -43,7 +43,7 @@ export interface FailureInjectionParameterProps {
  * DEFAULT (lightweight) failure-injection construct: a console/CLI-rotatable SSM
  * `StringParameter` "error-rate knob" seeded to `"0"`.
  *
- * Based on five-nines `application-workload-stack.ts:47-51` (param creation + `grantRead`).
+ * Based on the predecessor project `application-workload-stack.ts:47-51` (param creation + `grantRead`).
  *
  * **Inert at deploy** (failure-injection-changeset §6): the parameter seeds to `"0"` (a
  * no-op) and changes nothing until the demo's app reads `ERROR_RATE_PARAM` and acts on it.

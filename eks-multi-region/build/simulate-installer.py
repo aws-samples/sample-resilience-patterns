@@ -14,7 +14,7 @@ layer past the last, each costing a ~40-minute merge/deploy cycle and a live out
 Every one of them was invisible to synth, cfn-lint, and the unit tests, because the
 failure lives in the INTERACTION between the generated buildspec and cluster/AWS
 behavior. This simulator closes that gap: it extracts the installer's build commands
-from the synthesized template (the artifact that actually runs -- AGENTS.md bug class 1
+from the synthesized template (the artifact that actually runs -- docs/lessons.md #1
 discipline) and executes them with shimmed `kubectl` / `aws` / `sleep` binaries against
 a small model of the cluster. The model encodes only VERIFIED behaviors, each annotated
 with the incident or doc that proved it. An invocation the shim does not recognize is a

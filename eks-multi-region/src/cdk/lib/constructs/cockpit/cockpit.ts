@@ -25,10 +25,10 @@ import { Construct } from 'constructs';
  * plan, error-rate knobs, FIS template ids, cluster and node-group names itself from stack
  * outputs via cloudformation DescribeStacks. This is the fast path to a working cockpit;
  * Step 5 tightens it to threaded CfnParameters + a derived-contract test. Adding a
- * CfnParameter requires editing the deploy step in the SAME commit (AGENTS.md bug class 4),
+ * CfnParameter requires editing the deploy step in the SAME commit (docs/lessons.md #4),
  * which is why threading is its own step rather than smuggled in here.
  *
- * See AGENTS.md bug class 19/design/detailed-design.md.
+ * See docs/lessons.md #19/design/detailed-design.md.
  */
 export interface CockpitProps {
   readonly appId: string;
@@ -45,7 +45,7 @@ export interface CockpitProps {
   //
   // Every one of these arrives as a CfnParameter off the dotenv rail. Threading them is
   // not tidiness: it lets the role DROP `cloudformation:DescribeStacks`, and that grant
-  // was one leg of a documented escalation chain. ARCC's privilege-escalation guidance
+  // was one leg of a documented escalation chain. AWS privilege-escalation guidance
   // names it explicitly — "IAM principal accesses passed role via CloudFormation: IAM
   // principal allows iam:PassRole, cloudformation:CreateStack, and
   // cloudformation:DescribeStacks" — and this role held two of those three. It never held
@@ -53,7 +53,7 @@ export interface CockpitProps {
   // partial pattern rather than relying on the missing third leg.
   //
   // Adding or removing any parameter here REQUIRES editing the deploy step in the SAME
-  // commit (AGENTS.md bug class 4): a CfnParameter the deploy does not supply breaks the
+  // commit (docs/lessons.md #4): a CfnParameter the deploy does not supply breaks the
   // DEPLOY, not the build. `test/cockpit.test.ts` derives the required set from the
   // synthesized template and compares it against the generated task, so that mismatch
   // fails at build time instead of at phase 6 of a live deploy.
@@ -113,7 +113,7 @@ export class Cockpit extends Construct {
     // looks correct. So PassRole is denied EXCEPT to fis.amazonaws.com — the narrowest
     // form that still lets the one required edge through.
     //
-    // ARCC SAX-08 Outcome 1 (prefer specific actions over wildcards) and the
+    // least-privilege guidance (prefer specific actions over wildcards) and the
     // recommendation engine's "Least Privilege Design" / "Prevent Privilege Escalation"
     // guidance are what this enumeration comes from.
     const boundary = new iam.ManagedPolicy(this, 'CockpitRoleBoundary', {
@@ -163,7 +163,7 @@ export class Cockpit extends Construct {
 
     // STEP 5 removed `cloudformation:DescribeStacks` here. It existed only so the handler
     // could discover ARNs at runtime; those now arrive as CfnParameters. Removing it also
-    // removes two-thirds of ARCC's documented PassRole-via-CloudFormation escalation
+    // removes two-thirds of the documented PassRole-via-CloudFormation escalation
     // pattern (PassRole + CreateStack + DescribeStacks) from this role.
 
     role.addToPolicy(new iam.PolicyStatement({
@@ -191,7 +191,7 @@ export class Cockpit extends Construct {
         // Chosen over a GetMetricData SEARCH expression deliberately: SEARCH would need no
         // new action, but the FORMAT of the result labels it returns is not documented, and
         // this project has already been burned once by parsing an undocumented identifier
-        // format (AGENTS.md bug class 18). A documented shape beats saving one grant.
+        // format (docs/lessons.md #18). A documented shape beats saving one grant.
         //
         // Takes no resource input at all — like `fis:List*` (bug class 22c), a
         // resource-scoped grant for it yields AccessDenied. It sits in THIS statement, which
@@ -317,7 +317,7 @@ export class Cockpit extends Construct {
       // STEP 5: the EXACT FIS role ARN, threaded from the region stack's FisRoleArn output.
       // This was a prefix wildcard on a CDK-generated role name (`...-FisFisRole*`), which
       // is the loosest form this grant ever took. Both the recommendation engine's
-      // "Use IAM Roles and Scoped Down Policies" and ARCC SAX-08 Outcome 1 ask for the
+      // "Use IAM Roles and Scoped Down Policies" and least-privilege guidance ask for the
       // specific role plus the PassedToService condition — this is now both.
       resources: [props.fisRoleArn],
       conditions: { StringEquals: { 'iam:PassedToService': 'fis.amazonaws.com' } },

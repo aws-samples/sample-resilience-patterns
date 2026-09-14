@@ -1,6 +1,6 @@
 """CloudFormation custom resource: cross-region VPC peering configurator.
 
-Generalized (vendored) from five-nines-app:
+Generalized (vendored) from the predecessor project-app:
     src/lambda/peering-configurator/peering_configurator.py
 
 Creates + accepts + routes for every unique pair in a set of
@@ -31,7 +31,7 @@ On Delete: deletes peerings tagged with the managed tag (routes auto-clean).
 Idempotent: tags every peering with the managed tag (default CreDemo=managed)
 so re-runs discover existing connections instead of duplicating.
 
-Generalizations vs the five-nines version (networking-changeset §2.4, §5):
+Generalizations vs the the predecessor project version (networking-changeset §2.4, §5):
   - The managed tag is configurable: read from ResourceProperties.ManagedTag,
     defaulting to {"Key": "CreDemo", "Value": "managed"} (was the module
     constants FiveNinesDemo=managed).

@@ -6,12 +6,12 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { Construct } from 'constructs';
 
 /**
- * Generalized from five-nines-app:
+ * Generalized from the predecessor project-app:
  *   src/cdk/lib/stacks/peering-stack.ts:1-131
  *   src/lambda/peering-configurator/peering_configurator.py
  *
- * The big change vs five-nines (CHANGES_REQUIRED, networking-changeset §2.3):
- * five-nines fused two concerns in `PeeringStack`: (a) declaring the per-peer
+ * The big change vs the predecessor project (CHANGES_REQUIRED, networking-changeset §2.3):
+ * the predecessor project fused two concerns in `PeeringStack`: (a) declaring the per-peer
  * `CfnParameter` slots (exactly 3: Client / ApplicationRegionA / ApplicationRegionB,
  * peering-stack.ts:32-48,82-86) and (b) building the Lambda + custom resource. We
  * SPLIT them:
@@ -22,7 +22,7 @@ import { Construct } from 'constructs';
  *   - The N param-slot wiring (the demo-config-specific `PeeringStack`) lives in the
  *     skeleton, driven by the `REGIONS` config, NOT in this reusable library.
  *
- * Other generalizations out of the five-nines version:
+ * Other generalizations out of the the predecessor project version:
  *   - Managed tag `FiveNinesDemo=managed` (peering_configurator.py:45-46) becomes a
  *     `managedTag` prop, default `{ key:'CreDemo', value:'managed' }`, threaded to the
  *     Lambda via `ResourceProperties.ManagedTag`.
@@ -30,7 +30,7 @@ import { Construct } from 'constructs';
  *     free-form optional `role` (requester-preference only; cosmetic).
  *   - The 3-entry `Peers` literal (peering-stack.ts:82-86) becomes a `.map()` over
  *     `props.peers` (full mesh = every unique pair, computed in the Lambda).
- *   - `declareAssetsBucketParams(this)` (peering-stack.ts:30) is a five-nines packaging
+ *   - `declareAssetsBucketParams(this)` (peering-stack.ts:30) is a the predecessor project packaging
  *     concern of the `aws cloudformation deploy` path. The equivalent lives in the
  *     skeleton `PeeringStack`, NOT in this construct.
  *
@@ -79,7 +79,7 @@ export interface PeeringMeshProps {
   readonly lambdaTimeout?: cdk.Duration;
 }
 
-/** Default managed tag — removes the five-nines `FiveNinesDemo` coupling. */
+/** Default managed tag — removes the the predecessor project `FiveNinesDemo` coupling. */
 const DEFAULT_MANAGED_TAG: ManagedTag = { key: 'CreDemo', value: 'managed' };
 
 /**

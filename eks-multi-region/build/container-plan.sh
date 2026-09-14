@@ -32,7 +32,7 @@
 # This script runs on the plain node image (Build_Container_Plan_Job),
 # where python3 is available. `build:container-plan` is registered as a
 # granular projen task; `ci:build:container-plan` is the composite name
-# the GitLab job invokes.
+# the CI job invokes.
 #
 # Optional env:
 #   CDK_OUT_DIR          Defaults to cdk.out.

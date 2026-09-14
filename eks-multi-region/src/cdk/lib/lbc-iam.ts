@@ -77,7 +77,7 @@ export class LbcIam extends Construct {
     // ── Policy: VENDORED from upstream, not hand-written ────────────────────────────────
     //
     // 63 actions across ec2, elasticloadbalancing and iam. Hand-transcribing that is how a
-    // spec value that does not exist in reality gets introduced (AGENTS.md bug class 3), and
+    // spec value that does not exist in reality gets introduced (docs/lessons.md #3), and
     // a MISSING action fails only at runtime: the controller logs AccessDenied, the Service
     // never gets an NLB, and synth, cfn-lint and every unit test stay green.
     //

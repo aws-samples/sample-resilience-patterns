@@ -10,7 +10,7 @@ export interface DemoObservabilityProps {
   /**
    * EMF metric namespace the workload emits into. MUST match the namespace the
    * EMF helper writes (changeset §4 — the shared constant eliminates the brittle string
-   * coupling called out in five-nines AGENTS.md:40). Defaults to DEMO_METRIC_NAMESPACE.
+   * coupling called out in the predecessor project). Defaults to DEMO_METRIC_NAMESPACE.
    */
   readonly metricNamespace?: string;
 
@@ -18,11 +18,11 @@ export interface DemoObservabilityProps {
    * Region where EMF metrics actually land (the log group's region). Every metric and
    * every widget is stamped with this so cross-region math expressions resolve, and the
    * dashboard SHOULD be deployed into this region. Defaults to cdk.Aws.REGION.
-   * (See the five-nines dashboard-region-must-equal-EMF-region gotcha — changeset §5.)
+   * (See the the predecessor project dashboard-region-must-equal-EMF-region gotcha — changeset §5.)
    */
   readonly metricsRegion?: string;
 
-  /** Default metric period. Defaults to 1 minute. (five-nines PERIOD, dashboard-stack.ts:8) */
+  /** Default metric period. Defaults to 1 minute. (the predecessor project PERIOD, dashboard-stack.ts:8) */
   readonly period?: cdk.Duration;
 
   /**
@@ -67,7 +67,7 @@ export class DemoObservability extends Construct {
     // --- Dashboard (named, always created) --------------------------------
     this.dashboard = new cloudwatch.Dashboard(this, 'Dashboard', {
       dashboardName: props.demoName,
-      periodOverride: cloudwatch.PeriodOverride.INHERIT, // mirror five-nines (dashboard-stack.ts:65-68)
+      periodOverride: cloudwatch.PeriodOverride.INHERIT, // mirror the predecessor project (dashboard-stack.ts:65-68)
     });
 
     // Row 1: header (generalized from dashboard-stack.ts:71-74)
@@ -96,7 +96,7 @@ export class DemoObservability extends Construct {
       }),
     );
 
-    // --- Baseline alarm (fills the gap five-nines left: it had ZERO alarms) ----
+    // --- Baseline alarm (fills the gap the predecessor project left: it had ZERO alarms) ----
     if (props.createBaselineAlarms ?? true) {
       this.availabilityAlarm = new cloudwatch.Alarm(this, 'ClientAvailabilityAlarm', {
         alarmName: `${props.demoName}-ClientAvailability`,
@@ -141,7 +141,7 @@ export class DemoObservability extends Construct {
 
   /**
    * A metric in this demo's namespace, stamped with region + period.
-   * Generalized from five-nines regionMetric/clientMetric (dashboard-stack.ts:956-975):
+   * Generalized from the predecessor project regionMetric/clientMetric (dashboard-stack.ts:956-975):
    * pass `dimensions` for a per-region (or other-dimensioned) metric, omit for client/fleet.
    */
   public metric(

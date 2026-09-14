@@ -59,7 +59,7 @@
 #
 # ── THE DAEMONSET PRIVILEGE PROBLEM ────────────────────────────────────────────────
 #
-# ARCC (Aristotle 509 / AWS-446, "Assign least privilege Role Based Access Control
+# AWS guidance (Aristotle 509 / AWS-446, "Assign least privilege Role Based Access Control
 # to Kubernetes users and service accounts") is explicit:
 #
 #   "Avoid granting DaemonSets excessive cluster-wide Kubernetes permissions. As
@@ -101,7 +101,7 @@
 # default (AWS-managed) encryption and is reachable only via the account's IAM --
 # acceptable for a demo account holding no real data, and a decision to revisit
 # before this pattern is copied anywhere holding customer data. A customer-managed
-# KMS key would also require kms:Decrypt alongside every reader grant (AGENTS.md bug
+# KMS key would also require kms:Decrypt alongside every reader grant (docs/lessons.md bug
 # class 5), which is a trap worth entering deliberately rather than by default.
 #
 # NOT set: automountServiceAccountToken: false. Appealing for a pod that never calls
@@ -113,14 +113,14 @@
 #
 # Every namespaced document below carries an explicit metadata.namespace. The
 # installer applies ONE concatenated manifest with no `-n`, so an omitted namespace
-# lands the object in `default` where nothing selects it (AGENTS.md bug class 13). A
+# lands the object in `default` where nothing selects it (docs/lessons.md #13). A
 # test sweeps every namespaced doc in k8s/ for this.
 #
 # ${...} placeholders are substituted by build/render-manifest.py from the
 # environment, which REFUSES to emit if any is unset or empty. Those values arrive as
 # CloudFormation stack outputs sourced from a dotenv, where they are unexported and
 # prefixed -- so they must be mapped through the deploy step's env block or the
-# render fails loudly (AGENTS.md bug class 20).
+# render fails loudly (docs/lessons.md #20).
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -133,7 +133,7 @@ metadata:
   annotations:
     # IRSA. The role's trust policy pins `sub` to this exact
     # system:serviceaccount:<ns>:fluent-bit and `aud` to sts.amazonaws.com with
-    # StringEquals -- per ARCC, scope IRSA trust to the service account level so no
+    # StringEquals -- per AWS guidance, scope IRSA trust to the service account level so no
     # other pod in this namespace can assume it. StringLike with a wildcard `sub` is
     # a privilege-escalation path out of any compromised pod; see karpenter-iam.ts.
     eks.amazonaws.com/role-arn: ${FLUENTBIT_ROLE_ARN}
