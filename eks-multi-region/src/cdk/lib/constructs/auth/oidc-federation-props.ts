@@ -1,7 +1,7 @@
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 
 /**
- * MIDWAY / OIDC FEDERATION EXTENSION POINT (authentication-changeset §4).
+ * ENTERPRISE-SSO / OIDC FEDERATION EXTENSION POINT (authentication-changeset §4).
  *
  * DOCUMENTED STUB — present in the interface, UNIMPLEMENTED in v1. Passing
  * {@link CognitoAuthProps.oidcFederation} has NO EFFECT in v1 (pure no-op seam): no
@@ -33,7 +33,7 @@ import * as cognito from 'aws-cdk-lib/aws-cognito';
  * ```
  */
 export interface OidcFederationProps {
-  /** IdP name as it appears in Cognito, e.g. 'Midway'. */
+  /** IdP name as it appears in Cognito, e.g. 'CorpSSO'. */
   readonly name: string;
   /** OIDC client id issued by the IdP. */
   readonly clientId: string;

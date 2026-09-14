@@ -19,7 +19,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
-import { FrontDoorStack } from '../src/cdk/lib/front-door-stack';
+import { OperatorAccessStack } from '../src/cdk/lib/operator-access-stack';
 import { RegionStack } from '../src/cdk/lib/region-stack';
 import { REGIONS } from '../src/cdk/regions';
 import { makeSynthesizer } from '../src/cdk/synthesizer';
@@ -28,8 +28,8 @@ const APP_ID = 'eks-mr-demo';
 
 const synth = (regionName: string, enableCockpit: boolean): Template => {
   const app = new cdk.App({ analyticsReporting: false });
-  const name = `${APP_ID}-frontdoor-${regionName}`;
-  const stack = new FrontDoorStack(app, name, {
+  const name = `${APP_ID}-access-${regionName}`;
+  const stack = new OperatorAccessStack(app, name, {
     stackName: name,
     synthesizer: makeSynthesizer(),
     env: { region: regionName },
@@ -508,7 +508,7 @@ describe('cockpit step 5 — CfnParameter deploy contract (derived both ways)', 
   /** The raw STACK_PARAMETERS block the deploy task supplies to the standby front door. */
   const standbyParamBlock = (): string => {
     const steps = tasks.tasks.deploy.steps as any[];
-    const step = steps.find((s) => s.exec?.includes('$PROJECT_NAME-frontdoor-us-west-2"')
+    const step = steps.find((s) => s.exec?.includes('$PROJECT_NAME-access-us-west-2"')
       && s.exec?.includes('STACK_PARAMETERS'));
     expect(step).toBeDefined();
     return step.exec.split('STACK_PARAMETERS="')[1].split('"')[0];
@@ -526,7 +526,7 @@ describe('cockpit step 5 — CfnParameter deploy contract (derived both ways)', 
 
   test('STANDBY front door: declared parameters === threaded parameters', () => {
     const declared = declaredParams(STANDBY).sort();
-    const threaded = threadedParams('frontdoor-us-west-2').sort();
+    const threaded = threadedParams('access-us-west-2').sort();
     // Compared as sets in BOTH directions, so neither an unthreaded declaration nor an
     // undeclared thread can pass.
     expect(threaded).toEqual(declared);
@@ -541,7 +541,7 @@ describe('cockpit step 5 — CfnParameter deploy contract (derived both ways)', 
     // it cannot pass against two empty lists (the reason the floor existed at all).
     const cockpitNames = [
       ...fs.readFileSync(
-        path.join(__dirname, '..', 'src', 'cdk', 'lib', 'front-door-stack.ts'), 'utf8',
+        path.join(__dirname, '..', 'src', 'cdk', 'lib', 'operator-access-stack.ts'), 'utf8',
       ).matchAll(/cockpitParam\('(\w+)'/g),
     ].map((m) => m[1]);
     expect(cockpitNames.length).toBeGreaterThan(5);
@@ -553,7 +553,7 @@ describe('cockpit step 5 — CfnParameter deploy contract (derived both ways)', 
 
   test('PRIMARY front door: declared === threaded, and carries NO cockpit parameters', () => {
     const declared = declaredParams(PRIMARY).sort();
-    expect(threadedParams('frontdoor-us-east-2').sort()).toEqual(declared);
+    expect(threadedParams('access-us-east-2').sort()).toEqual(declared);
     // The cockpit is standby-only, so its parameters must not appear here — if they were
     // hoisted out of the region guard, this template would declare parameters the deploy
     // step supplies nothing for.
@@ -599,7 +599,7 @@ describe('cockpit step 5 — CfnParameter deploy contract (derived both ways)', 
 
   test('the standby front door sources the dotenvs those keys come from', () => {
     const steps = tasks.tasks.deploy.steps as any[];
-    const step = steps.find((s) => s.exec?.includes('$PROJECT_NAME-frontdoor-us-west-2"')
+    const step = steps.find((s) => s.exec?.includes('$PROJECT_NAME-access-us-west-2"')
       && s.exec?.includes('STACK_PARAMETERS'));
     // $REGION_0_* comes from the PRIMARY region stack's dotenv and $FAILOVER_* from the
     // failover stack's. Threading a key whose dotenv is never sourced expands to empty.
@@ -1136,7 +1136,7 @@ describe('single-AZ fault (failure-injection extension)', () => {
     const region = fs.readFileSync(
       path.join(__dirname, '..', 'src', 'cdk', 'lib', 'region-stack.ts'), 'utf8');
     const frontDoor = fs.readFileSync(
-      path.join(__dirname, '..', 'src', 'cdk', 'lib', 'front-door-stack.ts'), 'utf8');
+      path.join(__dirname, '..', 'src', 'cdk', 'lib', 'operator-access-stack.ts'), 'utf8');
     const cockpitTs = fs.readFileSync(
       path.join(__dirname, '..', 'src', 'cdk', 'lib', 'constructs', 'cockpit', 'cockpit.ts'), 'utf8');
     const projenrc = fs.readFileSync(path.join(__dirname, '..', '.projenrc.ts'), 'utf8');
@@ -1357,7 +1357,7 @@ describe('zonal shift control (step 10)', () => {
     const region = fs.readFileSync(
       path.join(__dirname, '..', 'src', 'cdk', 'lib', 'region-stack.ts'), 'utf8');
     const frontDoor = fs.readFileSync(
-      path.join(__dirname, '..', 'src', 'cdk', 'lib', 'front-door-stack.ts'), 'utf8');
+      path.join(__dirname, '..', 'src', 'cdk', 'lib', 'operator-access-stack.ts'), 'utf8');
     const cockpitTs = fs.readFileSync(
       path.join(__dirname, '..', 'src', 'cdk', 'lib', 'constructs', 'cockpit', 'cockpit.ts'), 'utf8');
     const projenrc = fs.readFileSync(path.join(__dirname, '..', '.projenrc.ts'), 'utf8');

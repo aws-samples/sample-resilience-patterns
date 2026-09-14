@@ -10,8 +10,8 @@ import { Construct } from 'constructs';
 /**
  * Status + Chaos Cockpit — PDD 2026-08-31-chaos-status-page.
  *
- * A Midway/bindle-gated single-page cockpit served through the existing us-west-2
- * CloudFront front door as an ALB Lambda target. STEPS 0-4: a NO-VPC Lambda that serves
+ * A single-page cockpit served through the existing us-west-2 operator access door as an
+ * ALB Lambda target. STEPS 0-4: a NO-VPC Lambda that serves
  * the UI (GET /cockpit), a JSON status aggregate (GET /cockpit/api/status), and THREE
  * write actions — the L1 error knob (POST /cockpit/api/knob), FIS arm/start/stop
  * (POST /cockpit/api/fis) and the ARC failover trigger (POST /cockpit/api/failover).
@@ -36,7 +36,7 @@ export interface CockpitProps {
   readonly primaryRegion: string;
   /** Standby region (us-west-2) — where this cockpit is hosted. */
   readonly standbyRegion: string;
-  /** The front door's ALB listener — the /cockpit* rule attaches here. */
+  /** The access door's ALB listener — the /cockpit* rule attaches here. */
   readonly listener: elbv2.ApplicationListener;
   /** Metric namespace the load generator emits to (MyResilienceDemo). */
   readonly metricNamespace: string;
@@ -424,20 +424,20 @@ export class Cockpit extends Construct {
     });
 
     // NO ungated /health behavior. An earlier revision added one so the page could read
-    // the active region "client's-eye" by probing /health through the front door. That
+    // the active region "client's-eye" by probing /health through the access door. That
     // was WRONG on two counts, both found by checking the live account:
     //
     //   1. This ALB's default action is the ARGO target group — the app is not behind it
     //      at all — so /health reached argocd-server, not src/app/server.py. The pill
-    //      read "probe failed", and the behavior was an ungated path into the Argo
-    //      server, bypassing the CFS gate for that path.
+    //      read "probe failed", and the behavior was an unintended path into the Argo
+    //      server for that path.
     //   2. Even routed to the app it could not answer the question. The private-zone
     //      record is LATENCY-routed with one record per region, so DNS has no single
     //      global answer — each resolver gets its own nearest healthy region, and an ALB
     //      target group holds one region's fixed IPs and can never follow a failover.
     //
     // The active region now comes from OBSERVED CLIENT TRAFFIC (RegionSuccess/RegionError
-    // per Region) in handler.py::_region_traffic — see that docstring. Nothing here is
-    // ungated: /cockpit* stays behind the CFS gate on the default behavior.
+    // per Region) in handler.py::_region_traffic — see that docstring. The access door is
+    // reached only through the observer bastion over SSM (build/tunnel.sh).
   }
 }

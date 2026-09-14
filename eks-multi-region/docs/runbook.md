@@ -70,16 +70,25 @@ condition are both quoted from AWS docs.*
 deny-all default, by design. Re-open it to your address, and **close it again when you are
 finished.** An open CIDR left behind is a finding.
 
-### Open the Argo CD UIs through the front doors (step 12)
+### Open the Argo CD UIs through the observer bastion (step 12)
 
-Each region's `frontdoor` stack outputs `DistributionDomainName`. Browse to
-`https://<that domain>/` — the first visit 403s, bounces through CloudFrontSigner (Midway
-+ your Bindle), sets signed cookies, and lands on the Argo CD UI. Both regions, because
-§6's coexistence proof is read from the **standby's** UI.
+There is no public front door. Each region's `access-<region>` stack fronts the Argo CD
+UI with an INTERNAL ALB whose only ingress is the observer VPC CIDR. Reach it from your
+laptop through the third-region observer bastion over SSM Session Manager:
 
-If it never leaves the 403 page: prerequisite 8 was skipped (onboarding or the Bindle
-grant), or `CFS_BINDLE_ID` was unset at deploy (the Phase 7 log says so loudly). If Argo
-loads but loops or 502s: `server.insecure` — see §8. Argo's initial admin password:
+```
+build/tunnel.sh <aws-profile>                 # http://localhost:8080/  -> us-east-2 Argo UI
+build/tunnel.sh <aws-profile> 8081 us-west-2  # standby; also serves /cockpit
+```
+
+`tunnel.sh` resolves the bastion instance id from the `eks-multi-region-observer` stack
+and the internal ALB DNS name from the target region's `access-<region>` stack, then runs
+`aws ssm start-session --document-name AWS-StartPortForwardingSessionToRemoteHost`. No
+inbound ports, no public IP, no signed cookies. §6's coexistence proof is read from the
+**standby's** UI.
+
+If the tunnel connects but Argo loops or 502s: `server.insecure` — see §8. Argo's initial
+admin password:
 `kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d`
 (via the installer CodeBuild if no other kubectl path exists yet).
 
@@ -402,9 +411,9 @@ the writer's zone took all three AZs to 0.00% and was halted by the 50%
 `ClientAvailabilityGuardrail` three minutes in — proven live 2026-09-04. If you see that
 shape again, check the DB instance count per AZ first
 (`aws rds describe-db-instances --query 'DBInstances[].[DBInstanceIdentifier,AvailabilityZone]'`).
-One more consequence worth expecting: an Aurora failover briefly breaks writes, which is
-exactly the trigger for the planted connection-pool defect, so a power-fault run can leave
-writes parked around 68% until `build/restore-steady-state.sh --execute` cycles the pools.
+One more consequence worth expecting: an Aurora failover briefly breaks writes. Expect a
+short dip -- one failed write per pooled connection -- and then recovery within seconds as
+the write pool replaces its dead sockets; it does not need `restore-steady-state.sh`.
 
 A **written segment script** (the on-stage narrative beats) lives at
 `docs/az-segment-script.md`.
@@ -539,12 +548,12 @@ Per region (serially, fail-loud), via the in-VPC installer CodeBuild project:
 1. `kubectl patch hpa` — revert `scaleDown.selectPolicy` to `Min` (the exact reverse of
    ARC's patch; **not** `minReplicas`, which ARC never touched). The re-enabled HPA then
    rightsizes each region on its own — no explicit scale command.
-2. `kubectl rollout restart` — fresh pods, fresh DB connection pools. **This is also the
-   remediation for the demo's planted write defect**, so run it only when the
-   parked-at-75% diagnosis story is over.
+2. `kubectl rollout restart` — fresh pods, fresh DB connection pools. Hygiene after a
+   writer move, not a remediation: the write pool replaces dead sockets on its own, so
+   writes have already recovered by the time this runs.
 
 Timing is entirely the operator's call — an hour or a day later is fine. Until it runs,
-the write path stays degraded (poisoned pools) and scale-down stays disabled.
+scale-down stays disabled (the only thing left in a non-steady state).
 
 The third leftover cleans itself: the Karpenter **nodes** provisioned for the surge sit
 empty once the HPA rightsizes pods away, and the NodePool reaps them (`WhenEmpty`,

@@ -133,16 +133,41 @@ export const DNS_SUFFIX = 'dns';
 export const LOADGEN_SUFFIX = 'loadgen';
 
 /**
- * The Midway-gated front door (step 12) — ONE PER REGION, like the region stacks,
- * because a CloudFront VPC origin binds to one load balancer in one region and goal 1's
- * claim is about the STANDBY. Whether one distribution can hold VPC origins in two
- * regions is undocumented and unverifiable offline (no create-vpc-origin --dry-run), so
- * per-region is the default that certainly works; a live confirmation would let this
- * collapse to a single shared distribution and halve the per-deployer CFS onboarding
- * (plan.md verification round 2, item 1).
+ * The operator access door (step 12) — ONE PER REGION, like the region stacks.
+ *
+ * Each region keeps an INTERNAL ALB in front of the Kubernetes-owned argocd-server NLB
+ * (and, in the standby, the cockpit's `/cockpit*` listener rule). The ALB is not reached
+ * from the internet: there is no CloudFront distribution and no signed-cookie gate. The
+ * only path in is the third-region observer bastion (see {@link OBSERVER_SUFFIX}), which
+ * peers to both workload VPCs and port-forwards to these ALBs over SSM Session Manager.
+ * Per-region because the claim is about the STANDBY, so both regions' Argo UIs must be
+ * reachable, and an ALB lives in one VPC in one region.
  */
-export const frontDoorSuffix = (region: DemoRegion | string): string =>
-  `frontdoor-${typeof region === 'string' ? region : region.name}`;
+export const operatorAccessSuffix = (region: DemoRegion | string): string =>
+  `access-${typeof region === 'string' ? region : region.name}`;
+
+/**
+ * The observer VPC (step 12) — a THIRD region, independent of both workload regions, that
+ * stands in for the customer's operator. It holds an SSM-only bastion (no public IP, no
+ * inbound rules) peered to both workload VPCs, so `build/tunnel.sh` can port-forward to
+ * whichever region's internal ALB the operator wants to watch. Surviving anything done to
+ * either workload region is the point, so it lives outside both.
+ */
+export const OBSERVER_SUFFIX = 'observer';
+
+/**
+ * The observer region. us-east-1 by default — deliberately neither workload region
+ * (us-east-2 / us-west-2), so a fault injected into either does not take the observer
+ * with it.
+ */
+export const OBSERVER_REGION = 'us-east-1';
+
+/**
+ * The observer VPC CIDR. 10.2.0.0/16 by default — it must overlap NEITHER workload CIDR
+ * (10.0.0.0/16, 10.1.0.0/16) or the peering routes would be ambiguous. A test asserts the
+ * non-overlap.
+ */
+export const OBSERVER_CIDR = '10.2.0.0/16';
 
 
 /**
@@ -205,8 +230,12 @@ export const STACK_SUFFIXES: readonly string[] = [
   // zone, and the standby access entry needs the role the plan stack creates.
   FAILOVER_SUFFIX,
   STANDBY_ACCESS_SUFFIX,
-  // The front doors deploy LAST (factory Phase 6, after the installers): their VPC
-  // origins target the Kubernetes-created argocd-server NLBs, whose ARNs arrive on
-  // the dotenv rail. Packaging order here is not deploy order.
-  ...REGIONS.map((r) => frontDoorSuffix(r)),
+  // The observer VPC + bastion, in a third region. Deploys after the region stacks
+  // (it peers to both workload VPCs, so it needs their ids) but has no dependency on
+  // the installers. Packaging order here is not deploy order.
+  OBSERVER_SUFFIX,
+  // The per-region operator access doors deploy LAST (factory Phase 6, after the
+  // installers): their ALB target groups take the Kubernetes-created argocd-server NLB
+  // ENI ips, which arrive on the dotenv rail. Packaging order here is not deploy order.
+  ...REGIONS.map((r) => operatorAccessSuffix(r)),
 ];

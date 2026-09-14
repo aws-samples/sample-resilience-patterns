@@ -31,13 +31,17 @@ CloudWatch dashboard. Faults are AWS FIS experiments delivered over SSM to armed
 Latency is the most severe of the three network faults under a client SLO, which is the
 opposite of most people's intuition. Numbers are from the 2026-09-04 calibration runs.
 
-**A planted connection-pool defect.** `src/app/common.py` pools writer connections in a
-LIFO queue and returns them after use with no liveness check. When the Aurora writer moves
-and the pods already hold populated pools, every write fails instantly and permanently
-while reads -- which open a fresh connection per request -- stay at 100%. The pods look
-healthy the whole time because `/health` never touches the database. This is the shape of
-outage customers actually live with, and it is what `build/restore-steady-state.sh`
-exists to heal.
+**A write pool that survives the failover.** `src/app/common.py` pools writer connections
+to the Aurora Global writer endpoint. When the writer moves regions, every pooled socket
+is suddenly pointing at a host that is now a reader -- the classic way a "healthy" fleet
+ends up with writes at 0% while reads (a fresh connection per request) stay at 100%. The
+pool here is built not to do that: a connection whose write raises is closed and dropped
+rather than returned; a connection idle for more than a few seconds is pinged before it is
+handed out; nothing lives past a max lifetime. A writer failover therefore costs at most
+one failed write per pooled connection and heals itself within a handful of requests --
+no restart, no operator. `test/fixtures/pool_probe.py` simulates the failover against a
+fake driver and the test suite asserts the recovery, so the behaviour cannot regress
+silently.
 
 ## Architecture
 
@@ -117,8 +121,8 @@ Operate:
 ```bash
 build/arc-switch.sh                      # dry-run; shows the derived start-plan-execution
 build/arc-switch.sh --execute us-west-2  # fail over (or fail back with the other region)
-build/restore-steady-state.sh --execute  # after any round trip: re-enable HPA scale-down,
-                                         # roll the pods (heals the pool defect)
+build/restore-steady-state.sh --execute  # after any round trip: re-enable HPA scale-down
+                                         # (ARC disables it and nothing else turns it back on)
 ```
 
 Faults are armed and fired from the cockpit UI behind the CloudFront front door. Never
