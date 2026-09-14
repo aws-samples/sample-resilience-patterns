@@ -150,8 +150,9 @@ Stop. Show the line returning.
   cluster has lost its multi-AZ spread — check
   `aws rds describe-db-instances --query 'DBInstances[].[DBInstanceIdentifier,AvailabilityZone]'`
   and stop the segment; that is the 2026-09-04 single-instance failure, not a demo beat.
-  Either way, expect writes to need `build/restore-steady-state.sh --execute` afterwards:
-  a writer failover is exactly the trigger for the planted connection-pool defect.
+  Either way, expect a brief write dip during the writer failover -- one failed write per
+  pooled connection -- followed by recovery within seconds as the pool replaces its
+  sockets. No cleanup step is needed for the write path.
 - **Shift start 409s "not opted into zonal shift"** — the Service migration didn't land;
   the post-deploy verifier should have caught this. Skip the shift beats, narrate what the
   shift *would* do, and file it.

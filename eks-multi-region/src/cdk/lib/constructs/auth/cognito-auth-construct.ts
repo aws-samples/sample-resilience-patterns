@@ -23,8 +23,8 @@ export interface CognitoAuthProps {
   readonly logoutUrls?: string[];
   /**
    * Hosted-UI domain prefix (creates `userPool.addDomain`). REQUIRED for the ALB
-   * authenticate-cognito flow AND for any future Midway federation; OPTIONAL for the
-   * APIGW JWT flow. Cognito domain prefixes are GLOBALLY UNIQUE per region — pick a
+   * authenticate-cognito flow AND for any future enterprise-SSO federation; OPTIONAL for
+   * the APIGW JWT flow. Cognito domain prefixes are GLOBALLY UNIQUE per region — pick a
    * collision-resistant value.
    */
   readonly hostedUiDomainPrefix?: string;
@@ -41,7 +41,7 @@ export interface CognitoAuthProps {
   /** RemovalPolicy. Demos default DESTROY. */
   readonly removalPolicy?: cdk.RemovalPolicy;
   /**
-   * MIDWAY / OIDC EXTENSION POINT — documented stub, NOT implemented in v1
+   * ENTERPRISE-SSO / OIDC EXTENSION POINT — documented stub, NOT implemented in v1
    * (see {@link OidcFederationProps}). Undefined in v1 → pure no-op (no OIDC IdP).
    */
   readonly oidcFederation?: OidcFederationProps;
@@ -114,8 +114,8 @@ export class CognitoAuthConstruct extends Construct {
             logoutUrls: props.logoutUrls,
           }
         : undefined,
-      // v1: COGNITO only. The Midway seam (oidcFederation) flips this to include the OIDC
-      // provider — see OidcFederationProps. Intentionally NOT consumed in v1.
+      // v1: COGNITO only. The enterprise-SSO seam (oidcFederation) flips this to include
+      // the OIDC provider — see OidcFederationProps. Intentionally NOT consumed in v1.
       supportedIdentityProviders: [cognito.UserPoolClientIdentityProvider.COGNITO],
     });
 

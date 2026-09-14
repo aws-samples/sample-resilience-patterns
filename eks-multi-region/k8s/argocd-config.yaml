@@ -59,8 +59,9 @@ metadata:
     app.kubernetes.io/part-of: argocd
   annotations:
     service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
-    # INTERNAL — the public entry point is the CFS-gated CloudFront distribution, never
-    # this load balancer. Requires the kubernetes.io/role/internal-elb subnet tag the
+    # INTERNAL — the entry point is the operator access door ALB reached through the
+    # observer bastion over SSM, never this load balancer directly. Requires the
+    # kubernetes.io/role/internal-elb subnet tag the
     # RegionStack applies (same contract as the app's Service).
     service.beta.kubernetes.io/aws-load-balancer-internal: "true"
 spec:

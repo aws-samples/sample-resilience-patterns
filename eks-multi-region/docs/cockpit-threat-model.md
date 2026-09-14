@@ -114,20 +114,24 @@ grant is gone, and three resource scopes tightened as a side effect:
 ## 5. Authorization for the actions themselves
 
 The cockpit can trigger a **regional failover**, which is high-impact by design. Its
-authorization is the front door, not the application:
+authorization is the network path plus IAM, not a browser gate:
 
-- CloudFront `TrustedSigners` requires CFS signed cookies, which require **Midway
-  authentication plus a Bindle permission grant**. An unauthenticated request gets 403.
+- The cockpit is served only by the standby region's internal operator-access ALB, whose
+  sole ingress is the observer VPC CIDR. The only route in is the third-region observer
+  bastion (no public IP, no inbound rules) over SSM Session Manager — so reaching the
+  cockpit at all requires `ssm:StartSession` on that bastion. An operator without that
+  access cannot see it.
 - The ARC plan carries **no approval gate**, so `StartPlanExecution` succeeding *is* the
   authorization. The typed confirmation in the handler is UI friction to prevent a misclick,
   and is **not** claimed as a security control.
-- The Lambda is not internet-reachable except through that gated ALB path.
+- The Lambda is not internet-reachable: the ALB is internal and there is no public front door.
 
-**Accepted risk:** any Amazon employee holding the Bindle grant can fail over the demo or
-inject faults into it. That is the intended capability of an operator cockpit, the blast
-radius is one dedicated demo account with no customer data, and CloudTrail records
-every call with the role session. Do not extend this pattern to an account with production
-or customer data without replacing the typed confirmation with a real second-actor control.
+**Accepted risk:** anyone with SSM access to the observer bastion and the cockpit's IAM
+grant can fail over the demo or inject faults into it. That is the intended capability of
+an operator cockpit, the blast radius is one dedicated demo account with no customer data,
+and CloudTrail records every call with the role session. Do not extend this pattern to an
+account with production or customer data without replacing the typed confirmation with a
+real second-actor control.
 
 ## 6. Residual items
 

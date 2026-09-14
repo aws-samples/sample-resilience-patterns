@@ -83,7 +83,8 @@
   <section class="card wide">
     <h2>Client-perceived availability <span class="sub">(per minute, last 45 min)</span></h2>
     <!-- Inline SVG, drawn by hand. NO charting library: this page is served by the Lambda
-         itself from behind the CFS gate, so a CDN <script src> is both a new external
+         itself, reached only through the operator access door, so a CDN <script src> is
+         both a new external
          dependency and one more thing that can fail closed in front of an audience.
          This card REPLACED a pair of big current-percentage tiles -- the chart's last
          point carries the same number, and the shape carries what the tiles could not:
@@ -384,7 +385,7 @@ async function refresh() {
 
 // --- controls -------------------------------------------------------------------
 // Every write requires a TYPED confirmation, and the server enforces it independently —
-// the browser prompt is friction, the IAM grant and the CFS gate are the authorization.
+// the browser prompt is friction, the IAM grant and the access path are the authorization.
 let REGIONS = [];
 let FAULT_META = {};
 let FAULTS_LOADED = false;
@@ -416,8 +417,8 @@ function renderZsCountdown(zs) {
 setInterval(() => renderZsCountdown(), 1000);
 
 // Availability chart, drawn as inline SVG. Deliberately dependency-free: this page is
-// served by the Lambda from behind the CFS gate, so pulling a charting library from a CDN
-// adds an external dependency that can fail closed mid-demo.
+// served by the Lambda, reached only through the operator access door, so pulling a
+// charting library from a CDN adds an external dependency that can fail closed mid-demo.
 function renderAvailChart(series) {
   const el = $("availChart");
   // CURRENT VALUES come from the series' last non-null point rather than a second

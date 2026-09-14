@@ -2,24 +2,28 @@
 import * as cdk from 'aws-cdk-lib';
 import { DnsStack } from './lib/dns-stack';
 import { FailoverStack } from './lib/failover-stack';
-import { FrontDoorStack } from './lib/front-door-stack';
 import { GlobalDataStack } from './lib/global-data-stack';
 import { LoadGenStack } from './lib/loadgen-stack';
+import { ObserverStack } from './lib/observer-stack';
+import { OperatorAccessStack } from './lib/operator-access-stack';
 import { PeeringStack } from './lib/peering-stack';
 import { RegionStack } from './lib/region-stack';
 import { SecondaryDbStack } from './lib/secondary-db-stack';
 import { StandbyAccessStack } from './lib/standby-access-stack';
 import {
   DNS_SUFFIX,
-  frontDoorSuffix,
   GLOBAL_DATA_SUFFIX,
   LOADGEN_SUFFIX,
+  OBSERVER_CIDR,
+  OBSERVER_REGION,
+  OBSERVER_SUFFIX,
   PEERING_SUFFIX,
   PRIMARY_REGION,
   REGIONS,
   FAILOVER_SUFFIX,
   SECONDARY_DB_SUFFIX,
   STANDBY_ACCESS_SUFFIX,
+  operatorAccessSuffix,
   peerVpcCidrs,
   regionSuffix,
 } from './regions';
@@ -33,7 +37,7 @@ const APP_ID = process.env.PROJECT_NAME ?? 'eks-mr-demo';
 
 // PDD 2026-08-31-chaos-status-page, Step 0. Cockpit gate — defaults ON (bare local
 // `cdk synth` gets the cockpit); projen sets ENABLE_COCKPIT from the enableCockpit flag.
-// Only takes effect in the us-west-2 FrontDoorStack (the construct is west-guarded).
+// Only takes effect in the us-west-2 OperatorAccessStack (the construct is west-guarded).
 const ENABLE_COCKPIT = (process.env.ENABLE_COCKPIT ?? 'true') === 'true';
 
 /**
@@ -180,21 +184,40 @@ new StandbyAccessStack(app, standbyAccessName, {
 });
 
 /**
- * The Midway-gated front doors (step 12), one per region — see FrontDoorStack for the
- * full reasoning. Deploy LAST (factory Phase 6, after the installer phases): each VPC
- * origin targets the Kubernetes-created argocd-server NLB in its region, whose ARN and
- * DNS name arrive as CfnParameters off the dotenv rail, same as the DNS stack's alias
- * targets.
+ * The observer VPC + bastion (step 12), in a THIRD region. Deploys after both region
+ * stacks (it peers to both workload VPCs, so it needs their ids — threaded as
+ * CfnParameters off the dotenv rail, never Fn::ImportValue across regions). The
+ * accepter-side routes back into the workload VPCs are added by the deploy rail from the
+ * peering ids this stack outputs. Independent of the installer phases, so it can deploy
+ * as soon as the region stacks are up.
+ */
+const observerName = `${APP_ID}-${OBSERVER_SUFFIX}`;
+new ObserverStack(app, observerName, {
+  stackName: observerName,
+  synthesizer: makeSynthesizer(),
+  env: { region: OBSERVER_REGION },
+  appId: APP_ID,
+  observerCidr: OBSERVER_CIDR,
+});
+
+/**
+ * The operator access doors (step 12), one per region — see OperatorAccessStack for the
+ * full reasoning. Deploy LAST (factory Phase 6, after the installer phases): each ALB
+ * target group takes the Kubernetes-created argocd-server NLB ENI ips in its region,
+ * which arrive as a CfnParameter off the dotenv rail, same as the DNS stack's alias
+ * targets. Reached only through the observer bastion over SSM (build/tunnel.sh); there is
+ * no CloudFront distribution and no signed-cookie gate.
  */
 for (const region of REGIONS) {
-  const frontDoorName = `${APP_ID}-${frontDoorSuffix(region)}`;
-  new FrontDoorStack(app, frontDoorName, {
-    stackName: frontDoorName,
+  const accessName = `${APP_ID}-${operatorAccessSuffix(region)}`;
+  new OperatorAccessStack(app, accessName, {
+    stackName: accessName,
     synthesizer: makeSynthesizer(),
     env: { region: region.name },
     appId: APP_ID,
     regionName: region.name,
     enableCockpit: ENABLE_COCKPIT,
+    observerCidr: OBSERVER_CIDR,
   });
 }
 

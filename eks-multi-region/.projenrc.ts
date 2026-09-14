@@ -1,6 +1,6 @@
 import { awscdk, javascript } from 'projen';
 import { NodePackageManager } from 'projen/lib/javascript';
-import { createBuildTasks, createDeployTasks, createGitlabWorkflow } from './projenrc';
+import { createBuildTasks, createDeployTasks } from './projenrc';
 // Single source of truth for the region list, shared with src/cdk/app.ts. Kept free of
 // aws-cdk-lib imports so pulling it in here does not drag CDK into projen synth.
 import {
@@ -25,13 +25,16 @@ import {
   DNS_SUFFIX,
   GLOBAL_DATA_SUFFIX,
   LOADGEN_SUFFIX,
+  OBSERVER_CIDR,
+  OBSERVER_REGION,
+  OBSERVER_SUFFIX,
   PRIMARY_REGION,
   REGIONS,
   FAILOVER_SUFFIX,
   SECONDARY_DB_SUFFIX,
   STACK_SUFFIXES,
   STANDBY_ACCESS_SUFFIX,
-  frontDoorSuffix,
+  operatorAccessSuffix,
   regionSuffix,
 } from './src/cdk/regions';
 // Kubernetes object names come from ONE module, shared with the manifests (asserted by
@@ -133,14 +136,16 @@ project.tryFindObjectFile('tsconfig.json')?.addOverride('ts-node', {
 // the traffic generator. The load generator itself arrives in step 4.
 const enableLoadGen = true;
 // PDD 2026-08-31-chaos-status-page, Step 0. Gates the status+chaos cockpit (a no-VPC
-// Lambda served through the us-west-2 front door). Off by default in the construct is
-// impossible here (projen wires it), so the west-region guard in FrontDoorStack + this
-// flag both gate it: flag off => empty synth diff, verified by test/cockpit.test.ts.
+// Lambda served through the us-west-2 operator access door). Off by default in the
+// construct is impossible here (projen wires it), so the west-region guard in
+// OperatorAccessStack + this flag both gate it: flag off => empty synth diff, verified
+// by test/cockpit.test.ts.
 const enableCockpit = true;
-// Gated at synth via an env var read by app.ts (the cockpit lives INSIDE FrontDoorStack,
-// not its own stack, so unlike enableLoadGen it is not a stack-list toggle). Defaults ON;
-// flag off => app.ts passes enableCockpit:false => west-guarded construct skipped =>
-// empty synth diff (test/cockpit.test.ts pins this). Placed after the flag declaration.
+// Gated at synth via an env var read by app.ts (the cockpit lives INSIDE
+// OperatorAccessStack, not its own stack, so unlike enableLoadGen it is not a stack-list
+// toggle). Defaults ON; flag off => app.ts passes enableCockpit:false => west-guarded
+// construct skipped => empty synth diff (test/cockpit.test.ts pins this). Placed after
+// the flag declaration.
 project.tasks.addEnvironment('ENABLE_COCKPIT', enableCockpit ? 'true' : 'false');
 
 // Both regions' ECR registries. The image must exist in the region whose nodes pull it,
@@ -357,12 +362,14 @@ const runInstaller = (
     `&& printf "APP_NLB_ARN_${index}=%s\\n" "$APPARN" >> dist/app-endpoint-${index}.env`,
     `&& echo "app endpoint ${index}: $(cat dist/endpoint-${index}.txt) (zone $ZID, arn $APPARN)"`,
     // Step 12: the argocd-server NLB, discovered like the app's but resolved to an ARN
-    // rather than a zone id -- the front-door stack's VPC origin is created FROM the
-    // ARN. Same describe-load-balancers listing (DNSName cannot be filtered
-    // server-side), same runner permission (elasticloadbalancing:DescribeLoadBalancers,
-    // already a prerequisite from step 4b), same fail-here-not-three-phases-later rule:
-    // an empty ARN passed through becomes a VPC origin CloudFormation rejects at the
-    // frontdoor stack, far from its cause.
+    // rather than a zone id -- the ARN is only an INTERMEDIATE here, used below to derive
+    // the NLB's ENI ip addresses (its ENI description embeds the ARN's resource path).
+    // Those ips are what the operator access door's ALB IP-targets. Same
+    // describe-load-balancers listing (DNSName cannot be filtered server-side), same
+    // runner permission (elasticloadbalancing:DescribeLoadBalancers, already a
+    // prerequisite from step 4b), same fail-here-not-three-phases-later rule: an empty
+    // ARN means an empty ip list, caught at the count assertion below rather than as an
+    // Fn::Select index error inside the access-door changeset.
     `&& aws s3 cp "${stage}/argocd-endpoint-${region}.txt" dist/argocd-endpoint-${index}.txt --region ${region}`,
     `&& printf "ARGO_NLB_DNS_${index}=%s\\n" "$(cat dist/argocd-endpoint-${index}.txt)" > dist/argo-nlb-${index}.env`,
     `&& AARN=$(aws elbv2 describe-load-balancers --region ${region}`,
@@ -372,11 +379,11 @@ const runInstaller = (
     `  echo "no load balancer in ${region} matches the argocd endpoint" >&2; exit 1;`,
     'fi',
     `&& printf "ARGO_NLB_ARN_${index}=%s\\n" "$AARN" >> dist/argo-nlb-${index}.env`,
-    // The ENI addresses, for the front door ALB's IP target group. The ENI description
-    // for a load balancer is "ELB <type>/<name>/<id>", which is exactly fields 2-4 of
-    // the ARN's resource path -- so no second name lookup is needed. Asserted to be
-    // exactly AZ_COUNT so a short list fails HERE rather than as an Fn::Select index
-    // error inside the front-door changeset.
+    // The ENI addresses, for the operator access door ALB's IP target group. The ENI
+    // description for a load balancer is "ELB <type>/<name>/<id>", which is exactly
+    // fields 2-4 of the ARN's resource path -- so no second name lookup is needed.
+    // Asserted to be exactly AZ_COUNT so a short list fails HERE rather than as an
+    // Fn::Select index error inside the access-door changeset.
     '&& LBPATH=$(echo "$AARN" | cut -d/ -f2-4)',
     `&& NLBIPS=$(aws ec2 describe-network-interfaces --region ${region}`,
     '  --filters "Name=description,Values=ELB $LBPATH"',
@@ -491,6 +498,47 @@ const postDeploy = [
       `${KARPENTER_NODEPOOL_MANIFEST} ${ARGO_APPLICATION_MANIFEST}`,
     ),
   },
+  // Step 12: the ACCEPTER side of the observer peerings, one step per workload region.
+  // The observer stack (singleton phase) is the REQUESTER — it created each peering with
+  // PeerRegion and routed the observer subnet toward the workload CIDRs. There is no
+  // native cross-region accept or cross-region route resource, so the peer-side accept
+  // and the return route into the observer CIDR are done here with the AWS CLI, from the
+  // workload region, exactly as PeeringStack's mesh Lambda would but scoped to the two
+  // observer spokes. Idempotent: accepting an already-active peering and re-creating an
+  // existing route are both tolerated, so a re-run is a no-op.
+  ...REGIONS.map((r, i) => ({
+    name: `accept the observer peering and route the observer CIDR in ${r.name}`,
+    region: r.name,
+    sourceFiles: [
+      // The observer stack's outputs (PeeringTo<i>Id, observer CIDR) and this region's
+      // route tables. Both are prefixed dotenv vars; postDeployStep exports the env map
+      // below so the CLI sees them, and references the sourced $OBSERVER_*/$REGION_* vars.
+      `dist/$PROJECT_NAME-${OBSERVER_SUFFIX}.env`,
+      `dist/$PROJECT_NAME-${regionSuffix(r)}.env`,
+    ],
+    env: {
+      // Intermediate names deliberately do NOT look like `<STACKPREFIX>_<OUTPUTKEY>`:
+      // the consumed-vs-produced contract test parses every `$PREFIX_KEY` in the deploy
+      // task, and `$PEERING_ID` would read as output `ID` of the PEERING stack (which
+      // does not exist) and fail the build for the wrong reason. `ACCEPT_*` is no stack.
+      ACCEPT_PCX: `$OBSERVER_PEERINGTO${i}ID`,
+      ACCEPT_CIDR: '$OBSERVER_VPCCIDR',
+      RTBS: `$REGION_${i}_ROUTETABLEIDS`,
+    },
+    // Wait for the requester-created peering to be visible in this region, accept it
+    // (tolerating already-active), then add the observer-CIDR route to every non-public
+    // route table (tolerating RouteAlreadyExists). No single quotes: postDeployStep wraps
+    // this in bash -c and asserts the invariant at synth.
+    run: [
+      'aws ec2 wait vpc-peering-connection-exists --vpc-peering-connection-ids "$ACCEPT_PCX"',
+      '&& aws ec2 accept-vpc-peering-connection --vpc-peering-connection-id "$ACCEPT_PCX" 2>/dev/null || true',
+      '&& for RTB in $(echo "$RTBS" | tr , " "); do',
+      '  aws ec2 create-route --route-table-id "$RTB" --destination-cidr-block "$ACCEPT_CIDR"',
+      '    --vpc-peering-connection-id "$ACCEPT_PCX" 2>/dev/null || true;',
+      'done',
+      `&& echo "observer peering $ACCEPT_PCX accepted and routed in ${r.name}"`,
+    ].join(' '),
+  })),
 ];
 
 // GitLab builds the image with kaniko (shared runners block DinD) + pushes with crane,
@@ -587,6 +635,23 @@ createDeployTasks(project, [...REGIONS], {
         EksClusterSecurityGroupId: '$REGION_1_EKSCLUSTERSECURITYGROUPID',
       },
     },
+    // Step 12: the observer VPC + bastion, in a THIRD region. It is the REQUESTER of
+    // both cross-region peerings, so it needs both workload VPC ids (threaded off the
+    // dotenv rail, never Fn::ImportValue). No installer dependency, so it deploys in the
+    // singleton phase after both region stacks. Its peering-id outputs feed the
+    // accepter-side postDeploy step below.
+    {
+      suffix: OBSERVER_SUFFIX,
+      region: OBSERVER_REGION,
+      sourceSuffixes: [regionSuffix(REGIONS[0]), regionSuffix(REGIONS[1])],
+      outputsPrefix: 'OBSERVER',
+      stackParameters: {
+        R0VpcId: '$REGION_0_VPCID',
+        R0VpcCidr: '$REGION_0_VPCCIDROUT',
+        R1VpcId: '$REGION_1_VPCID',
+        R1VpcCidr: '$REGION_1_VPCCIDROUT',
+      },
+    },
   ],
   postDeploy,
   // Step 4b: the DNS stack deploys AFTER the installer phases (factory Phase 6) because
@@ -667,18 +732,17 @@ createDeployTasks(project, [...REGIONS], {
         ExecutionRoleArn: '$FAILOVER_EXECUTIONROLEARN',
       },
     },
-    // Step 12: the Midway-gated front doors, one per region. AFTER the installer
-    // phases for the same reason as `dns`: the proxy dials the Kubernetes-created
-    // argocd-server NLB, whose DNS name the installer phases wrote to
-    // dist/argo-nlb-<i>.env.
+    // Step 12: the per-region operator access doors. AFTER the installer phases for the
+    // same reason as `dns`: the ALB target group takes the Kubernetes-created
+    // argocd-server NLB ENI ips, which the installer phases wrote to dist/argo-nlb-<i>.env.
     //
     // Also sources the REGION env: the ALB lives in the region's VPC, so it needs the
-    // vpc id, its CIDR (the ALB's ingress source), the isolated subnets and their AZs.
-    // ArgoNlbDns and ArgoNlbArn are deliberately NOT passed -- a target group takes IPs,
-    // not a hostname or an ARN, and deploy-stack.sh passes exactly this list so a
-    // parameter the template no longer declares would be rejected outright.
+    // vpc id, the isolated subnets and their AZs. The ALB ingress source is the observer
+    // VPC CIDR, resolved at synth time in operator-access-stack.ts, so no CIDR parameter
+    // is threaded. ArgoNlbDns/ArgoNlbArn are deliberately NOT passed -- a target group
+    // takes IPs, not a hostname or an ARN.
     ...REGIONS.map((r, i) => ({
-      suffix: frontDoorSuffix(r),
+      suffix: operatorAccessSuffix(r),
       region: r.name,
       sourceSuffixes: [
         `dist/argo-nlb-${i}.env`,
@@ -686,7 +750,7 @@ createDeployTasks(project, [...REGIONS], {
         // STANDBY ONLY, and only because the Cockpit lives there: its scoped ARNs come
         // from the PRIMARY region stack (FIS templates + role, cluster, node group, knob)
         // and from the failover stack (the ARC plan ARN). Sourcing these into the primary
-        // front door would be harmless but pointless — the primary template declares no
+        // access door would be harmless but pointless — the primary template declares no
         // cockpit parameters at all.
         ...(i === 1
           ? [
@@ -699,18 +763,15 @@ createDeployTasks(project, [...REGIONS], {
           ]
           : []),
       ],
-      outputsPrefix: `FRONTDOOR_${i}`,
+      outputsPrefix: `ACCESS_${i}`,
       stackParameters: {
         ArgoNlbIps: `$ARGO_NLB_IPS_${i}`,
         VpcId: `$REGION_${i}_VPCID`,
-        // NO VpcCidr: the ALB ingress source is the CloudFront origin-facing prefix
-        // list, resolved at synth time in front-door-stack.ts. Passing a parameter
-        // the template no longer declares fails the changeset outright.
         IsolatedSubnetIds: `$REGION_${i}_ISOLATEDSUBNETIDS`,
         IsolatedSubnetAzs: `$REGION_${i}_ISOLATEDSUBNETAZS`,
         // STEP 5 — the cockpit's scoped ARNs, STANDBY ONLY. These MUST match the
-        // CfnParameters front-door-stack.ts declares inside its own standby guard, in
-        // BOTH directions: a declared-but-unthreaded parameter fails the changeset with
+        // CfnParameters operator-access-stack.ts declares inside its own standby guard,
+        // in BOTH directions: a declared-but-unthreaded parameter fails the changeset with
         // "Parameters: [X] must have values", and a threaded-but-undeclared one fails with
         // "do not exist in the template". Neither shows up in a build — which is why
         // test/cockpit.test.ts derives the required set from the synthesized template and
@@ -739,13 +800,9 @@ createDeployTasks(project, [...REGIONS], {
       },
     })),
   ],
-  // Phase 7 (step 12): the CFS 403 bounce page. Uploaded by the rail rather than baked
-  // into the template because its content carries the PER-DEPLOYER Bindle id
-  // (CFS_BINDLE_ID CI variable, runbook prerequisite 8), and its destination bucket
-  // only exists once the front-door stacks have deployed. Rendered ONCE -- the Bindle
-  // and the CFS endpoint do not vary by region -- and uploaded to both buckets.
-  // FAIL-CLOSED if CFS_BINDLE_ID is unset: render-403.py substitutes a sentinel, CFS
-  // refuses to onboard it, and the distributions stay locked for everyone.
+  // Phase 7: post-deploy VERIFICATIONS that nothing mutates. The signed-cookie 403
+  // bounce-page upload that used to live here is gone with the old CloudFront front
+  // door; these two checks remain because they guard silent, deploy-only failure modes.
   finalSteps: [
     // VERIFY that the app records carry the health checks the plan vended, and clear the
     // transient evaluation warning. The failover stack's TEMPLATE owns the attachment (the
@@ -799,42 +856,16 @@ createDeployTasks(project, [...REGIONS], {
       },
       run: 'python3 build/verify-zonal-shift-azs.py',
     },
-    {
-      name: 'upload the CFS 403 bounce page to both front doors',
-      region: PRIMARY_REGION,
-      sourceFiles: REGIONS.map((_, i) => `dist/$PROJECT_NAME-${frontDoorSuffix(REGIONS[i])}.env`),
-      run: [
-        'python3 build/render-403.py src/frontdoor/403.html > dist/403.html',
-        ...REGIONS.map(
-          (r, i) =>
-            `&& aws s3 cp dist/403.html "s3://$FRONTDOOR_${i}_ERRORBUCKETNAME/error/403.html" --region ${r.name}`,
-        ),
-        ...REGIONS.map(
-          (_, i) =>
-            `&& echo "front door ${i}: onboard $FRONTDOOR_${i}_DISTRIBUTIONDOMAINNAME at CFS (runbook prerequisite 8)"`,
-        ),
-      ].join(' '),
-    },
   ],
 });
-// awsRegion is the pipeline's AWS_REGION (assets bucket suffix + AWS_DEFAULT_REGION for
-// the deploy job). Taken from PRIMARY_REGION rather than a literal so it cannot drift
-// from REGIONS[0]; a project-level CI/CD variable of the same name still overrides it.
-createGitlabWorkflow(project, {
-  enableLoadGen,
-  awsRegion: PRIMARY_REGION,
-  dockerImageRegions,
-  // Deploy-time variables. NO real values are baked in: each deployer sets these in
-  // their CI project settings (or the environment for a local `npx projen deploy`).
-  // The placeholders below are deliberately invalid so a deploy that forgot to set
-  // them fails at the first AWS call instead of landing in the wrong account.
-  // (The CI credential-vending and CFS bounce-page wiring these feed is replaced in
-  // the public port -- see docs/runbook.md prerequisites.)
-  deployVariables: {
-    AWS_CREDS_TARGET_ROLE: 'arn:aws:iam::111122223333:role/REPLACE-ME-deploy-role',
-    ASSETS_BUCKET_PREFIX: 'eks-multi-region',
-    CFS_BINDLE_ID: 'REPLACE-ME-not-used-in-public-port',
-  },
-});
+// CI for this sample is generated by the monorepo ROOT .projenrc.ts (GitHub Actions
+// build / e2e / cleanup jobs via its `patterns[]` entry), not here. Deploy-time inputs
+// the rail reads from the environment -- set them in the CI job or the shell before
+// `npx projen deploy`; there are deliberately NO baked-in defaults so a deploy that
+// forgot them fails at the first AWS call instead of landing in the wrong account:
+//   AWS_REGION            primary region (REGIONS[0]; assets bucket suffix)
+//   ASSETS_BUCKET_PREFIX  e.g. eks-multi-region
+// The operator reaches the Argo UIs and the cockpit through the observer bastion over
+// SSM -- see build/tunnel.sh and docs/runbook.md; no public front door.
 
 project.synth();

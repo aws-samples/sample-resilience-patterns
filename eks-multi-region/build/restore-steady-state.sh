@@ -19,9 +19,10 @@
 #     minReplicas, which ARC never touched). The re-enabled HPA then rightsizes each
 #     region on its own: the idle region drifts to its minReplicas floor, the active
 #     region sizes to real load. No explicit `kubectl scale` — cleanup by convergence.
-#   * rolling restart — fresh pods, fresh DB connection pools. After a writer move this
-#     is standard hygiene, and in this demo it is PRECISELY the remediation for the
-#     planted write defect. Run this only when the parked-at-75% diagnosis story is over.
+#   * rolling restart — fresh pods, fresh DB connection pools. Standard hygiene after a
+#     writer move. NOT a remediation: the write pool validates and replaces dead sockets
+#     on its own (src/app/common.py), so writes recover within a few requests of the
+#     failover whether or not this runs.
 #
 # ── WHY A SCRIPT AND NOT AN ARC postRecovery WORKFLOW ───────────────────────────────────
 #

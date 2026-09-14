@@ -44,6 +44,7 @@ import logging
 import os
 import queue
 import threading
+import time
 import urllib.request
 
 import boto3
@@ -217,9 +218,81 @@ def read_connection():
 #: widened for a heavier run without rebuilding the image.
 _WRITE_POOL_SIZE = int(os.environ.get("DB_WRITE_POOL_SIZE", "4"))
 
+#: A pooled connection older than this is closed and replaced at checkout, so no writer
+#: connection outlives a failover indefinitely even if it happens to keep working.
+DB_CONN_MAX_LIFETIME_SECONDS = int(os.environ.get("DB_CONN_MAX_LIFETIME_SECONDS", "300"))
+
+#: A pooled connection that has sat idle longer than this is PINGED (SELECT 1) before it
+#: is handed out. Idle connections are the ones that die silently: after the Aurora writer
+#: moves to the other region, every socket in the pool still points at a host that is now
+#: a reader (or gone), and the first write on each would fail. Pinging every checkout
+#: would add a round trip to every write; pinging only after idle catches the failover
+#: case at the cost of one extra round trip per connection per quiet period.
+DB_CONN_VALIDATE_AFTER_IDLE_SECONDS = float(os.environ.get("DB_CONN_VALIDATE_AFTER_IDLE_SECONDS", "5"))
+
 #: LIFO rather than FIFO so the pool hands back a recently-used connection and the
 #: least-recently-used ones sit at the bottom instead of every connection being cycled.
+#: Each entry is a _PooledConn wrapper, never a bare connection, so the pool always knows
+#: how old and how idle the connection is.
 _write_pool: queue.LifoQueue = queue.LifoQueue(maxsize=_WRITE_POOL_SIZE)
+
+
+class _PooledConn:
+    """A writer connection plus the two timestamps the pool's health rules read."""
+
+    __slots__ = ("conn", "created_at", "last_used_at")
+
+    def __init__(self, conn) -> None:
+        self.conn = conn
+        now = time.monotonic()
+        self.created_at = now
+        self.last_used_at = now
+
+
+def _close_quietly(conn) -> None:
+    try:
+        conn.close()
+    except Exception:  # noqa: BLE001 - a dead socket may raise on close; nothing to do
+        pass
+
+
+def _is_alive(conn) -> bool:
+    """One round trip. False means the connection must be discarded, not returned."""
+    try:
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        finally:
+            cur.close()
+        return True
+    except Exception:  # noqa: BLE001 - any driver error here means "not usable"
+        return False
+
+
+def _checkout() -> _PooledConn:
+    """Take a HEALTHY connection from the pool, opening a fresh one if none qualifies.
+
+    Three rules, applied in order to each pooled entry:
+      1. max lifetime  -- older than DB_CONN_MAX_LIFETIME_SECONDS: close, try the next.
+      2. validate after idle -- idle longer than DB_CONN_VALIDATE_AFTER_IDLE_SECONDS and
+         failing SELECT 1: close, try the next.
+      3. otherwise hand it out.
+    The pool can hold at most _WRITE_POOL_SIZE entries, so this loop is bounded.
+    """
+    now = time.monotonic()
+    while True:
+        try:
+            entry = _write_pool.get_nowait()
+        except queue.Empty:
+            return _PooledConn(_connect(WRITE_HOST))
+        if now - entry.created_at > DB_CONN_MAX_LIFETIME_SECONDS:
+            _close_quietly(entry.conn)
+            continue
+        if now - entry.last_used_at > DB_CONN_VALIDATE_AFTER_IDLE_SECONDS and not _is_alive(entry.conn):
+            _close_quietly(entry.conn)
+            continue
+        return entry
 
 
 @contextlib.contextmanager
@@ -227,25 +300,39 @@ def write_connection():
     """Pooled connection to the GLOBAL writer endpoint (follows the primary region).
 
     See item 3 of the module docstring for why the write path is pooled and the read path
-    is not. Used as a context manager so the connection is always returned to the pool:
+    is not. Used as a context manager:
 
         with write_connection() as conn:
             ...
 
-    The pool starts empty and fills on demand — a pod that never writes never opens a
-    writer connection, which keeps the standby region's connection count at zero until it
-    is actually serving writes.
+    Pool hygiene, because a pool that returns dead connections is worse than no pool:
+
+    * A connection is only RETURNED to the pool if the body completed without raising.
+      If the body raised, the connection is closed and dropped -- the failure it just
+      produced is the best available evidence that the socket is bad (after a writer
+      failover, every pooled socket is), and putting it back would hand the same dead
+      connection to the next request, forever.
+    * At checkout, a connection past its max lifetime is retired, and one that has been
+      idle is pinged first (see the two constants above).
+
+    Together these mean a writer failover costs one failed write per pooled connection
+    (at most _WRITE_POOL_SIZE), after which every subsequent write gets a fresh socket to
+    the new writer -- with no restart and no external intervention. The pool starts empty
+    and fills on demand, so a pod that never writes never opens a writer connection.
     """
+    entry = _checkout()
+    ok = False
     try:
-        conn = _write_pool.get_nowait()
-    except queue.Empty:
-        conn = _connect(WRITE_HOST)
-    try:
-        yield conn
+        yield entry.conn
+        ok = True
     finally:
-        try:
-            _write_pool.put_nowait(conn)
-        except queue.Full:
-            # More connections in flight than the pool can hold: close the surplus
-            # rather than growing without bound.
-            conn.close()
+        if not ok:
+            _close_quietly(entry.conn)
+        else:
+            entry.last_used_at = time.monotonic()
+            try:
+                _write_pool.put_nowait(entry)
+            except queue.Full:
+                # More connections in flight than the pool can hold: close the surplus
+                # rather than growing without bound.
+                _close_quietly(entry.conn)
