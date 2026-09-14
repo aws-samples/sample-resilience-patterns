@@ -111,19 +111,14 @@ export class RegionStack extends cdk.Stack {
       // this count at synth time to build fixed-length subnet arrays from the imported
       // VPC. One constant, both sides.
       azCount: AZ_COUNT,
-      // Step 12: CloudFront VPC origins require an internet gateway ATTACHED to the VPC
-      // -- a static "this VPC can receive traffic from the internet" flag CloudFront
-      // checks. The IGW is UNROUTED: ParameterizedVpc only creates IGW routes for
-      // SubnetType.PUBLIC subnets and this network declares isolated-only, so no route
-      // table references it, no subnet gains internet access, and zero-egress behaviour
-      // is unchanged -- every interface endpoint below is still required. But "this VPC
-      // has an internet gateway" is a real posture delta a security review will stop
-      // on; it is a deliberate, documented cost of the Midway-gated front door.
-      includeInternetGateway: true,
+      // No internet gateway. The old CloudFront VPC-origin front door required an IGW
+      // ATTACHED to the VPC (a static "can receive traffic from the internet" flag); that
+      // front door is gone, replaced by the observer bastion + internal ALB reached over
+      // SSM, so the VPC stays fully isolated with no IGW at all.
+      includeInternetGateway: false,
       // REQUIRED for EKS in fully-private subnets, not an optimisation.
       //
-      // These subnets have no NAT and no internet ROUTE (the IGW attached for the
-      // CloudFront VPC origins is unrouted), so without these endpoints
+      // These subnets have no NAT and no internet ROUTE, so without these endpoints
       // the managed node group cannot register with the cluster or pull images and the
       // node group creation simply times out — a slow, opaque failure with no useful
       // error. AWS documents ec2 + ecr.api + ecr.dkr + s3 as the minimum for nodes to

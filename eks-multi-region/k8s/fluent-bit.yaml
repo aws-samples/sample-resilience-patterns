@@ -3,19 +3,17 @@
 # ── WHY THIS EXISTS ────────────────────────────────────────────────────────────────
 #
 # Until this landed the demo emitted metrics but no application logs. Availability
-# could be watched dropping with no way to see WHY, so the planted connection-pool
-# defect was diagnosable only by reading the source. Anyone (or anything) with
-# account access but no repo access had nothing to work from. ARCC's EKS guidance
-# lists "Enable Kubernetes CloudWatch logs for pods" as a cluster-level
-# recommendation for the same reason.
+# could be watched dropping with no way to see WHY: anyone (or anything) with account
+# access but no repo access had nothing to work from. EKS guidance lists "Enable
+# Kubernetes CloudWatch logs for pods" as a cluster-level recommendation for the same
+# reason.
 #
 # The app already logs the evidence. src/app/server.py logs every request through an
 # overridden log_message, and logs `write failed: <exc>` / `read failed: <exc>` on
-# each failure. The defect's signature is therefore already in pod stdout: writes
-# failing with a dead-connection error from psycopg while reads stay clean, because
-# write_connection() pools connections and returns them in `finally` with no liveness
-# check, while read_connection() opens a fresh one per call. Nothing needed to be
-# added to the app -- the logs simply had nowhere to go.
+# each failure. So the signature of any write-path incident -- for example the single
+# failed write per pooled connection that a writer failover costs before the pool
+# replaces its sockets -- is already in pod stdout. Nothing needed to be added to the
+# app; the logs simply had nowhere to go.
 #
 # ── SCOPE: CLUSTER-WIDE, DELIBERATELY ──────────────────────────────────────────────
 #

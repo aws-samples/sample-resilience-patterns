@@ -176,10 +176,9 @@ export interface DeployTaskOptions {
   readonly postDeployStacks?: readonly SingletonStackPhase[];
   /**
    * Post-deploy work that must run AFTER the {@link postDeployStacks} — Phase 7.
-   * Exists for the front door's 403 bounce page: its content carries a per-deployer
-   * value (the CFS Bindle id), so it cannot be a template asset, and its destination
-   * bucket only exists once the front-door stack has deployed. Same shape and builder
-   * as {@link postDeploy}, later position.
+   * Used for verifications and touch-ups that depend on a post-deploy stack having
+   * landed (for example confirming the ARC health checks are attached). Same shape and
+   * builder as {@link postDeploy}, later position.
    */
   readonly finalSteps?: readonly PostDeployPhase[];
   /**

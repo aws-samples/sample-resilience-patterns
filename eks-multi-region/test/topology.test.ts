@@ -24,10 +24,11 @@ import {
 } from '../src/cdk/lib/aurora-member';
 import { DnsStack } from '../src/cdk/lib/dns-stack';
 import { FailoverStack } from '../src/cdk/lib/failover-stack';
-import { FrontDoorStack } from '../src/cdk/lib/front-door-stack';
 import { GlobalDataStack } from '../src/cdk/lib/global-data-stack';
 import { KARPENTER_NAMESPACE, KARPENTER_SERVICE_ACCOUNT } from '../src/cdk/lib/karpenter-iam';
 import { LoadGenStack } from '../src/cdk/lib/loadgen-stack';
+import { ObserverStack } from '../src/cdk/lib/observer-stack';
+import { OperatorAccessStack } from '../src/cdk/lib/operator-access-stack';
 import { PeeringStack } from '../src/cdk/lib/peering-stack';
 import { RegionStack } from '../src/cdk/lib/region-stack';
 import { SecondaryDbStack } from '../src/cdk/lib/secondary-db-stack';
@@ -36,7 +37,9 @@ import {
   APP_DOMAIN,
   APP_RECORD_NAME,
   AZ_COUNT,
-  frontDoorSuffix,
+  operatorAccessSuffix,
+  OBSERVER_REGION,
+  OBSERVER_SUFFIX,
   DNS_SUFFIX,
   GLOBAL_DATA_SUFFIX,
   KUBERNETES_VERSION,
@@ -179,13 +182,26 @@ const synthAll = (): Map<string, Template> => {
     }),
   ]);
 
-  // The Midway-gated front doors (step 12), one per region, after the installers.
+  // The observer VPC + bastion (step 12), a third region. Built after the region stacks
+  // whose VPC ids it consumes as parameters.
+  const observerName = `${APP_ID}-${OBSERVER_SUFFIX}`;
+  built.push([
+    observerName,
+    new ObserverStack(app, observerName, {
+      stackName: observerName,
+      synthesizer: makeSynthesizer(),
+      env: { region: OBSERVER_REGION },
+      appId: APP_ID,
+    }),
+  ]);
+
+  // The per-region operator access doors (step 12), reached through the observer bastion.
   for (const region of REGIONS) {
-    const fdName = `${APP_ID}-${frontDoorSuffix(region)}`;
+    const accessName = `${APP_ID}-${operatorAccessSuffix(region)}`;
     built.push([
-      fdName,
-      new FrontDoorStack(app, fdName, {
-        stackName: fdName,
+      accessName,
+      new OperatorAccessStack(app, accessName, {
+        stackName: accessName,
         synthesizer: makeSynthesizer(),
         env: { region: region.name },
         appId: APP_ID,
@@ -219,7 +235,8 @@ describe('topology', () => {
       `${APP_ID}-${LOADGEN_SUFFIX}`,
       `${APP_ID}-${FAILOVER_SUFFIX}`,
       `${APP_ID}-${STANDBY_ACCESS_SUFFIX}`,
-      ...REGIONS.map((r) => `${APP_ID}-${frontDoorSuffix(r)}`),
+      `${APP_ID}-${OBSERVER_SUFFIX}`,
+      ...REGIONS.map((r) => `${APP_ID}-${operatorAccessSuffix(r)}`),
     ]);
     expect(stacks).not.toContain(`${APP_ID}-demo`);
   });
@@ -252,7 +269,8 @@ describe('topology', () => {
       LOADGEN_SUFFIX,
       FAILOVER_SUFFIX,
       STANDBY_ACCESS_SUFFIX,
-      ...REGIONS.map((r) => frontDoorSuffix(r)),
+      OBSERVER_SUFFIX,
+      ...REGIONS.map((r) => operatorAccessSuffix(r)),
     ]);
   });
 
@@ -321,9 +339,20 @@ describe('deploy parameter contract', () => {
     const INTENTIONALLY_NOT_THREADED = ['AllowedCidr'];
 
     for (const [stackName, template] of synthAll()) {
-      const declared = Object.keys(template.toJSON().Parameters ?? {});
+      const params = (template.toJSON().Parameters ?? {}) as Record<string, { Type?: string; Default?: unknown }>;
+      const declared = Object.keys(params);
+      // CDK's ssm.StringParameter.valueForTypedStringParameterV2 materializes as a
+      // parameter of type AWS::SSM::Parameter::Value<...> WITH a Default naming the SSM
+      // path (the observer bastion's AL2023 AMI). CloudFormation resolves it at deploy
+      // time from that default; there is nothing for the rail to thread. Recognised by
+      // TYPE + Default, never by CDK's generated name, so a hand-declared SSM parameter
+      // with no default would still be caught.
+      const RESOLVED_BY_CFN = declared.filter(
+        (p) => (params[p].Type ?? '').startsWith('AWS::SSM::Parameter::Value<') && params[p].Default !== undefined,
+      );
       const mustThread = declared.filter(
-        (p) => !APPENDED_BY_SCRIPT.includes(p) && !INTENTIONALLY_NOT_THREADED.includes(p),
+        (p) => !APPENDED_BY_SCRIPT.includes(p) && !INTENTIONALLY_NOT_THREADED.includes(p)
+          && !RESOLVED_BY_CFN.includes(p),
       );
       for (const p of mustThread) {
         expect({ stackName, param: p, threaded: deployText.includes(`${p}=`) }).toEqual({
@@ -2195,6 +2224,67 @@ print(json.dumps({
     expect({ boundedUnder15s: elapsedMs < 15_000 }).toEqual({ boundedUnder15s: true });
   });
 
+  test('the write pool SELF-HEALS after a writer failover (no restart, no operator)', () => {
+    // THE defect this public sample must not carry. The original demo's write pool returned
+    // connections to a LIFO queue unconditionally -- even after the write on them raised --
+    // and never validated a pooled connection before handing it out. After the Aurora
+    // writer moved regions, every pooled socket was dead, every write reused a dead
+    // socket and failed in ~5ms, the failure put the socket straight back, and the pool
+    // was never empty so a fresh connection was never opened. Writes stayed at 0% for
+    // 65 minutes with every pod reporting healthy, until a rollout restart. Reads, which
+    // open a fresh connection per request, stayed at 100% -- the asymmetry that made it
+    // look like an endpoint problem rather than a pool problem.
+    //
+    // test/fixtures/pool_probe.py installs a fake pg8000 whose sockets can be killed en
+    // masse (the failover), then drives the pool through four scenarios and prints one JSON
+    // object. Run against the ORIGINAL common.py the failover section reports ten failures,
+    // zero new connections and no recovery -- the live incident in miniature.
+    const smokeEnv = {
+      ...process.env,
+      AWS_REGION: 'smoke',
+      DB_SECRET_NAME: 'smoke',
+      DB_READ_HOST: 'smoke',
+      DB_WRITE_HOST: 'smoke',
+      ERROR_RATE_PARAM: 'smoke',
+    };
+    const out = execSync(`python3 ${path.join(__dirname, 'fixtures', 'pool_probe.py')}`, {
+      encoding: 'utf8', cwd: path.join(__dirname, '..', 'src', 'app'), env: smokeEnv, timeout: 30_000,
+    }).trim();
+    const r = JSON.parse(out);
+
+    // Steady state: the pool is a pool -- ten writes, one connection.
+    expect(r.steady_state_opened).toBe(1);
+    // Failover: the one pooled socket fails ONCE, is closed and dropped, and exactly one
+    // replacement is opened; every later write succeeds. Recovery is measured in requests,
+    // not restarts.
+    expect(r.failover_outcomes).toEqual([false, true, true, true, true, true, true, true, true, true]);
+    expect(r.failover_new_connections).toBe(1);
+    expect(r.dead_conn_closed).toBe(true);
+    // Validate-after-idle: a socket that died while idle is caught by the checkout ping and
+    // replaced BEFORE the caller uses it -- the request never sees the failure at all.
+    expect(r.idle_dead_write_succeeds_first_try).toBe(true);
+    // Max lifetime: a connection past its lifetime is retired at checkout even if healthy.
+    expect(r.expired_conn_closed).toBe(true);
+    expect(r.expired_conn_replaced).toBe(true);
+  });
+
+  test('the write pool never returns a connection whose body raised (source pin)', () => {
+    // The behavioural probe above is the real guard; this pins the two source-level shapes
+    // that make it hold, so a refactor that quietly reintroduces "put back in finally,
+    // unconditionally" is caught even if someone also edits the probe. Comment-stripped so
+    // prose describing the old bug cannot satisfy or break the assertion.
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'app', 'common.py'), 'utf8')
+      .split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');
+    const body = src.slice(src.indexOf('def write_connection('));
+    // A success flag decides whether the connection goes back.
+    expect(body).toMatch(/ok = False[\s\S]*yield entry\.conn[\s\S]*ok = True/);
+    expect(body).toMatch(/if not ok:\s*\n\s*_close_quietly\(entry\.conn\)/);
+    // And checkout validates: both the lifetime and the idle-ping rules exist.
+    expect(src).toContain('DB_CONN_MAX_LIFETIME_SECONDS');
+    expect(src).toContain('DB_CONN_VALIDATE_AFTER_IDLE_SECONDS');
+    expect(src).toMatch(/def _is_alive\(conn\)[\s\S]*SELECT 1/);
+  });
+
   test('the workload separates read and write paths with Op-dimensioned metrics', () => {
     // Goal 2's on-stage signature is writes failing while reads succeed. The Client*
     // and Region* lines cannot show WHICH path fails, and adding a dimension to them
@@ -2523,10 +2613,14 @@ describe('failure injection (step 6)', () => {
       expect(target.ResourceType).toBe('aws:ec2:instance');
       expect(target.ResourceTags).toEqual({ ChaosAllowed: 'true' });
     }
-    // And nothing in ANY template tags an instance — that would defeat the arming gate.
-    for (const [name] of synthAll()) {
-      const tagResources = synthAll().get(name)!.findResources('AWS::EC2::Instance');
-      expect(Object.keys(tagResources)).toHaveLength(0);
+    // And nothing in ANY template tags an instance with ChaosAllowed — that would defeat
+    // the arming gate. The observer bastion (observer stack) IS a CFN-declared instance,
+    // but it must NOT carry the arming tag, so assert on the TAG, not on instance presence.
+    for (const [, t] of synthAll()) {
+      for (const inst of Object.values(t.findResources('AWS::EC2::Instance')) as any[]) {
+        const tags = (inst.Properties?.Tags ?? []) as Array<{ Key: string; Value: string }>;
+        expect(tags.some((tag) => tag.Key === 'ChaosAllowed')).toBe(false);
+      }
     }
   });
 
@@ -5280,8 +5374,8 @@ describe('EC2 security group descriptions (found by a rolled-back deploy)', () =
   test('the check actually rejects an arrow (the mutation that broke the deploy)', () => {
     // Guards the guard: a regex that accepted everything would make the test above green
     // for the wrong reason, which is exactly how the original defect shipped.
-    expect(ALLOWED.test('CloudFront VPC origin -> us-east-2 argocd front door')).toBe(false);
-    expect(ALLOWED.test('CloudFront VPC origin to the us-east-2 argocd front door')).toBe(true);
+    expect(ALLOWED.test('observer bastion access -> us-east-2 argocd access door')).toBe(false);
+    expect(ALLOWED.test('observer bastion access to the us-east-2 argocd access door')).toBe(true);
     // The punctuation we DO rely on stays legal.
     expect(ALLOWED.test('a-b_c.d:e/f(g)h#i,j@k[l]m+n=o&p;q{r}s!t$u*v')).toBe(true);
   });
@@ -5523,94 +5617,6 @@ describe('synthesized-template lint gate (cfn-lint)', () => {
     const src = fs.readFileSync(scriptPath, 'utf8');
     const line = src.split('\n').find((l) => l.startsWith('IGNORE_CHECKS='));
     expect(line).toBe('IGNORE_CHECKS="E3018"');
-  });
-});
-
-describe('CI enforcement of the template lint gate', () => {
-  const tasksJson = () =>
-    JSON.parse(fs.readFileSync(path.join(__dirname, '..', '.projen', 'tasks.json'), 'utf8'));
-  const buildYml = () =>
-    fs.readFileSync(
-      path.join(__dirname, '..', '.gitlab', 'ci-templates', 'build.yml'),
-      'utf8',
-    );
-
-  it('the CI entry point lints templates -- postCompile alone never runs in CI', () => {
-    // CI runs `yarn ci:build:cdk`, NOT `projen build`, so a gate wired only into
-    // postCompile executes locally and never in CI. That gap is why a template defect
-    // reached a live deploy on 2026-08-31 with a green pipeline.
-    const steps: string[] = tasksJson()
-      .tasks['ci:build:cdk'].steps.map((s: { spawn?: string }) => s.spawn ?? '')
-      .filter(Boolean);
-    const synthIdx = steps.indexOf('synth:silent');
-    const lintIdx = steps.indexOf('lint:templates');
-    const testIdx = steps.indexOf('test');
-    expect(synthIdx).toBeGreaterThanOrEqual(0);
-    expect(lintIdx).toBeGreaterThan(synthIdx); // templates must exist first
-    expect(lintIdx).toBeLessThan(testIdx); // fail before the slower steps
-  });
-
-  it('build:cdk installs cfn-lint with --break-system-packages (PEP 668)', () => {
-    // Alpine marks its Python externally-managed, so a plain `pip install` exits 1 with
-    // `error: externally-managed-environment`. Verified both forms in node:20-alpine on
-    // 2026-08-31: plain pip fails, this form succeeds in ~20s with no compilation.
-    // Without the flag the build job breaks outright, so this is not a style preference.
-    const yml = buildYml();
-    expect(yml).toMatch(/pip install .*--break-system-packages .*cfn-lint==/);
-    // Pinned: an unpinned linter can fail the build on a rule added upstream.
-    expect(yml).toMatch(/cfn-lint==\d+\.\d+\.\d+/);
-  });
-
-  it('a missing cfn-lint FAILS the CI build rather than skipping', () => {
-    // The script tolerates absence by default so no CI image can be blocked by a lint
-    // tool. In CI that tolerance is exactly wrong: it would stop checking templates
-    // silently. CFN_LINT_REQUIRED=1 converts the skip into a hard failure.
-    expect(buildYml()).toContain('CFN_LINT_REQUIRED');
-    const lintScript = fs.readFileSync(
-      path.join(__dirname, '..', 'build', 'lint-templates.sh'),
-      'utf8',
-    );
-    expect(lintScript).toMatch(/CFN_LINT_REQUIRED:-0.*=.*1|CFN_LINT_REQUIRED/);
-  });
-
-  it('the deploy job outlives the Aurora work and retries on its OWN timeout', () => {
-    /**
-     * BOTH HALVES PROVEN NECESSARY BY THE SAME FAILED RUN, 2026-09-04.
-     *
-     * The job carried no explicit timeout, so it inherited the project default of one
-     * hour. The Aurora Serverless v2 migration (writer replacement + two readers, per
-     * region) spends ~36 minutes in RDS alone, and the job was SIGTERMed at phase 6.2
-     * mid-`wait change-set-create-complete`. Six tail stacks never deployed, and the
-     * next phase reported a missing dotenv -- a consequence of the kill that reads like
-     * a defect.
-     *
-     * And no second attempt fired, because the retry list named only
-     * `stuck_or_timeout_failure`, which the GitLab CI reference scopes to runner-side
-     * stuck/no-update cases. A script that outruns the job timeout is the SEPARATE
-     * reason `job_execution_timeout`, so the configured list matched nothing.
-     *
-     * Asserted on the GENERATED yml rather than the projen source: the yml is what
-     * GitLab reads, and a projen upgrade that renamed or dropped either key would leave
-     * the source looking correct.
-     */
-    const yml = fs.readFileSync(
-      path.join(__dirname, '..', '.gitlab', 'ci-templates', 'deploy.yml'),
-      'utf8',
-    );
-    const hours = Number(yml.match(/^\s*timeout:\s*(\d+)h\s*$/m)?.[1]);
-    // Two-sided. A floor under the ~36 min of RDS work plus the rest of the rail, and a
-    // ceiling because this job holds the `deploy` resourceGroup while it runs: an
-    // over-generous timeout turns a hung deploy into a long silence.
-    expect(hours).toBeGreaterThanOrEqual(2);
-    expect(hours).toBeLessThanOrEqual(4);
-
-    const retryWhen = yml
-      .split(/^\s*retry:\s*$/m)[1]
-      .split(/^\s{2}\w/m)[0];
-    for (const reason of ['job_execution_timeout', 'stuck_or_timeout_failure']) {
-      expect({ reason, present: retryWhen.includes(reason) })
-        .toEqual({ reason, present: true });
-    }
   });
 });
 

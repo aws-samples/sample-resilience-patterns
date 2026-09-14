@@ -9,7 +9,9 @@ An ALB Lambda target. Routes:
   POST /cockpit/api/step        -> unstick a stuck execution step (skip / ungraceful)
 
 EVERY WRITE REQUIRES A TYPED CONFIRMATION. That is UI friction, not the authorization —
-the IAM grant plus the CFS gate on the front door are the real controls. The plan itself
+the IAM grant plus the network path (the cockpit is reachable only through the operator
+access door, itself reached only through the observer bastion over SSM) are the real
+controls. The plan itself
 carries no approval gate, so `StartPlanExecution` succeeding IS the authorization.
 
 DESIGN NOTES
