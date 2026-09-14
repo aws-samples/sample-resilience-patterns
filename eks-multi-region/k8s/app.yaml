@@ -1,0 +1,579 @@
+# Demo workload: the orders API on EKS.
+#
+# Dollar-brace placeholders below are substituted by build/render-manifest.py at deploy
+# time, which FAILS if any is left unresolved. That matters more than it looks: a manifest
+# applied with an unsubstituted write-host would create pods that come up, pass their
+# health probe (which does not touch the database) and 500 on every real request —
+# healthy-looking and useless. Names are hardcoded rather than substituted so this file
+# can still be read and applied by hand; test/topology.test.ts asserts they match
+# src/cdk/k8s.ts in both directions.
+#
+# Do NOT write a literal dollar-brace example in these comments: the renderer scans the
+# whole file, comments included, and would report the example itself as unresolved. It
+# did exactly that on the first run of this step.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders-api
+  namespace: demo
+  labels:
+    app: orders-api
+spec:
+  # Two replicas so a single degraded node removes SOME capacity rather than all of it.
+  # The whole point of the injected fault is partial degradation; one replica would make
+  # every failure total.
+  #
+  # NOTE for step 8: the ARC Region switch EKSResourceScaling block patches this field
+  # directly. There is deliberately NO HorizontalPodAutoscaler here — with an HPA in
+  # place, ARC's scale-up gets reverted by the HPA's own control loop within seconds
+  # unless ARC patches the HPA's minReplicas instead. If an HPA is added later, the ARC
+  # block must be retargeted at the same time.
+  # THREE, one per AZ (single-AZ / zonal-shift feature). Two replicas cannot cover three
+  # AZs: at least one AZ holds no pod, and under `target-type: ip` an AZ with no pods has NO
+  # TARGETS -- so the NLB excludes it, a single-AZ fault aimed there acts on nothing, and a
+  # zonal shift away from it changes nothing measurable.
+  #
+  # This PERTURBS THE ARC REPLICA SAMPLE for about a day. The ARC EKS scaling block sizes the
+  # standby from a 24-hour max-replica observation, so immediately after this lands it may
+  # scale nothing while reporting success (AGENTS.md bug class 12). Known and accepted -- a
+  # one-day wait, not a defect. It also dates the recorded narration's spoken 2 -> 4 -> 6.
+  replicas: 3
+  # maxSurge 0, deliberately, and this is a consequence of the anti-affinity below.
+  #
+  # With required one-pod-per-node anti-affinity and two nodes, a surge pod has nowhere to
+  # go on existing capacity — so the default 25% maxSurge would make EVERY image update
+  # provision a Karpenter node and wait for it. maxSurge 0 replaces in place instead:
+  # terminate one pod, start its replacement on the freed node. The cost is a momentary dip
+  # to one replica during a rollout, which happens at deploy time rather than inside the
+  # measured window.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: orders-api
+  template:
+    metadata:
+      labels:
+        app: orders-api
+    spec:
+      # ONE REPLICA PER NODE, required not preferred (step 11d).
+      #
+      # This is ordinary HA practice — two replicas sharing a node die together with it —
+      # and it is also the mechanism that makes Karpenter do real work in this demo. At two
+      # replicas on the managed node group's two nodes the constraint is already satisfied.
+      # When ARC's EKSResourceScaling block scales to four (targetPercent 200), replicas
+      # three and four cannot schedule on either existing node, so they go Pending and
+      # Karpenter provisions for them. That is what makes AWS's own description of the
+      # scaling block — "leveraging your node auto-scaler to increase node capacity if
+      # necessary" — actually true here rather than untestable.
+      #
+      # MUST NOT LAND WITHOUT KARPENTER. Required anti-affinity with no node autoscaler
+      # leaves ARC's third and fourth replicas Pending forever, which breaks the failover
+      # this demo exists to show. Steps 11a-11c are the prerequisite, and they are in.
+      #
+      # It also raises the stakes of the failover honestly: the scale-up now DEPENDS on
+      # capacity arriving. With minimumSuccessPercentage 90 on the EKS block, 3 of 4 ready
+      # is 75% and the block fails rather than shifting traffic onto insufficient capacity.
+      # That is the correct behaviour and it is the thing being demonstrated, but it is a
+      # real change from the previous state where four pods always fitted.
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: orders-api
+              topologyKey: kubernetes.io/hostname
+      # ZONE-scoped spread, and it is NOT redundant with the anti-affinity above.
+      #
+      # `topologyKey: kubernetes.io/hostname` guarantees three different NODES -- it says
+      # nothing about AZs. Nodes exist in all three AZs here, so all three pods could legally
+      # land in ONE AZ and satisfy the anti-affinity completely. The single-AZ story would
+      # then be untellable: two AZs with no targets, and a fault in the busy one taking out
+      # everything.
+      #
+      # DoNotSchedule rather than ScheduleAnyway: a soft constraint would silently degrade to
+      # "all in one AZ" under capacity pressure, and the demo would look correct while
+      # measuring something else. If an AZ genuinely cannot take a pod, Pending is the honest
+      # outcome and Karpenter is what resolves it.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: orders-api
+      # HOLD THE POD THROUGH THE FULL 15-MINUTE POWER FAULT (live finding 2026-09-02).
+      #
+      # When the AZ's node is stopped, the node controller taints it unreachable/not-ready
+      # and the DEFAULT tolerations evict the pod after 300s. Evicted, the pod is removed
+      # from the EndpointSlice, the LBC DEREGISTERS its target -- and the per-AZ chart line
+      # GAPPED at ~5 minutes (zero targets = no data) instead of holding at 0 for the full
+      # window. 900s outlasts the 15-minute fault, so the target stays registered-unhealthy
+      # and the line stays ON THE FLOOR, which is the honest black-beat shape.
+      #
+      # NoExecute is the effect these taints evict with. The BROWNOUT never taints the node
+      # (seconds of shaped latency is trivial against the kubelet's 40s Lease grace), so
+      # this changes only the black beat. The trade: a genuinely dead node now holds its
+      # pod 15 minutes before rescheduling -- acceptable here because the anti-affinity
+      # gives every AZ its own pod and the demo's recovery story is the zonal shift, not
+      # rescheduling speed.
+      tolerations:
+        - key: node.kubernetes.io/unreachable
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 900
+        - key: node.kubernetes.io/not-ready
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 900
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      # EXPLICIT, not the 30s default it happens to equal. Under `target-type: ip` the POD is
+      # the load-balancer target, so its shutdown is now part of the traffic path rather than
+      # an internal detail -- it must be a stated number that the preStop sleep below fits
+      # inside, not a default that a later edit could move without anyone noticing.
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: orders-api
+          image: ${APP_IMAGE_URI}
+          imagePullPolicy: IfNotPresent
+          # preStop sleep, and the sleep is the whole mechanism.
+          #
+          # Under `target-type: ip` the pod IS the target. On termination Kubernetes removes
+          # it from the EndpointSlice and sends SIGTERM at the same moment -- but the load
+          # balancer only learns about it when the controller deregisters the target, which
+          # takes seconds. Without this pause the pod stops accepting connections while the
+          # NLB is still sending it traffic, and those requests fail. They would land on the
+          # per-AZ chart as errors indistinguishable from the injected fault, which is exactly
+          # the signal this feature exists to read.
+          #
+          # 15s covers deregistration; it fits inside the 30s grace period above with room for
+          # the app's own shutdown. Raising it past the grace period would mean SIGKILL lands
+          # mid-drain, which is worse than not sleeping at all.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 15"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # A pod inherits no region from anywhere; boto3 with no region raises
+            # NoRegionError on the first Secrets Manager call.
+            - name: AWS_REGION
+              value: "${APP_REGION}"
+            # Looked up by NAME so the same value works in both regions — the secret is
+            # replicated, and a replica keeps the name but not the ARN.
+            - name: DB_SECRET_NAME
+              value: "${DB_SECRET_NAME}"
+            # Local regional reader. Reads stay in-region.
+            - name: DB_READ_HOST
+              value: "${DB_READ_HOST}"
+            # Aurora GLOBAL writer endpoint — identical in both regions, and repointed by
+            # Aurora at the current primary on switchover. A regional writer endpoint
+            # here would keep accepting writes against a demoted cluster.
+            - name: DB_WRITE_HOST
+              value: "${DB_WRITE_HOST}"
+            # L1 failure injection (step 6). The SSM error-rate knob's parameter NAME.
+            # The knob is inert until something reads it: error_rate.py reads THIS var
+            # and server.py fails that percentage of /orders requests. Leave the name
+            # unset and the helper returns 0 forever, so the operator turns the knob and
+            # nothing happens — with every deploy still green.
+            #
+            # Both regions get their OWN knob, each seeded "0". Only the primary's is
+            # ever raised for the gray failure; the standby's exists so this placeholder
+            # resolves to a real parameter (the renderer rejects an empty one) without
+            # every standby request paying a failed SSM lookup.
+            - name: ERROR_RATE_PARAM
+              value: "${ERROR_RATE_PARAM}"
+          # Both probes hit /health, which makes NO database call. This is deliberate:
+          # the injected fault is a GRAY one, and a database-dependent probe would pull
+          # degraded pods out of the load balancer, turning partial degradation into hard
+          # connection failures with a completely different signature.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orders-api
+  namespace: demo
+  annotations:
+    # PROVISIONED BY THE AWS LOAD BALANCER CONTROLLER, not the in-tree service controller.
+    #
+    # `external` is the LBC's value; the legacy `nlb` here meant the IN-TREE controller, which
+    # runs on the EKS-managed control plane and cannot enable any of the three things below.
+    # That is why the VPC now needs an elasticloadbalancing endpoint: the controller is a POD.
+    service.beta.kubernetes.io/aws-load-balancer-type: "external"
+    # TARGET-TYPE IP -- THE POINT OF THE WHOLE MIGRATION.
+    #
+    # `instance` targets register the NODE and route via kube-proxy, so draining one AZ at the
+    # load balancer moves traffic that then hops to a pod in another AZ anyway: a zonal shift
+    # reports ACTIVE and changes nothing measurable. With `ip` targets the POD is the target,
+    # so removing an AZ's targets genuinely removes that AZ's capacity.
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: "ip"
+    # CROSS-ZONE ENABLED. Off (the NLB default), each zonal load balancer node only reaches
+    # targets in its OWN AZ, so client distribution -- not capacity -- decides the split and a
+    # shift's effect depends on where the callers happen to resolve. On, every node reaches
+    # every target, so removing one AZ's targets produces a proportional, readable change.
+    # ... AND ZONAL SHIFT OPT-IN, in the SAME attributes annotation. Both are load-balancer
+    # ATTRIBUTES, so they are one comma-separated list -- an earlier draft of this file invented
+    # a separate `aws-load-balancer-attributes-zonal-shift-config` annotation, which does not
+    # exist. An unknown annotation is simply ignored, so the NLB would have come up without the
+    # opt-in and StartZonalShift would fail with ResourceNotFound -- reading as a broken cockpit
+    # rather than a missing attribute.
+    #
+    # Zonal shift cannot be set in CloudFormation here: the NLB is CONTROLLER-created from this
+    # Service, so the opt-in is an annotation, not a stack property.
+    #
+    # DOCUMENTED PREREQUISITE (Enable zonal shift for your Network Load Balancer): with
+    # cross-zone enabled, EVERY attached target group must have protocol TCP or TLS (ours is
+    # TCP), type not `alb` (ours is ip), cross_zone true or use_load_balancer_configuration
+    # (the default), and CONNECTION TERMINATION FOR UNHEALTHY TARGETS DISABLED. An earlier
+    # revision claimed disabled was the NLB default and left it unset -- WRONG on both counts:
+    # the NLB docs say "Connection termination is enabled by default", and the attribute is
+    # target_health_state.unhealthy.connection_termination.enabled (the earlier revision named
+    # a nonexistent deregistration_delay.connection_termination key). The LBC then created the
+    # target group with the enabled default and CreateListener was REJECTED live
+    # (2026-09-02 12:49): "The current target group attribute configuration of your load
+    # balancer is not compatible with zonal shift" -- the Service sat with no NLB hostname and
+    # the installer timed out. So the disable is EXPLICIT, in the target-group attributes below.
+    service.beta.kubernetes.io/aws-load-balancer-attributes: load_balancing.cross_zone.enabled=true,zonal_shift.config.enabled=true
+    # INTERNAL. Requires the kubernetes.io/role/internal-elb tag on the private subnets,
+    # which the RegionStack applies. Without that tag this Service sits <pending>
+    # forever while CloudFormation reports the stack deployed successfully, because
+    # Kubernetes — not CloudFormation — owns this object.
+    service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+    # DEREGISTRATION DELAY, and the DEFAULT IS THE PROBLEM.
+    #
+    # An NLB target group drains for 300 SECONDS by default. Unset, at maxUnavailable 1 of
+    # three replicas one-per-AZ, every pod replacement parks an ENTIRE AZ's worth of targets
+    # in draining for five minutes -- on the very chart the AZ story is read from. A rollout
+    # would look like a partial zonal outage.
+    #
+    # 15s matches the preStop sleep: long enough for in-flight requests to finish, short
+    # enough that a rollout does not smear across the measured window.
+    #
+    # CONNECTION TERMINATION FOR UNHEALTHY TARGETS: explicitly DISABLED -- the zonal-shift
+    # prerequisite above, and enabled is the NLB default. Disabled also matches the gray-
+    # failure design: an unhealthy target stops getting NEW connections but established ones
+    # close gracefully instead of being cut mid-request.
+    #
+    # CLIENT-IP PRESERVATION: explicitly DISABLED -- the brownout fault's SCOPING MECHANISM
+    # (design D3). With preservation off, EVERY pod response (health checks AND client data)
+    # is addressed to the NLB's ENI IPs, so the brownout's single Sources entry (the app
+    # record, resolved on-host to those ENI IPs) shapes exactly the pod-to-NLB path -- and
+    # the Aurora path, which shares these subnets and so can never be excluded by CIDR, is
+    # untouched by construction. false is already the LBC default for ip targets (read live
+    # 2026-09-02); it is PINNED here so a controller default change cannot silently re-scope
+    # the fault into the DB path and trip the 50% guardrail.
+    service.beta.kubernetes.io/aws-load-balancer-target-group-attributes: deregistration_delay.timeout_seconds=15,target_health_state.unhealthy.connection_termination.enabled=false,preserve_client_ip.enabled=false
+    # HTTP HEALTH CHECKS ON /health -- the brownout fault's FLAP WINDOW (design D2).
+    #
+    # The TCP checks the LBC defaults to have NO gray window: injected latency cannot fail
+    # a TCP handshake below absurdity, and the packet-loss band that could (75-90%) overlaps
+    # kubelet NotReady, which evicts the pod and converges back to the binary black shape.
+    # An HTTP check must complete a request/response inside its timeout, so shaped latency
+    # can fail it probabilistically -- genuine flapping, the gray texture.
+    #
+    # THE LBC DOCS CLAIM THIS TIMEOUT ANNOTATION IS IGNORED -- OURS HONORS IT. The docs say
+    # "the controller currently ignores the timeout configuration"; the deployed target
+    # group read back timeout=2s (live, 2026-09-03), so the EFFECTIVE timeout is the "2"
+    # below and the brownout severity (800ms +/- 400ms) is calibrated against it. Proven
+    # the hard way: 2,500ms (calibrated to the documented-but-nonexistent 6s) pinned the
+    # zone solid unhealthy in ~40s -- a black shape from the gray fault.
+    #
+    # /health makes NO database call and is deliberately never fault-injected -- the check
+    # fails only when the pod-to-NLB path itself is slow, which is exactly the brownout.
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: "HTTP"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-path: "/health"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-interval: "10"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-timeout: "2"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-healthy-threshold: "3"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-unhealthy-threshold: "3"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-success-codes: "200"
+spec:
+  type: LoadBalancer
+  # DECLARED, not left to the webhook to inject.
+  #
+  # The controller's mutating webhook sets this on CREATE and the field is IMMUTABLE afterwards.
+  # Declaring it here means the desired state matches what the webhook would produce, so Argo
+  # sees no drift -- and it makes the migration's hard requirement visible in the manifest
+  # rather than implicit in an admission hook.
+  #
+  # It is ALSO why this Service cannot be updated in place from the in-tree version: an immutable
+  # field cannot be added by `kubectl apply`, which fails with "field is immutable". The Service
+  # must be DELETED and recreated, and the ordering around that is in the installer.
+  loadBalancerClass: service.k8s.aws/nlb
+  selector:
+    app: orders-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+---
+# HorizontalPodAutoscaler (step 10d) — DELIBERATELY INERT AT DEMO LOAD.
+#
+# ── Why an HPA is here at all ────────────────────────────────────────────────────────────
+#
+# Almost no production Kubernetes workload runs a fixed replica count, so a failover demo
+# without one is demonstrating a simplified world — and the first question from a sharp
+# audience is "we have an HPA, does your failover still work?". It also adds the THIRD
+# controller with an opinion about replica count, alongside ARC at cutover and Argo CD
+# continuously, which is the interaction actually worth showing.
+#
+# ── Why it must never act on its own here ────────────────────────────────────────────────
+#
+# The HPA re-evaluates every ~15 seconds — far more aggressively than ARC (once, at cutover)
+# or Argo (per reconcile interval). A controller making autonomous decisions during a live
+# failover is a risk the demo does not need, and the injected fault could push CPU either
+# way: failing requests burn less CPU, retries burn more. So the CPU target is set high
+# enough that ordinary demo traffic never triggers scaling.
+#
+# What you still get, genuinely: the manifest is realistic, ARC really does patch this
+# object, the HPA really does honour the patch, and Argo really does decline to revert
+# either field. Only the autonomous behaviour is suppressed.
+#
+# Raising the target is how you would demo autoscaling itself. That is a deliberate choice,
+# not an omission.
+#
+# ── Requires metrics-server ──────────────────────────────────────────────────────────────
+#
+# Installed in step 10b. Without it this HPA reports <unknown>/target forever and never
+# acts — which silently removes the third controller and makes the coexistence story a
+# two-way argument while looking fine.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: orders-api
+  namespace: demo
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: orders-api
+  # minReplicas matches the Deployment's replicas, so the HPA agrees with the baseline
+  # instead of immediately correcting it.
+  #
+  # NOTE: ARC does NOT touch minReplicas. It scales the Deployment through the scale
+  # subresource and, when hpaName is set, patches behavior.scaleDown.selectPolicy so this
+  # autoscaler cannot undo the scale-up. An earlier design assumed minReplicas was the lever;
+  # the developer guide says otherwise.
+  # THREE, matching the Deployment: one pod per AZ is the floor the single-AZ story needs, so
+  # the HPA must never scale below it. Left at 2, a quiet period would let the HPA drop a pod
+  # and silently empty one AZ -- and a fault aimed there would inject cleanly and change
+  # nothing measurable.
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          # 80%, against a 100m request. Demo traffic is a handful of requests per second
+          # against a Python HTTP server — nowhere near it. Deliberately not 50%, which is
+          # the usual default and close enough to noise to fire mid-demo.
+          averageUtilization: 80
+  behavior:
+    scaleDown:
+      # DECLARED EXPLICITLY, even though Min is the effective default.
+      #
+      # This is the field ARC overwrites with "Disabled" when hpaName is set, and the Argo
+      # Application ignores it. Declaring it means the path EXISTS in the desired state, so
+      # ignoreDifferences has a field to ignore rather than having to suppress a key that
+      # only ever appears live. Left undeclared, whether Argo treats ARC's added key as
+      # drift depends on diff-normalisation behaviour I would rather not rely on.
+      selectPolicy: Min
+      # A long window so the HPA is slow to remove capacity even if it ever did act — during
+      # a failover, shrinking the standby is the exact wrong reflex.
+      stabilizationWindowSeconds: 600
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+---
+# ── Replica reporter ─────────────────────────────────────────────────────────
+#
+# WHY THIS EXISTS: the Resilience Cockpit's replicas tile. The cockpit Lambda is
+# no-VPC and the cluster API endpoint is PRIVATE (endpointPublicAccess: false), so
+# the Lambda can never read Deployment replicas itself — access entries would grant
+# it authorization to an endpoint it has no network path to. Something IN-cluster
+# must cross the boundary instead: this CronJob reads its own Deployment through the
+# in-cluster service (kubernetes.default.svc, reachable by definition) and publishes
+# the counts as CloudWatch metrics, which the cockpit already knows how to read.
+#
+# It reuses the APP IMAGE deliberately: every image in this cluster must be mirrored
+# into ECR (airgapped pulls), and the app image already carries python3 + boto3
+# pinned. No new image, no new mirror step.
+#
+# AWS credentials come from the NODE ROLE over IMDS (hop limit 2), exactly like the
+# app's Secrets Manager read. The PutMetricData grant is namespace-conditioned on
+# both node roles (region-stack.ts), and the isolated subnets get a `monitoring`
+# interface endpoint — without it the publish hangs as a connect timeout.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: replica-reporter
+  namespace: demo
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: replica-reporter
+  namespace: demo
+rules:
+  # READ-ONLY, one namespace, one resource type. The reporter must never become a
+  # lever: a test pins the absence of every write verb so the rule below cannot
+  # quietly widen.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: replica-reporter
+  namespace: demo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: replica-reporter
+subjects:
+  - kind: ServiceAccount
+    name: replica-reporter
+    namespace: demo
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: replica-reporter-script
+  namespace: demo
+data:
+  # NOTE: no `$` + `{` sequences in this script — the manifest passes through
+  # render-manifest.py, which substitutes shell-style placeholders. Python string
+  # formatting here uses concatenation and % only.
+  report.py: |
+    """Read orders-api replica counts from the in-cluster API and publish to CloudWatch.
+
+    Runs once per CronJob tick and exits. Loud on failure (non-zero exit) so the Job
+    history shows red rather than a silent gap in the metric.
+    """
+    import json
+    import os
+    import ssl
+    import sys
+    import urllib.request
+
+    import boto3
+    from botocore.config import Config
+
+    # Explicit timeouts at module scope (bug class 2): a hanging PutMetricData must
+    # die inside the Job's activeDeadlineSeconds, not outlive it.
+    _CFG = Config(connect_timeout=5, read_timeout=10, retries={"max_attempts": 2})
+
+    SA_DIR = "/var/run/secrets/kubernetes.io/serviceaccount"
+    NAMESPACE = os.environ.get("REPORT_NAMESPACE", "demo")
+    DEPLOYMENT = os.environ.get("REPORT_DEPLOYMENT", "orders-api")
+    REGION = os.environ["AWS_REGION"]
+    METRIC_NAMESPACE = os.environ.get("METRIC_NAMESPACE", "MyResilienceDemo")
+
+    with open(SA_DIR + "/token") as f:
+        token = f.read().strip()
+    ctx = ssl.create_default_context(cafile=SA_DIR + "/ca.crt")
+    url = (
+        "https://kubernetes.default.svc/apis/apps/v1/namespaces/"
+        + NAMESPACE + "/deployments/" + DEPLOYMENT
+    )
+    req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
+    with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+        dep = json.load(resp)
+
+    desired = dep.get("spec", {}).get("replicas") or 0
+    ready = dep.get("status", {}).get("readyReplicas") or 0
+
+    cw = boto3.client("cloudwatch", region_name=REGION, config=_CFG)
+    dims = [{"Name": "Region", "Value": REGION}]
+    cw.put_metric_data(
+        Namespace=METRIC_NAMESPACE,
+        MetricData=[
+            {"MetricName": "DesiredReplicas", "Dimensions": dims, "Value": desired, "Unit": "Count"},
+            {"MetricName": "ReadyReplicas", "Dimensions": dims, "Value": ready, "Unit": "Count"},
+        ],
+    )
+    print("replicas %s/%s published to %s (%s)" % (ready, desired, METRIC_NAMESPACE, REGION))
+    sys.exit(0)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: replica-reporter
+  namespace: demo
+spec:
+  # Once per minute — CronJob's finest granularity. The tile therefore lags reality
+  # by up to ~60s; acceptable for a scale-up that plays out over minutes.
+  schedule: "* * * * *"
+  concurrencyPolicy: Replace
+  # Keep exactly one job of each outcome: enough to see the last failure, no pileup.
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      # The whole run is two HTTP calls; anything past 50s is wedged. Kill it before
+      # the next tick rather than letting stuck jobs accumulate.
+      activeDeadlineSeconds: 50
+      backoffLimit: 0
+      template:
+        spec:
+          serviceAccountName: replica-reporter
+          restartPolicy: Never
+          containers:
+            - name: report
+              image: ${APP_IMAGE_URI}
+              command: ["python3", "/scripts/report.py"]
+              env:
+                - name: AWS_REGION
+                  value: "${APP_REGION}"
+                - name: REPORT_NAMESPACE
+                  value: "demo"
+                - name: REPORT_DEPLOYMENT
+                  value: "orders-api"
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 64Mi
+                limits:
+                  memory: 128Mi
+              volumeMounts:
+                - name: script
+                  mountPath: /scripts
+                  readOnly: true
+          volumes:
+            - name: script
+              configMap:
+                name: replica-reporter-script

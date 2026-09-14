@@ -1,0 +1,78 @@
+# Namespaces — applied FIRST, before anything that lives in them.
+#
+# ── WHY THIS FILE EXISTS ─────────────────────────────────────────────────────────────────
+#
+# `kubectl apply -f` on a concatenated manifest applies documents IN ORDER. It does not
+# topologically sort by kind the way Helm does. So a namespaced resource appearing before its
+# Namespace fails with `namespaces "<name>" not found`.
+#
+# That is exactly what happened here and it was caught by review, not by the build: Argo CD's
+# vendored install.yaml does NOT create its own Namespace (upstream expects
+# `kubectl create ns argocd` first), and the only thing creating it was k8s/chart-repo.yaml —
+# which the installer applied LAST. Every one of Argo CD's ~40 resources would have failed on
+# first deploy, roughly 2,500 lines before the Namespace showed up.
+#
+# Synth was green. The build was green. 182 tests were green. It would have failed at the
+# installer, several phases into a live deploy, which is the most expensive place to find it.
+#
+# A test now walks the rendered manifest and asserts every `namespace:` reference appears
+# AFTER the Namespace that declares it, so this class of defect cannot come back — including
+# for a namespace nobody has thought of yet.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo
+  labels:
+    # Not decoration: the app runs as a non-root user with a read-only-ish pod spec, and the
+    # restricted baseline is what makes that a documented posture rather than an accident.
+    pod-security.kubernetes.io/enforce: baseline
+    # POD READINESS GATE opt-in. The AWS Load Balancer Controller's `mpod.elbv2.k8s.aws`
+    # webhook injects a readiness gate into pods ONLY in namespaces carrying this label -- read
+    # verbatim from that webhook's own namespaceSelector in src/lbc/lbc.yaml, not from docs.
+    #
+    # WHAT IT BUYS. Under `target-type: ip` the pod is the target, and a pod goes "Ready" as
+    # soon as its kubelet probe passes -- which is BEFORE the load balancer has finished
+    # registering it. During a rollout Kubernetes will happily terminate an old pod against a
+    # new one the NLB is not yet sending traffic to, and those requests are dropped. The gate
+    # makes "Ready" mean "registered and healthy in the target group" instead.
+    #
+    # It does NOT change the probes. /health and /ready stay database-free on purpose (see
+    # src/app/server.py) -- the gate adds an EXTERNAL condition alongside them rather than
+    # making the probe itself dependency-aware, which is what keeps the demo's failure gray.
+    elbv2.k8s.aws/pod-readiness-gate-inject: enabled
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: argocd
+  labels:
+    # Argo CD's own components need more latitude than the app does (the repo-server writes
+    # to its filesystem), so this is privileged rather than baseline. Stated explicitly so
+    # the difference is a decision on the record rather than a default nobody looked at.
+    pod-security.kubernetes.io/enforce: privileged
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: logging
+  labels:
+    # PRIVILEGED, AND THIS IS LOAD-BEARING -- not a copy-paste of the argocd label.
+    #
+    # k8s/fluent-bit.yaml is a DaemonSet that must mount /var/log from the host to read
+    # container logs at all. The BASELINE profile FORBIDS hostPath volumes -- AWS's EKS
+    # pod-security guidance states it directly: "You can use the Pod Security Standards
+    # Baseline or Restricted policies to prevent the use of hostPath."
+    #
+    # So the log shipper cannot live in `demo`, which enforces baseline. Put there, the
+    # DaemonSet OBJECT is admitted without complaint and every one of its PODS is rejected
+    # by the admission webhook. The result is a DaemonSet reporting 0 desired / 0 ready,
+    # no log group activity, and no error message anywhere except a pod event -- which is
+    # indistinguishable from a missing IAM grant or an unreachable VPC endpoint. Finding
+    # that costs hours; the label costs nothing.
+    #
+    # `privileged` buys hostPath and NOTHING ELSE is relaxed: that pod still drops ALL
+    # capabilities, sets allowPrivilegeEscalation false, runs a read-only root filesystem,
+    # mounts every host path readOnly, and holds no Kubernetes RBAC at all (no ClusterRole,
+    # no ClusterRoleBinding) -- see the header of k8s/fluent-bit.yaml for why.
+    pod-security.kubernetes.io/enforce: privileged
