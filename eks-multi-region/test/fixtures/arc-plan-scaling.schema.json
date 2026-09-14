@@ -1,0 +1,93 @@
+{
+  "_source": "aws cloudformation describe-type --type RESOURCE --type-name AWS::ARCRegionSwitch::Plan --region us-east-2, captured 2026-08-26",
+  "_why": "The SDK/CFN docs say only 'array of maps' and the CDK type is Record<string,Record<string,...>> with no indication which key is which. This is the DEPLOYED schema -- the thing that actually validates at CREATE.",
+  "definitions": {
+    "EksResourceScalingConfiguration": {
+      "type": "object",
+      "properties": {
+        "TimeoutMinutes": {
+          "type": "number",
+          "default": 60,
+          "minimum": 1
+        },
+        "KubernetesResourceType": {
+          "$ref": "#/definitions/KubernetesResourceType"
+        },
+        "ScalingResources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/KubernetesScalingApplication"
+          },
+          "minItems": 1
+        },
+        "EksClusters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EksCluster"
+          },
+          "minItems": 2
+        },
+        "Ungraceful": {
+          "$ref": "#/definitions/EksResourceScalingUngraceful"
+        },
+        "TargetPercent": {
+          "type": "number",
+          "default": 100,
+          "minimum": 1
+        },
+        "CapacityMonitoringApproach": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/EksCapacityMonitoringApproach"
+            },
+            {
+              "default": "sampledMaxInLast24Hours"
+            }
+          ]
+        }
+      },
+      "required": [
+        "KubernetesResourceType"
+      ],
+      "additionalProperties": false
+    },
+    "KubernetesScalingApplication": {
+      "type": "object",
+      "patternProperties": {
+        ".+": {
+          "$ref": "#/definitions/RegionalScalingResource"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RegionalScalingResource": {
+      "type": "object",
+      "patternProperties": {
+        "^[a-z]{2}-[a-z-]+-\\d+$": {
+          "$ref": "#/definitions/KubernetesScalingResource"
+        }
+      },
+      "additionalProperties": false
+    },
+    "KubernetesScalingResource": {
+      "type": "object",
+      "properties": {
+        "Namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$"
+        },
+        "Name": {
+          "type": "string"
+        },
+        "HpaName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "Name",
+        "Namespace"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

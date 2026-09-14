@@ -1,0 +1,120 @@
+# Argo CD Application (step 10d) — THIS FILE IS THE DEMO'S CENTRAL CLAIM.
+#
+# Applied in the SECOND installer pass, after Argo CD's CRDs are established. `kubectl apply
+# -f` does not wait for a CRD to become established, so an Application in the same file as
+# its CRD races and fails with "no matches for kind".
+#
+# ── What is being proved ─────────────────────────────────────────────────────────────────
+#
+# Three controllers hold an opinion about this app's replica count:
+#
+#   ARC Region switch  once, at cutover — scales the Deployment via the scale subresource
+#                      to ceil(targetPercent x source), and patches the HPA's
+#                      scaleDown.selectPolicy to Disabled so the autoscaler cannot undo it
+#   the HPA            every ~15s (tuned inert here)
+#   Argo CD            every reconcile, from the chart — and selfHeal REVERTS drift
+#
+# Argo is the dangerous one. `targetPercent: 200` means ARC computes the replica count AT
+# CUTOVER, so git can never hold the right value. Without the exclusions below, selfHeal sees
+# 4 replicas against a chart that says 2, "corrects" it, and shrinks the standby back to 2
+# within its reconciliation window — precisely as traffic arrives. The plan still reports
+# success.
+#
+# AWS states the requirement itself, which is a better position to demo from than asserting
+# it: "Make sure to configure any drift-correcting tool, such as GitOps tooling, to ignore
+# the replica field for the resources in the patch, as well as the HorizontalPodAutoscaler
+# field."
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: orders-api
+  namespace: argocd
+  # Without this finalizer, deleting the Application orphans the workload instead of
+  # removing it. Harmless here, but it is the difference between a clean teardown and
+  # resources nobody remembers to delete.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    # The in-cluster chart repo (step 10c). A stand-in for the customer's real GitLab or
+    # ECR — say so on stage. The claim under test is independent of where the chart came
+    # from.
+    repoURL: http://chart-repo.argocd.svc.cluster.local
+    chart: orders-api
+    # '*' is REQUIRED, not stylistic. Argo's repo-server caches resolved manifests keyed by
+    # chart VERSION, so republishing one version with new bytes can be served from cache
+    # indefinitely — the symptom is "Argo just doesn't notice", with nothing in the UI
+    # explaining why. build/package-chart.py emits a monotonically increasing version and
+    # '*' always resolves the newest.
+    targetRevision: '*'
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo
+  syncPolicy:
+    automated:
+      # selfHeal MUST be true. It is the behaviour under test: a demo with selfHeal off
+      # proves nothing, because nothing would have reverted ARC's scaling in the first place.
+      # The claim is that Argo CAN revert drift and deliberately does not revert THIS drift.
+      selfHeal: true
+      # prune false. The app's Service acquires a Kubernetes-managed load balancer, and an
+      # over-eager prune during a failover is a much worse failure than a leftover object.
+      prune: false
+    syncOptions:
+      # The installer creates the namespace; this makes the Application tolerant of ordering
+      # rather than dependent on it.
+      - CreateNamespace=true
+      # ServerSideApply avoids Argo taking sole ownership of every field it did not set,
+      # which matters when ARC and the HPA both write to this Deployment.
+      - ServerSideApply=true
+
+  # ── THE EXCLUSIONS. Both are load-bearing; one alone is not enough. ────────────────────
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      name: orders-api
+      namespace: demo
+      jsonPointers:
+        # ARC scales the Deployment here. Ignoring this is what stops selfHeal shrinking the
+        # standby back to the chart's 2 as traffic arrives.
+        #
+        # The HPA also owns this field in normal operation, so without the exclusion Argo
+        # would fight the autoscaler continuously too — not just at cutover.
+        - /spec/replicas
+    - group: ""
+      kind: Service
+      name: orders-api
+      namespace: demo
+      jsonPointers:
+        # The AWS Load Balancer Controller writes BOTH of these on the live Service and the
+        # chart cannot know them: the provisioned NLB hostname, and the finalizer the
+        # controller adds so it can clean the load balancer up on delete.
+        #
+        # Without these exclusions Argo sees permanent drift on an object it manages and churns
+        # it every sync cycle -- and churning a Service whose loadBalancerClass is IMMUTABLE is
+        # how the migrated NLB gets torn down and recreated repeatedly, which on the chart looks
+        # like intermittent zonal outages.
+        #
+        # NOT /spec: the spec IS the desired state and Argo should absolutely enforce it. Only
+        # controller-written status and metadata are excluded.
+        - /status/loadBalancer
+        - /metadata/finalizers
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+      name: orders-api
+      namespace: demo
+      jsonPointers:
+        # scaleDown.selectPolicy, NOT minReplicas.
+        #
+        # This is the correction that mattered most in the whole step. An earlier design had
+        # ARC patching minReplicas and excluded that path. The developer guide is explicit:
+        # "If the optional hpaName field is not empty, Region switch patches the
+        # HorizontalPodAutoscaler to prevent any automatic scaledown during or after the
+        # execution by using the following patch:
+        # {"spec":{"behavior":{"scaleDown":{"selectPolicy":"Disabled"}}}}"
+        #
+        # Excluding minReplicas instead would have left Argo reverting ARC's ACTUAL patch on
+        # the next reconcile — re-enabling scale-down mid-failover — which is exactly the
+        # conflict this demo exists to disprove. The demo would have disproved its own thesis.
+        - /spec/behavior/scaleDown/selectPolicy
