@@ -1,6 +1,6 @@
 """POST/GET /inject — control-plane Lambda for the error-rate SSM knob.
 
-Generalized from five-nines ``src/lambda/inject/handler.py``; the fixed 3-target
+Generalized from the predecessor project ``src/lambda/inject/handler.py``; the fixed 3-target
 ``TARGET_MAP`` module constant is now read from the ``TARGET_MAP`` env var (JSON)
 that the ``InjectApi`` construct injects, so the Lambda is demo-independent.
 

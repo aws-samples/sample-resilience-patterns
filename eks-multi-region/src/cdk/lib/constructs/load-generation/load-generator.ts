@@ -26,7 +26,7 @@ const DEFAULT_CONTAINER_DIR = path.join(__dirname, 'container');
 /**
  * Properties for {@link LoadGenerator} (changeset §2).
  *
- * Generic extraction of five-nines `ClientWorkloadStack` with the CloudFront
+ * Generic extraction of the predecessor project `ClientWorkloadStack` with the CloudFront
  * prefix-list ingress, the dual-region hedging, and the execute-api specifics
  * stripped out. Target wiring (URL/path/method/extra env), rate controls, Fargate
  * sizing, and architecture are all props; the architecture prop drives BOTH the image
@@ -106,7 +106,7 @@ export interface LoadGeneratorProps {
  * On-demand Locust-on-Fargate load generator (changeset §2).
  *
  * ONE {@link ecr_assets.DockerImageAsset} is the single source of truth for both CI
- * providers' container-build paths (changeset §4): GitLab builds it via kaniko+crane,
+ * providers' container-build paths (changeset §4): The CI builds it via kaniko+crane,
  * GitHub via `cdk deploy`/`cdk-assets`. The Dockerfile carries NO `--platform` — the
  * platform comes from the asset, derived from {@link LoadGeneratorProps.architecture}.
  */

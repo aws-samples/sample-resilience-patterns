@@ -1,4 +1,4 @@
-# Operator runbook — multi-region EKS with ARC Region switch
+# Operator runbook — multi-region EKS with ARC Region Switch
 
 What CDK cannot express. Written for someone who did not build this.
 
@@ -7,50 +7,60 @@ is an assumption, it says so.
 
 ---
 
-## 0. Prerequisites (one-time, and none of them are automatable from here)
+## 0. Prerequisites (one-time, per account)
 
 | # | Item | Notes |
 |---|---|---|
-| 1 | GitLab project at `aws-cre/benchmarking-reference-apps/eks-mr-demo` (moved from `aws-cre/resilience-demos/` 2026-09-14; the old path redirects) | Create empty. Nothing can be pushed until it exists. |
-| 2 | Deploy IAM role in the target account | Trusted by your CI provider's identity (OIDC or a runner role) with a condition scoping it to THIS repository/project. **If the role is shared across projects, MERGE the new project into the existing condition list, never replace it.** (Public port: replaced by GitHub Actions OIDC -- see the root `.projenrc.ts` `patterns[]` entry.) |
-| 3 | CI variables | `AWS_CREDS_TARGET_ROLE` (type **Variable**, not File), `ASSETS_BUCKET_PREFIX=eks-mr-demo`. |
-| 4 | Two S3 buckets | `eks-mr-demo-us-east-2`, `eks-mr-demo-us-west-2`. |
-| 5 | Target account | Your own AWS account. Use a dedicated sandbox/demo account with no customer data. Provision a ReadOnly role alongside your Admin role so the read-only checks in this runbook can run least-privilege. |
-| 6 | Runner ECR permissions must cover `eks-mr-demo/mirror/*` in **both** regions | `GetAuthorizationToken`, `DescribeRepositories`, `CreateRepository`, `DescribeImages`, `BatchCheckLayerAvailability`, `InitiateLayerUpload`, `UploadLayerPart`, `CompleteLayerUpload`, `PutImage`. A policy scoped to `cdk-*` repository ARNs **denies the third-party image mirror while every other deploy step stays green.** |
-| 7 | Runner needs `elasticloadbalancing:DescribeLoadBalancers` | The DNS stack needs each NLB's canonical hosted zone id, and the in-VPC installer's subnet has no ELB endpoint, so the runner does that lookup. Step 12 reuses it to resolve the argocd NLB's ARN. |
-| 8 | **Front door (step 12), per deployer:** in the public port the CloudFront + signed-cookie front door is REPLACED by an observer bastion reached over SSM Session Manager port-forwarding (`scripts/tunnel.sh`). No public ingress, no identity-provider onboarding, no CloudFront distributions. | Needs `session-manager-plugin` on the operator machine and `ssm:StartSession` on the operator's role. See "Operate" below. |
+| 1 | An AWS account you own | A dedicated sandbox with no customer data. Everything here creates real EKS clusters, Aurora clusters and NAT-free VPCs across **three** regions (us-east-2, us-west-2, and us-east-1 for the observer). |
+| 2 | Operator tooling | Node 20 + corepack, Python 3.11+, AWS CLI v2, `session-manager-plugin` (for `build/tunnel.sh`), `crane` (for `make mirror`), optionally `cfn-lint==1.45.0` (the build gate; `CFN_LINT_REQUIRED=1` makes its absence fatal, as CI does). |
+| 3 | Two environment variables, **no defaults** | `AWS_REGION=us-east-2` (primary) and `ASSETS_BUCKET_PREFIX=<prefix>`. A deploy that forgot them fails at the first AWS call instead of landing somewhere wrong. |
+| 4 | Two assets buckets | `make buckets` creates `$ASSETS_BUCKET_PREFIX-us-east-2` and `-us-west-2` with public access blocked. |
+| 5 | Third-party images in **your** ECR | `make mirror` copies the digest-pinned images in `src/mirror/images.json` (Argo CD, redis, dex, metrics-server) into `<account>.dkr.ecr.<region>.amazonaws.com/eks-mr-demo/mirror/*` in both regions. **Not optional**: the node subnets have no NAT and no route to the internet, so nothing can be pulled from a public registry. The identity running it needs ECR create/push in both regions -- a policy scoped to `cdk-*` repositories denies the mirror while every other step stays green. |
+| 6 | Deploy identity permissions | Locally: your own credentials, admin-equivalent in the sandbox. In CI: the two-role split in `docs/iam/README.md` (a narrow GitHub OIDC role + a CloudFormation execution role passed as `ROLE_ARN`). |
+| 7 | `elasticloadbalancing:DescribeLoadBalancers` on the deploy identity | The DNS stack needs each NLB's canonical hosted zone id and the in-VPC installer's subnet has no ELB endpoint, so the deploying identity does that lookup. |
+| 8 | Service quotas | On-Demand Standard vCPU headroom in **both** regions for ARC's scale-up (`targetPercent` 150 of the primary's 24-hour max replica count -- see §7b for why that number compounds). |
 
-**ARC Region switch availability in us-east-2 and us-west-2: VERIFIED 2026-08-25.**
-The ARC developer guide states Region switch "is available in all commercial AWS
-Regions", the endpoints-and-quotas table lists `arc-region-switch.us-east-2.api.aws`
-and `arc-region-switch.us-west-2.api.aws` explicitly, and both hostnames resolve via
-DNS. Not yet exercised with a live API call in the target account (no credentials from
-this environment) — the first `list-plans` on deploy day 1 is the final confirmation,
-but the region pair is no longer at risk of changing.
+**ARC Region Switch availability.** The ARC developer guide states Region Switch "is
+available in all commercial AWS Regions", and the endpoints table lists
+`arc-region-switch.us-east-2.api.aws` and `arc-region-switch.us-west-2.api.aws`
+explicitly. The first `aws arc-region-switch list-plans` after deploy is the final
+confirmation in your account.
 
 ---
 
 ## 1. Deploy
 
 ```
-npx projen build          # must be green before anything else
-# then the GitLab pipeline: build -> deploy
+make deps && make build      # must be green before anything else (~370 tests, cfn-lint)
+make buckets                 # once per account
+make mirror                  # once per account (re-run after editing src/mirror/images.json)
+make deploy                  # ~90 minutes: 12 stacks across 3 regions
+make verify                  # every stack in a *_COMPLETE state
 ```
 
-Stack order is forced, not chosen: `region-us-east-2` → `region-us-west-2` → `globaldata` →
-`secondarydb` → `peering` → `dns` → `loadgen` → `regionswitch` → `standbyaccess` →
-`frontdoor-us-east-2` → `frontdoor-us-west-2` (the front doors deploy after the installers
-because their VPC origins target the Kubernetes-created argocd NLBs; VPC origin creation
-can take up to 15 minutes per region).
+`make deploy` runs the projen deploy rail (`.projen/tasks.json`, generated from
+`.projenrc.ts`). Stack order is forced by dependencies, not chosen:
+`region-us-east-2` → `region-us-west-2` → `peering` → `globaldata` → `secondarydb` →
+`observer` → `dns` → `loadgen` → `failover` → `standbyaccess` → the in-VPC installers →
+`access-us-east-2` → `access-us-west-2`. The access stacks deploy last because their ALB
+target groups point at the Kubernetes-created Argo CD NLB ENIs, which exist only after the
+installer has run.
 
-### DEPLOY THE DAY BEFORE A CUSTOMER-FACING RUN
+Cross-region values (VPC ids, cluster ARNs, peering ids, NLB ENI ips) travel between stacks
+as CloudFormation **parameters** threaded through per-stack dotenv files under `dist/`,
+never as `Fn::ImportValue` -- exports are region-scoped and a cross-region import fails
+deterministically at deploy. A test derives the required parameter set from the
+synthesized templates and fails the build if a deploy step stops threading one.
+
+### DEPLOY THE DAY BEFORE YOU NEED A FAILOVER
 
 Not a nicety. ARC's EKS scaling block sizes the standby from the **maximum replica count
-sampled over the previous 24 hours**, and there is no knob to shorten that window. On a
-same-day deploy that sample may not be populated, in which case the computed desired count
-can collapse toward zero — and because the block only scales when the destination is *lower*
-than desired, **it scales nothing and reports success.** Traffic then shifts to a standby at
-its original size.
+sampled over the previous 24 hours**, and there is no knob to shorten that window
+(`sampledMaxInLast24Hours` is the only capacity-monitoring approach the EKS block
+offers; the service model has exactly one value). On a same-day deploy that sample may not
+be populated, in which case the computed desired count can collapse toward zero — and
+because the block only scales when the destination is *lower* than desired, **it scales
+nothing and reports success.** Traffic then shifts to a standby at its original size.
 
 That is worse than a missed scale-up, because it also makes the Argo coexistence claim
 vacuous: if ARC scaled nothing, Argo has nothing to revert, and "Argo stayed Synced" proves
@@ -64,11 +74,14 @@ condition are both quoted from AWS docs.*
 
 ## 2. Immediately after every deploy
 
-### Re-open the demo UI
+### The EKS API endpoint stays closed
 
-**Every deploy resets `AllowedCidr` to `0.0.0.0/32`** — it is a `CfnParameter` with a
-deny-all default, by design. Re-open it to your address, and **close it again when you are
-finished.** An open CIDR left behind is a finding.
+The EKS cluster endpoint is private-only. `AllowedCidr` on each region stack gates the
+endpoint's security group and defaults to `0.0.0.0/32` (deny-all) on every deploy, **by
+design** -- in-VPC traffic (the installer, the nodes) rides EKS's own cluster-managed
+security group and needs nothing from you. Leave it closed. If you must run `kubectl` from
+outside the VPC for diagnosis, prefer the installer CodeBuild project (which is inside);
+if you do open the CIDR to your address, close it again when you are finished.
 
 ### Open the Argo CD UIs through the observer bastion (step 12)
 
@@ -102,7 +115,7 @@ admin password:
 | `kubectl get nodepool default` → Ready | No NodePool means Karpenter installs, elects a leader, and provisions nothing. |
 | Karpenter controller logs — check the pricing call degrades rather than stalls | `pricing:GetProducts` targets an endpoint-less API. The NodePool constrains instance types so pricing is not needed to choose, but confirm. |
 | 2 app pods, on 2 **different** nodes | Anti-affinity is `required`. If both landed on one node the selector is not matching — which makes the constraint vacuous and Karpenter will never be asked for capacity. |
-| Service quotas: running On-Demand Standard vCPU headroom | Plan evaluation covers running capacity, **not quota headroom**, and scaling the standby to 200% is the first thing a sharp audience pokes at. |
+| Service quotas: running On-Demand Standard vCPU headroom | Plan evaluation covers running capacity, **not quota headroom**, and scaling the standby to 150% of the primary's 24-hour max is the first thing a sharp audience pokes at. |
 | Load generator is emitting `ClientSuccess` | If availability shows no data, nothing is driving traffic and every later observation is meaningless. |
 
 ### Expected steady state, so surprises are recognisable
@@ -119,7 +132,7 @@ admin password:
 
 Run the whole sequence end to end at least once against the deployed stack. Two reasons
 beyond confidence: it populates the 24-hour replica sample §1 depends on, and it is the only
-way to measure the real 2 → 4 scale-up duration (see §6).
+way to measure the real 3 → 5 scale-up duration (see §6).
 
 ---
 
@@ -499,7 +512,7 @@ Do **not** conclude success from the plan reporting success.
 
 | Check | Why |
 |---|---|
-| The standby's replica count actually moved **2 → 4** | §1's failure mode is a scaling step that reports success having scaled nothing. |
+| The standby's replica count actually moved **3 → 5** (150% of the primary's 24-hour max of 3) | §1's failure mode is a scaling step that reports success having scaled nothing. |
 | Karpenter provisioned nodes for replicas 3 and 4 | With `required` anti-affinity they cannot fit on the existing two. `kubectl get nodes -l karpenter.sh/nodepool`. |
 | Argo CD still shows **Synced/Healthy**, and did not revert the replica count | This is goal 1. But it is only meaningful *after* the replica-count check above — "Argo did not revert" is equally true when nothing changed. |
 | Availability recovers, and the **decision alarm clears** | The 99%/3-of-5 alarm is the signal an operator would act on. |
@@ -510,10 +523,21 @@ Do **not** conclude success from the plan reporting success.
 is 75% and the block fails rather than shifting traffic onto a standby that cannot serve it.
 That is correct behaviour. Look at pending pods and Karpenter's logs, then at vCPU quota.
 
-**Measure the 2 → 4 duration on the first live run.** The block's `timeoutMinutes: 20` is
-headroom, not a measurement. If the real path fits comfortably in a few minutes, bring it
-down — an over-long timeout turns a genuine capacity failure into a long silent wait on
-stage instead of a clear failed step.
+**The scale-up step is bounded at `timeoutMinutes: 8`, and that is a measurement.** Four
+live executions put the whole step at 3–6 minutes when capacity exists. When capacity
+*cannot* exist -- a request above the pod ceiling -- the step burns its whole timeout with
+nothing to skip until it expires, so a long timeout turns a mis-sized request into a long
+silent wait instead of a clear failed step. If your nodes or images are slower, raise it
+from evidence, not headroom.
+
+**`targetPercent` compounds across a round trip.** ARC sizes each execution from the
+*source* region's 24-hour max times `targetPercent`, so inside one window each execution
+feeds the next: at 150, fail-over asks 3 → 5 and fail-back asks 5 → 8, which fits the
+10-pod ceiling (HPA `maxReplicas` = 2 managed nodes + 16 vCPU of Karpenter at one pod per
+node). A *third* execution in the same 24 hours would ask 12 and stall in this step. That
+is a documented operating limit -- two executions per day -- and a test derives the
+arithmetic from the real HPA, NodePool and node-group values so the ceiling cannot drift
+under it. (At the original 200 the second execution already asked 12 and stalled.)
 
 ---
 
@@ -575,9 +599,13 @@ Teardown checklist:
 
 1. Disarm injection (remove `ChaosAllowed` tags, stop any running experiment).
 2. Reset the error-rate SSM parameter to `0` in both regions.
-3. **Close `AllowedCidr`.**
-4. Destroy stacks in reverse deploy order, or leave running — it is roughly **$0.66/hr**,
-   about $3/day for a working day.
+3. `make clean` (runs `cleanup.sh`): every stack in reverse dependency order across the
+   three regions -- the Aurora secondary member before the global cluster, the EKS/VPC
+   region stacks last -- then the mirror ECR repositories and the assets buckets. Idempotent
+   and safe against a partial deploy; a `DELETE_FAILED` stack is retried once with its
+   failed resources retained rather than blocking everything behind it. A test pins the
+   script's stack list to exactly what the deploy rail creates.
+4. Or leave it running -- roughly **$0.66/hr**, about $3/day for a working day.
 
 ---
 

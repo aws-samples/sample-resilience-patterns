@@ -9,8 +9,8 @@
  * stack injects onto the load-gen container so the running value is authoritative and the
  * literals only matter as defaults.
  *
- * This replaces the five-nines pattern of two files independently hardcoding their
- * namespace string (the brittle coupling called out in five-nines AGENTS.md:40).
+ * This replaces the the predecessor project pattern of two files independently hardcoding their
+ * namespace string (the brittle coupling called out in the predecessor project).
  */
 export const DEMO_METRIC_NAMESPACE = 'MyResilienceDemo';
 

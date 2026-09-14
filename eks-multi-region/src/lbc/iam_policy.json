@@ -6,7 +6,7 @@
     "",
     "WHY VENDORED RATHER THAN HAND-WRITTEN. 80 actions across 8 services. Hand-transcribing",
     "that is exactly how a spec value that does not exist in reality gets introduced",
-    "(AGENTS.md bug class 3), and a missing action fails at RUNTIME -- the controller logs an",
+    "(docs/lessons.md #3), and a missing action fails at RUNTIME -- the controller logs an",
     "AccessDenied and the Service simply never gets an NLB, with synth, cfn-lint and every",
     "unit test green. Fetched from the pinned tag, not main: main can move ahead of the",
     "controller we actually run.",

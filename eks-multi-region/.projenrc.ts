@@ -45,7 +45,9 @@ const project = new awscdk.AwsCdkTypeScriptApp({
   name: 'eks-mr-demo',
   description: 'Multi-region EKS Demo with ARC RS',
   repository: 'https://github.com/aws-samples/sample-resilience-patterns',
-  license: 'Apache-2.0',
+  // The monorepo's root LICENSE (MIT-0) applies to every pattern; siblings generate no
+  // per-directory LICENSE and neither does this one. package.json's field is set below.
+  licensed: false,
 
   // ---- convergent skeleton (BYTE-IDENTICAL to the GitHub tree's block) -------
   defaultReleaseBranch: 'main',
@@ -90,13 +92,13 @@ const project = new awscdk.AwsCdkTypeScriptApp({
     ignorePatterns: ['*.d.ts', '*.js', 'node_modules/', 'lib/'],
   },
 
-  // ---- GitLab seam -----------------------------------------------------------
+  // ---- CI seam ----------------------------------------------------------------
   github: false, // THE SEAM — no .github/, no release, no depsUpgrade
 
   // ---- gitignore (gotcha 9; .agents/ via array, OQ5; +python dirs) -----------
   gitignore: [
     // .kiro/ dev-loop tooling (steering + skills, M3.5) is COMMITTED into the demo
-    // (matches five-nines: only .kiro/specs is ignored). .agents/ and idea/ are local-only.
+    // (matches the predecessor project: only .kiro/specs is ignored). .agents/ and idea/ are local-only.
     '.agents/', '.kiro/specs/', 'idea/',
     // temporary/ holds scratch: probe harnesses, mutation-test scaffolding, upstream
     // manifests pulled down for vendoring. It was UNTRACKED but not IGNORED, so it
@@ -112,8 +114,10 @@ const project = new awscdk.AwsCdkTypeScriptApp({
   ],
 });
 
-// ---- post-construction (GitLab) — NO addPackageResolutions / auto-queue / PAT
+// ---- post-construction (CI) — NO addPackageResolutions / auto-queue / PAT
 project.tasks.addEnvironment('PROJECT_NAME', project.name);
+// licensed:false makes projen write "license": "UNLICENSED"; the repo's root LICENSE is MIT-0.
+project.package.addField('license', 'MIT-0');
 
 // CONVERGENT (emit in BOTH provider trees): make `cdk synth` resolve the
 // explicit `.js` extension imports the vendored M1 construct barrels use
@@ -541,7 +545,7 @@ const postDeploy = [
   })),
 ];
 
-// GitLab builds the image with kaniko (shared runners block DinD) + pushes with crane,
+// The CI builds the image with kaniko (shared runners block DinD) + pushes with crane,
 // so the build/deploy docker lifecycle tasks are registered when load-gen is on.
 //
 // REGIONS / STACK_SUFFIXES are imported from src/cdk/regions.ts — the SAME module

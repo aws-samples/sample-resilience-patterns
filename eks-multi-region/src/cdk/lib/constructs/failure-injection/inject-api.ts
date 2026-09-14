@@ -10,7 +10,7 @@ import { FailureInjectionParameter } from './failure-injection-parameter.js';
  *
  * OPTIONAL sub-construct (failure-injection-changeset §4): a POST/GET `/inject` API +
  * Lambda for demos that want a button/API instead of the CLI scripts. Lifted/generalized
- * from five-nines `lambda/inject/handler.py` + `application-workload-stack.ts:170-193`.
+ * from the predecessor project `lambda/inject/handler.py` + `application-workload-stack.ts:170-193`.
  */
 export interface InjectApiProps {
   /** The knob whose params this API controls. */

@@ -385,7 +385,7 @@ export class RegionStack extends cdk.Stack {
     //
     // ARM64 / GRAVITON, and the architecture is FORCED by the build, not chosen for cost.
     //
-    // The application image is built by kaniko on the shared GitLab runner fleet, which
+    // The application image is built by kaniko on the CI runner fleet, which
     // is arm64 (`tags: ['arch:arm64']`). kaniko CANNOT cross-build: its --custom-platform
     // flag rewrites the platform recorded in the image config without changing what the
     // build produces (GoogleContainerTools/kaniko#1587, #2127). So an image built there
