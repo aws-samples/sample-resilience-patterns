@@ -35,7 +35,7 @@ spec:
   #
   # This PERTURBS THE ARC REPLICA SAMPLE for about a day. The ARC EKS scaling block sizes the
   # standby from a 24-hour max-replica observation, so immediately after this lands it may
-  # scale nothing while reporting success (AGENTS.md bug class 12). Known and accepted -- a
+  # scale nothing while reporting success (docs/lessons.md #12). Known and accepted -- a
   # one-day wait, not a defect. It also dates the recorded narration's spoken 2 -> 4 -> 6.
   replicas: 3
   # maxSurge 0, deliberately, and this is a consequence of the anti-affinity below.

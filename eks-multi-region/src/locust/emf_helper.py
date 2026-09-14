@@ -35,7 +35,7 @@ def emit_emf(
 
     ``values`` supplies metric name->value and dimension name->value; ``dimension_keys``
     lists which keys are dimensions (the rest are treated as metrics). Based on the
-    envelope shape in five-nines locustfile.py:81-87.
+    envelope shape in the predecessor project locustfile.py:81-87.
     """
     units = units or {}
     metric_names = [k for k in values if k not in dimension_keys]
@@ -68,7 +68,7 @@ def emit_request(
 ) -> None:
     """Emit metrics for ONE request to ONE region endpoint.
 
-    THE RULE (five-nines locustfile.py:61-71, 96-104; AGENTS.md:36): per-region metrics
+    THE RULE (the predecessor project locustfile.py:61-71, 96-104; docs/lessons.md:36): per-region metrics
     (RegionSuccess/RegionError/RegionLatency) are emitted on EVERY call (one line per
     region). Client-level metrics (ClientSuccess/ClientError/ClientLatency) are emitted on
     EXACTLY ONE line per logical request -- gate them with ``is_first`` so a request that

@@ -73,7 +73,7 @@
       "onFail": "ignore"
     }
   },
-  "license": "Apache-2.0",
+  "license": "MIT-0",
   "publishConfig": {
     "access": "public"
   },

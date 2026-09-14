@@ -4,7 +4,7 @@ Scope: the `Cockpit` construct's Lambda execution role in `eks-mr-demo`
 (`src/cdk/lib/constructs/cockpit/cockpit.ts`), which holds fault-injection and
 region-failover write permissions, including one `iam:PassRole` grant.
 
-This note exists because it is **required**, not as documentation garnish. ARCC's
+This note exists because it is **required**, not as documentation garnish. AWS guidance's
 privilege-escalation guidance states the obligation directly:
 
 > If your service needs to make use of IAM operation which can potentially lead to
@@ -14,8 +14,8 @@ privilege-escalation guidance states the obligation directly:
 
 `iam:PassRole` is such an operation. What follows is that enumeration.
 
-Guidance consulted: ARCC **SAX-08 Outcome 1** (IAM Authorization and Least Privilege
-Defaults), ARCC **Prevent Privilege Escalation**, and the recommendation engine's
+Guidance consulted: AWS guidance **SAX-08 Outcome 1** (IAM Authorization and Least Privilege
+Defaults), AWS guidance **Prevent Privilege Escalation**, and the recommendation engine's
 **Use IAM Roles and Scoped Down Policies** (BEST_PRACTICE).
 
 ---
@@ -63,7 +63,7 @@ first `fis:StartExperiment` in an account, FIS creates `AWSServiceRoleForFIS` us
 observed live 2026-09-01, an AccessDenied naming this boundary — and that is the control
 working, not a defect: a demo-facing web role must not create IAM roles of any kind
 (per the "Prevent Privilege Escalation" best practice; SLRs are also the tamper-proof
-shape ARCC's service-linked-role guidance favors). The deploy rail's Phase 0 creates the
+shape AWS service-linked-role guidance favors). The deploy rail's Phase 0 creates the
 SLR idempotently with the deployer's credentials instead, so the cockpit role never needs
 the action. Do not "fix" a recurrence by widening the boundary.
 
@@ -75,7 +75,7 @@ is a separate managed policy rather than a reuse.
 
 ## 3. Escalation chains considered
 
-ARCC's guidance asks specifically about combinations — "permissions when combined may
+the guidance asks specifically about combinations — "permissions when combined may
 enable broader actions that may not be intended."
 
 | Documented chain | Present? | Why not exploitable |
@@ -95,7 +95,7 @@ because plan evaluation calls it (observed 2026-08-26).
 
 Before Step 5 the handler discovered ARNs at runtime with
 `cloudformation:DescribeStacks`. That was convenient and it was also **two-thirds of a
-documented escalation chain** sitting in one role: ARCC lists
+documented escalation chain** sitting in one role: AWS guidance lists
 `iam:PassRole` + `cloudformation:CreateStack` + `cloudformation:DescribeStacks` as a path to
 "get access to an IAM role by creating a CloudFormation template to create new
 instances/functions, passing the role to the instances/functions, and run them."

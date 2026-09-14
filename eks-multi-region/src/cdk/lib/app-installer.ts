@@ -22,7 +22,7 @@ export interface AppInstallerProps {
  *
  * WHY THIS EXISTS. The cluster API endpoint is private-only (`endpointPublicAccess:
  * false`), so its ENIs live in this VPC and are resolvable only from inside it. The
- * GitLab shared runners are not in this VPC and therefore cannot reach the API server at
+ * the CI runners are not in this VPC and therefore cannot reach the API server at
  * all — `aws eks update-kubeconfig` still succeeds, because that is an AWS API call
  * rather than a cluster call, so the failure would otherwise be a silent multi-minute TCP
  * timeout inside kubectl. A build project attached to the VPC is the smallest thing that
@@ -117,7 +117,7 @@ export class AppInstaller extends Construct {
               // `failurePolicy: Fail` and intercepts CREATE on every Service in the cluster.
               // Its `caBundle` is BLANKED in the vendored manifest on purpose — the chart
               // bakes a real TLS private key into a Secret, and committing that would put
-              // live key material in git history (ARCC SAX-02 Outcome 3 lists private keys
+              // live key material in git history (the no-secrets-in-version-control rule lists private keys
               // in version control as its first common pitfall; SAX-05 Outcome 2 requires
               // secrets live in Secrets Manager or KMS).
               //

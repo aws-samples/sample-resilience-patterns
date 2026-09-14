@@ -29,7 +29,7 @@ export interface AllowedCidrSecurityGroupProps {
  * Always-on AUTH BASELINE: a security group whose ingress is gated by a console-rotatable
  * `AllowedCidr` CloudFormation parameter (default deny-all `0.0.0.0/32`).
  *
- * Based on five-nines-app:
+ * Based on the predecessor project-app:
  *   - the L1 `CfnSecurityGroupIngress` + `CfnParameter` token-safe technique
  *     (`src/cdk/lib/nested-stacks/network-stack.ts:107-118`), and
  *   - the `AllowedCidr` `CfnParameter` shape — `default '0.0.0.0/32'`, IPv4 `allowedPattern`,

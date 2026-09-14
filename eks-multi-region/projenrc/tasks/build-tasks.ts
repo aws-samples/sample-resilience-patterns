@@ -5,7 +5,7 @@ import type { awscdk } from 'projen';
  *
  * The stub `app.ts` (skeleton/_shared/src/cdk/app.ts) synthesizes a single stack
  * named `$PROJECT_NAME-demo`, so the baseline iterates `['demo']`. The recipe
- * documents extending this list as PDD adds stacks (e.g. the five-nines shape was
+ * documents extending this list as PDD adds stacks (e.g. the the predecessor project shape was
  * `['application','client','edge','peering','dashboard','database']`).
  *
  * `$PROJECT_NAME` is set globally via
@@ -17,11 +17,11 @@ const DEFAULT_STACK_SUFFIXES = ['demo'];
  * Provider-AGNOSTIC build lifecycle for the green CRE demo skeleton.
  *
  * Lives once in `skeleton/_shared/projenrc/tasks/` and is copied verbatim into BOTH
- * the GitHub and GitLab trees at scaffold time. CI in both families only ever invokes
+ * the CI-provider trees at scaffold time. CI in both families only ever invokes
  * the projen tasks registered here (`npx projen <task>`) — this is the PROJEN_PATTERN
- * "CI ↔ task parity" principle that keeps the GitHub/GitLab seam narrow.
+ * "CI ↔ task parity" principle that keeps the CI-provider seam narrow.
  *
- * Ported (generalized) from five-nines-app/projenrc/tasks/build-tasks.ts. The green
+ * Ported (generalized) from the predecessor project-app/projenrc/tasks/build-tasks.ts. The green
  * skeleton baseline is the THIN, NON-DOCKER half of that lifecycle:
  *
  *   preCompileTask   → wipe assets/ + cdk.out/ so downstream phases start clean
@@ -50,16 +50,16 @@ const DEFAULT_STACK_SUFFIXES = ['demo'];
  * other (the failure mode where a job is emitted with no asset, or vice-versa).
  *
  * `containerBuild` selects HOW the ONE DockerImageAsset is built (changeset §4c/§4d).
- * This is the GitLab-vs-GitHub seam, since the two providers build the SAME asset
+ * This is the CI-provider seam, since the two providers build the SAME asset
  * differently:
- *   - `'kaniko'` (GitLab): register `build:container-plan` + `build:docker` and attach
+ *   - `'kaniko'` (CI): register `build:container-plan` + `build:docker` and attach
  *     them to postCompile. `build:docker` shells out to `build/build-docker.sh` (kaniko;
- *     shared GitLab runners block DinD). Requires the `build/*.sh` scripts to be vendored.
+ *     the CI runners block DinD). Requires the `build/*.sh` scripts to be vendored.
  *   - `'cdk-assets'` (GitHub): register NOTHING in the build lifecycle. GitHub-hosted
  *     runners allow Docker-in-daemon, so CDK's native `cdk-assets publish` (in the deploy
  *     workflow, §4d) builds+pushes the image. The `build/*.sh` scripts are NOT vendored on
  *     the GitHub path (§5d), so attaching `build:docker` here would break `projen build`.
- * Ignored when `enableLoadGen` is false. Defaults to `'kaniko'` (the GitLab tree's need).
+ * Ignored when `enableLoadGen` is false. Defaults to `'kaniko'` ((the kaniko path)).
  */
 export interface BuildTaskOptions {
   readonly enableLoadGen?: boolean;
@@ -114,7 +114,7 @@ export function createBuildTasks(
   });
 
   // CI build entry point — the single composite task BOTH providers' build jobs
-  // invoke (GitHub `build.yml`'s build step; GitLab `build:cdk`). Named so a
+  // invoke (GitHub `build.yml`'s build step; CI `build:cdk`). Named so a
   // workflow `needs:`/job graph can reference it directly. Runs the non-docker
   // half of projen's lifecycle so the build job needs only a plain node image:
   // wipe assets/ + cdk.out/, compile, synth, lint + unit test (projen's `test`
@@ -134,7 +134,7 @@ export function createBuildTasks(
       // postCompile: CI does not run `projen build`, it runs THIS task, so a gate wired
       // only into postCompile never executes in CI at all (discovered 2026-08-31, after
       // a template defect reached a live deploy). Placed straight after synth so it fails
-      // before the slower test + asset-staging steps. The GitLab build:cdk job installs
+      // before the slower test + asset-staging steps. The CI build job installs
       // cfn-lint and sets CFN_LINT_REQUIRED=1, making its absence fatal there; locally,
       // a missing cfn-lint only warns.
       { spawn: 'lint:templates' },
@@ -161,7 +161,7 @@ export function createBuildTasks(
   // template errors are only rejected by CloudFormation at CreateChangeSet -- mid deploy.
   // On 2026-08-31 three such defects reached a live deploy behind a green synth, incl. a
   // `CfnCondition` referencing a resource (illegal; cfn-lint flags it E8003) and a nested
-  // `Fn::GetAtt` path outside readOnlyProperties. See AGENTS.md bug classes 17-19.
+  // `Fn::GetAtt` path outside readOnlyProperties. See docs/lessons.md #17 and #19.
   //
   // Not gated behind a flag: it is provider-agnostic, needs no credentials, and every
   // demo built on this template synthesizes CloudFormation. build/lint-templates.sh skips
@@ -182,9 +182,9 @@ export function createBuildTasks(
   //                         + dist/container-plan.tsv (build/container-plan.sh).
   //   build:docker          builds each image into assets/containers/<hash>.tar.gz via
   //                         kaniko (build/build-docker.sh; POSIX sh, no python).
-  //   ci:build:container-plan  composite alias the GitLab build:container-plan job calls.
+  //   ci:build:container-plan  composite alias the CI container-plan job calls.
   // postCompile ordering matters: plan THEN build (build reads the .tsv the plan wrote).
-  // build/*.sh are carried verbatim from five-nines into a demo's build/ on pull-in;
+  // build/*.sh are carried verbatim from the predecessor project into a demo's build/ on pull-in;
   // the green skeleton ships none, which is why these tasks must never register when
   // the flag is off (NFR1 — a build:docker that runs with no Dockerfile breaks green).
   if (opts.enableLoadGen && (opts.containerBuild ?? 'kaniko') === 'kaniko') {

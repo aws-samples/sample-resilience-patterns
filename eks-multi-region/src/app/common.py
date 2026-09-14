@@ -75,7 +75,7 @@ REGION = os.environ["AWS_REGION"]
 #:
 #: NEVER RAISES, AND NEVER BLOCKS FOR LONG. The build environment has no metadata service:
 #: the Dockerfile smoke test runs ``python -c "import server, schema"``, and a blocking or
-#: raising read at import scope would hang or break every container start (AGENTS.md bug
+#: raising read at import scope would hang or break every container start (docs/lessons.md bug
 #: class 14 — a green image build does not prove a startable image). An unknown AZ degrades
 #: attribution to ``"unknown"``; it must not degrade availability.
 #:

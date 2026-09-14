@@ -18,8 +18,8 @@ export interface RegionConfig {
  * Lives once in `skeleton/_shared/projenrc/tasks/` and is copied verbatim into BOTH
  * provider trees. Both CIs invoke the SAME entry point: `npx projen deploy`.
  *
- * Ported (generalized) from five-nines-app/projenrc/tasks/deploy-tasks.ts. It replaces
- * projen's native `cdk deploy` with the proven five-nines mechanism: per-stack
+ * Ported (generalized) from the predecessor project-app/projenrc/tasks/deploy-tasks.ts. It replaces
+ * projen's native `cdk deploy` with the proven the predecessor project mechanism: per-stack
  * `aws cloudformation deploy` driven by `build/deploy-stack.sh` against templates
  * uploaded to a per-region S3 prefix, capturing each stack's outputs to a
  * `dist/<STACK_NAME>.env` dotenv, then SOURCING those dotenvs into downstream stacks'
@@ -74,7 +74,7 @@ export interface RegionConfig {
  *                 unchanged single-region green baseline.
  * @param opts     Optional load-gen toggle (changeset §4b). When `enableLoadGen` is
  *                 true, a `deploy:docker` task (crane push, build/deploy-docker.sh) is
- *                 registered and folded into `deploy:upload` so the GitLab path pushes
+ *                 registered and folded into `deploy:upload` so the CI path pushes
  *                 the image to ECR. When false (green default), `deploy:upload` is the
  *                 S3-only publish — no ECR/crane work, no behavior change vs baseline.
  */
@@ -196,7 +196,7 @@ export interface DeployTaskOptions {
    */
   readonly peering?: boolean;
   /**
-   * HOW images are published (changeset §4c/§4d). `'kaniko'` (GitLab) registers
+   * HOW images are published (changeset §4c/§4d). `'kaniko'` (CI) registers
    * `deploy:docker` (crane push, build/deploy-docker.sh) and folds it into
    * `deploy:upload`. `'cdk-assets'` (GitHub) registers nothing — the deploy workflow's
    * `cdk-assets publish` step pushes the image and `build/deploy-docker.sh` is not
@@ -278,9 +278,9 @@ export function createDeployTasks(
 
   // Load-gen container publish (gated; changeset §4b/§4c). When enableLoadGen is true,
   // crane pushes the pre-built image tarballs (unpacked from dist/content/containers/)
-  // to ECR in every target region. Folded into deploy:upload so the GitLab deploy:upload
+  // to ECR in every target region. Folded into deploy:upload so the CI deploy:upload
   // job publishes BOTH channels (S3 + ECR) in one task. build/deploy-docker.sh is carried
-  // verbatim from five-nines into a demo's build/ on pull-in; the green skeleton ships
+  // verbatim from the predecessor project into a demo's build/ on pull-in; the green skeleton ships
   // none, so this task must never register when the flag is off.
   if (loadGenOpts.enableLoadGen && (loadGenOpts.containerBuild ?? 'kaniko') === 'kaniko') {
     const deployDocker = project.addTask('deploy:docker', {
@@ -340,7 +340,7 @@ export function createDeployTasks(
   // uploaded S3 prefix), so REMOVE it (gotcha 8) and re-author an orchestration.
   //
   // Each stack's deploy-stack.sh writes dist/<STACK_NAME>.env (the same dotenv
-  // files GitLab consumes via artifacts:reports:dotenv), so later steps just
+  // files the CI consumes as a dotenv artifact), so later steps just
   // source them before invoking deploy-stack.sh. Every exec step runs in its own
   // bash invocation, so the source+export+run pattern stays inside each step.
   project.tasks.removeTask('deploy');

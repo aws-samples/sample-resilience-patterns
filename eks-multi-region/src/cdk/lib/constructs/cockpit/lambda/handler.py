@@ -103,7 +103,7 @@ _SSM = {PRIMARY_REGION: _ssm_primary, STANDBY_REGION: _ssm_standby}
 #
 # These were resolved at cold start via cloudformation:DescribeStacks. They now arrive as
 # CfnParameters threaded through the dotenv rail, which let the role DROP that grant —
-# ARCC's privilege-escalation guidance documents PassRole + CreateStack + DescribeStacks as
+# AWS privilege-escalation guidance documents PassRole + CreateStack + DescribeStacks as
 # an escalation chain, and this role held two of the three.
 #
 # EVERY ONE IS REQUIRED, deliberately: os.environ[...] raises at import if the deploy did
@@ -414,7 +414,7 @@ def _discover_azs(recently_active=True):
     Chosen over a GetMetricData SEARCH expression on purpose: SEARCH needs no extra IAM
     action, but the format of the labels it returns is undocumented, and parsing an
     undocumented identifier format is exactly how this project lost a day once
-    (AGENTS.md bug class 18). ListMetrics has a documented response shape.
+    (docs/lessons.md #18). ListMetrics has a documented response shape.
 
     Never raises: an empty list degrades the chart to the aggregate lines it already had.
     """
@@ -464,7 +464,7 @@ def _az_traffic_totals(minutes=15):
     It is also MORE CORRECT. Fault selection wants an AZ whose degradation will move the
     graph. A pod-count test would happily select an AZ holding an idle pod, where the fault
     injects cleanly, reports success, and changes nothing measurable -- the "reports success,
-    injected nothing" failure this project keeps hitting (AGENTS.md bug class 22).
+    injected nothing" failure this project keeps hitting (docs/lessons.md #22).
 
     THE TRADE-OFF IS DELIBERATE: with the load generator stopped, no AZ has served traffic and
     NOTHING is eligible. The correct behaviour there is to refuse with a stated reason rather

@@ -31,7 +31,7 @@
 #                       (so CLI shorthand parsing never sees the values).
 #                       AssetsBucketName / AssetsBucketPrefix are always
 #                       appended automatically.
-#   OUTPUTS_FILE        Dotenv file for stack outputs. GitLab CI consumes
+#   OUTPUTS_FILE        Dotenv file for stack outputs. the CI consumes
 #                       this via `artifacts: reports: dotenv:`.
 #                       Defaults to dist/$STACK_NAME.env.
 #   OUTPUTS_PREFIX      Prefix prepended to every exported key so multi-job
@@ -43,7 +43,7 @@
 #                       Defaults to "ci".
 #   CLEANUP_ON_FAILURE  If "true", delete the uploaded S3 prefix when the
 #                       deploy fails. The orchestrator (deploy-all.sh) sets
-#                       this; individual per-stack GitLab jobs leave it off
+#                       this; individual per-stack CI jobs leave it off
 #                       since the prefix is shared.
 
 set -euo pipefail
@@ -125,7 +125,7 @@ mkdir -p "$(dirname "$PARAMS_FILE")"
 {
   # %b interprets \n (and any other backslash escape) as a real byte.
   # Callers supply STACK_PARAMETERS either as a true multiline string
-  # (GitLab YAML block scalar) or as a single line with \n escapes
+  # (CI YAML block scalar) or as a single line with \n escapes
   # (projen task exec steps) — both end up as newline-separated here.
   printf '%b\n' "$STACK_PARAMETERS"
   printf 'AssetsBucketName=%s\n' "$ASSETS_BUCKET"
@@ -283,7 +283,7 @@ for o in outputs:
     # the NEXT phase, with the error naming a health check id and no hint that quoting was
     # the problem. Spaces, ';', '&', '\$', backticks and '(' are all the same hazard.
     # shlex.quote is exact: it single-quotes and escapes embedded single quotes.
-    # NOTE: safe because nothing consumes these files as GitLab \`artifacts:reports:dotenv\`
+    # NOTE: safe because nothing consumes these files as a CI dotenv artifact
     # (which strips no quotes) -- they are only ever sourced. Re-check if that changes.
     print(f'{key}={shlex.quote(value)}')
 " > "$OUTPUTS_FILE"

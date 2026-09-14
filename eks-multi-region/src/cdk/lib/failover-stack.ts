@@ -141,7 +141,7 @@ export class FailoverStack extends cdk.Stack {
           // The list below is the privilege-escalation set from the recommendation
           // engine's "Use IAM Roles and Scoped Down Policies" / "Prevent Privilege
           // Escalation" guidance -- permission mutation, credential mutation, and
-          // PassRole. Naming actions instead of a wildcard is also what ARCC SAX-08
+          // PassRole. Naming actions instead of a wildcard is also what AWS guidance SAX-08
           // Outcome 1 asks for ("prefer resource-level and specific actions"). A failover
           // role that can edit IAM can grant itself anything, and that is still denied.
           actions: [
@@ -300,7 +300,7 @@ export class FailoverStack extends cdk.Stack {
     // protects against a scale-nothing-report-success failover is itself unusable.
     //
     // Read-only: Simulate evaluates policy and changes nothing. Scoped to the execution
-    // role's OWN ARN, per ARCC SAX-08 Outcome 1's resource-level restriction guidance --
+    // role's OWN ARN, per least-privilege guidance on resource-level restrictions --
     // not `Resource: *`.
     //
     // This was a pair of statements, one per role, until the ManualApproval gate was
@@ -726,7 +726,7 @@ export class FailoverStack extends cdk.Stack {
     // under different routing policies, so a routing-policy change is legal only as a
     // SINGLE change batch -- and CloudFormation updates separate RecordSet resources
     // individually, which Route 53 rejects. Proven live 2026-08-31, experiments A-D in
-    // AGENTS.md bug class 17. Do not split this up.
+    // docs/lessons.md #17. Do not split this up.
     //
     // FAILOVER, not latency: latency routing resolves per-resolver, so both regions served
     // their local clients -- active-active behaviour under an activePassive plan.
@@ -772,7 +772,7 @@ export class FailoverStack extends cdk.Stack {
     // that the live resource schema also marks read-only (`Route53HealthChecks`,
     // `HealthChecksForPlan`) are NOT GetAtt-addressable: CloudFormation rejects any nested
     // path with "Requested attribute ... must be a readonly property in schema", verified by
-    // a failed deploy. See AGENTS.md bug class 18.
+    // a failed deploy. See docs/lessons.md #18.
     new cdk.CfnOutput(this, 'PlanHealthChecks', {
       // Joined with ',' -- NOT '|'. Stack outputs are written into dist/<stack>.env, which
       // later deploy phases SOURCE with `. dist/<stack>.env`, so a '|' in the value made

@@ -178,7 +178,7 @@ describe('cockpit step 1 — read-only status (west + enabled only)', () => {
 
     test('the role no longer holds cloudformation:DescribeStacks', () => {
       // Threading the ARNs removed the need for runtime discovery, and with it two-thirds
-      // of ARCC's documented PassRole-via-CloudFormation escalation chain
+      // of the documented PassRole-via-CloudFormation escalation chain
       // (iam:PassRole + cloudformation:CreateStack + cloudformation:DescribeStacks).
       const doc = JSON.stringify(statements());
       expect(doc).not.toContain('cloudformation:DescribeStacks');
@@ -462,7 +462,7 @@ describe('cockpit steps 2-4 — write action contract', () => {
 
   it('every boto3 client sets explicit timeouts at module scope', () => {
     // A hanging control-plane call outlives the caller's own timeout, so the except/retry
-    // path never runs and the failure reads as a hang rather than an error (AGENTS.md
+    // path never runs and the failure reads as a hang rather than an error (docs/lessons.md
     // bug class 2). Each client must pass the shared Config.
     const clientLines = HANDLER.split('\n').filter((l) => l.includes('boto3.client('));
     expect(clientLines.length).toBeGreaterThan(5);
@@ -483,7 +483,7 @@ describe('cockpit steps 2-4 — write action contract', () => {
 /**
  * STEP 5 — the deploy contract, DERIVED rather than restated.
  *
- * This is the test that exists because of AGENTS.md bug class 4: a CfnParameter declared in
+ * This is the test that exists because of docs/lessons.md #4: a CfnParameter declared in
  * a template but never threaded through the deploy step breaks the DEPLOY, not the build,
  * and it does so at whichever phase deploys that stack — phase 6 here, after ten other
  * stacks have already changed. The mirror case (threaded but not declared) fails the same
@@ -777,7 +777,7 @@ describe('cockpit per-AZ availability chart (single-AZ feature)', () => {
 
   test('_availability_series returns per-AZ lines on the AGGREGATE timestamp grid', () => {
     // BEHAVIORAL, against a fixture that actually mirrors a real GetMetricData response
-    // shape (AGENTS.md bug class 6: a fixture claiming to mirror a real payload must
+    // shape (docs/lessons.md #6: a fixture claiming to mirror a real payload must
     // actually mirror it, or the test is green against a fiction). boto3 is stubbed at
     // import so no AWS call happens and no credentials are needed.
     //
@@ -946,7 +946,7 @@ print(json.dumps(handler._availability_series(minutes=3)))
     // The handler cannot know the AZ dimension VALUES ahead of time. ListMetrics has a
     // documented response shape; a GetMetricData SEARCH expression would need no new grant
     // but its result-label format is undocumented, and parsing an undocumented identifier
-    // format already cost this project a day (AGENTS.md bug class 18).
+    // format already cost this project a day (docs/lessons.md #18).
     const handler = fs.readFileSync(HANDLER, 'utf8');
     expect(handler).toContain('def _discover_azs(');
     expect(handler).toContain('_cw.list_metrics(');
@@ -964,7 +964,7 @@ print(json.dumps(handler._availability_series(minutes=3)))
   });
 
   test('the UI does not read a status field nothing produces', () => {
-    // AGENTS.md bug class 6. `faultedAz` is only produced once the single-AZ fault ships;
+    // docs/lessons.md #6. `faultedAz` is only produced once the single-AZ fault ships;
     // until then the UI must NOT read it, or it renders a plausible blank rather than
     // failing — the exact "UI fields nothing supplies" defect.
     const ui = fs.readFileSync(UI, 'utf8');
@@ -988,7 +988,7 @@ print(json.dumps(handler._availability_series(minutes=3)))
     // Nothing caught it because an undefined custom property is not an error anywhere in the
     // stack -- CSS resolves it to nothing, the SVG renders with no stroke, the page looks
     // plausible, and every existing test asserts on the SOURCE string rather than on pixels.
-    // Same family as AGENTS.md bug class 6: a UI reading something nothing supplies degrades
+    // Same family as docs/lessons.md #6: a UI reading something nothing supplies degrades
     // into a convincing lie instead of failing.
     const ui = fs.readFileSync(UI, 'utf8');
     const root = ui.match(/:root \{([\s\S]*?)\}/)?.[1] ?? '';
@@ -1125,7 +1125,7 @@ describe('single-AZ fault (failure-injection extension)', () => {
    *  NAME the APIs and values they exist to warn about -- the interlock's docstring explains why
    *  it must NOT query arc-zonal-shift -- so a naive substring check matches the explanation
    *  rather than the code and fails for the wrong reason. Same lesson as the manifest
-   *  assertions in topology.test.ts (AGENTS.md bug class 16). */
+   *  assertions in topology.test.ts (docs/lessons.md #16). */
   const stripPy = (py: string): string =>
     py.replace(/"""[\s\S]*?"""/g, '')
       .split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');

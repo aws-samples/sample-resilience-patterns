@@ -3,10 +3,10 @@ import { Construct } from 'constructs';
 import { ParameterizedVpc, SubnetSpec } from './parameterized-vpc.js';
 
 /**
- * Generalized from five-nines-app:
+ * Generalized from the predecessor project-app:
  *   src/cdk/lib/nested-stacks/network-stack.ts:1-144
  *
- * Key generalizations vs the five-nines NetworkStack:
+ * Key generalizations vs the the predecessor project NetworkStack:
  *   - Plain `Construct` (not a `NestedStack`) — each region is its own top-level
  *     RegionStack in the green skeleton, so no nested template is needed. It
  *     still composes inside a parent stack if a demo wants to embed it.
@@ -147,7 +147,7 @@ export class RegionalNetwork extends Construct {
       const endpoint = this.vpc.addInterfaceEndpoint(`${service.shortName}Vpce`, {
         service,
         subnets: { subnetType: endpointSubnetType },
-        // The stale five-nines AGENTS.md claims private DNS is disabled; the
+        // An earlier note claimed private DNS is disabled; the
         // code enables it (network-stack.ts:121,128,135). Keep it enabled.
         privateDnsEnabled: true,
         ...(scopedSg ? { securityGroups: [scopedSg] } : { open: true }),

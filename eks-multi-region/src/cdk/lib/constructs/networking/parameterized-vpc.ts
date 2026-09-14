@@ -3,10 +3,10 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Construct } from 'constructs';
 
 /**
- * Ported largely verbatim from five-nines-app:
+ * Ported largely verbatim from the predecessor project-app:
  *   src/cdk/lib/constructs/parameterized-vpc.ts:1-216
  *
- * Zero five-nines coupling — this is the reuse keystone. The deploy-time CIDR
+ * Zero the predecessor project coupling — this is the reuse keystone. The deploy-time CIDR
  * (Fn::Cidr) + deploy-time AZ selection (Fn::GetAZs/Fn::Select) approach is what
  * lets a single template deploy to N regions with different CfnParameter CIDRs.
  */

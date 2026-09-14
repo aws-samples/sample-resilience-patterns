@@ -4,7 +4,7 @@
 # Kaniko and save each one to assets/containers/<hash>.tar.gz.
 #
 # Kaniko is used instead of `docker build` because our CI runner fleet
-# (shared AWS corporate GitLab) doesn't allow Docker-in-Docker and
+# (the original CI) doesn't allow Docker-in-Docker and
 # blocks the CLONE_NEWUSER syscall that rootless podman/buildah need.
 # Kaniko builds OCI images in a chroot — no daemon, no user namespaces.
 #
@@ -94,7 +94,7 @@ REPO_ROOT="$(pwd)"
 # requested platform cannot run) or later, in the pod, as a CrashLoopBackOff with no
 # useful diagnostic.
 #
-# The demo targets arm64 because the shared GitLab runner fleet is arm64. A builder on an
+# The demo targets arm64 because the CI runner fleet is arm64. A builder on an
 # x86_64 desktop therefore cannot produce this image, and `npx projen build` should not
 # fail for that reason — the CDK synth, the tests and the packaging are all still valid.
 # So a mismatch SKIPS with a loud warning by default.

@@ -36,7 +36,7 @@ export interface FluentBitIamProps {
  *
  * ── THE GRANT IS THE WHOLE POINT ────────────────────────────────────────────────────────
  *
- * fluent-bit is a DaemonSet, and ARCC (Aristotle 509 / AWS-446) is explicit that a DaemonSet
+ * fluent-bit is a DaemonSet, and EKS security guidance is explicit that a DaemonSet
  * must not hold excessive cluster-wide Kubernetes permissions "or AWS permissions (via
  * IRSA)", because it runs on every node and a container breakout on any one of them inherits
  * whatever it holds. Collecting cluster-wide logs sharpens that: the pod now reads every
@@ -62,7 +62,7 @@ export interface FluentBitIamProps {
  *
  * ── IRSA, NOT POD IDENTITY (a recorded deviation) ───────────────────────────────────────
  *
- * ARCC prefers EKS Pod Identity over IRSA. Adopting it here would require the
+ * AWS guidance prefers EKS Pod Identity over IRSA. Adopting it here would require the
  * `eks-pod-identity-agent` managed addon, and this cluster runs ZERO managed addons and has
  * no NAT -- so it would mean introducing the first addon on a working demo cluster PLUS
  * another mirrored image, to replace a mechanism the repo already uses correctly twice
@@ -110,7 +110,7 @@ export class FluentBitIam extends Construct {
 
     const trustConditions = new cdk.CfnJson(this, 'ShipperTrustConditions', {
       value: {
-        // StringEquals on BOTH sub and aud, never StringLike. ARCC requires IRSA trust be
+        // StringEquals on BOTH sub and aud, never StringLike. best practice requires IRSA trust be
         // scoped to the service account level -- cluster, then namespace, then service
         // account -- so that no OTHER pod in this namespace can assume the role. A wildcard
         // `sub` is a privilege-escalation path out of any compromised pod.

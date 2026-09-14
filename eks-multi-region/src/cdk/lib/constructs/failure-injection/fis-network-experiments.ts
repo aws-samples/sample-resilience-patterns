@@ -109,7 +109,7 @@ export interface FisNetworkExperimentsProps {
    *
    * REQUIRED when `faults` includes `'brownout'` (constructor throws otherwise): an empty
    * Sources shapes nothing while the experiment reports success — the recurring
-   * "reports success, injected nothing" failure (AGENTS.md bug class 22).
+   * "reports success, injected nothing" failure (docs/lessons.md #22).
    */
   readonly brownoutSources?: string[];
   /**
@@ -175,7 +175,7 @@ export class FisNetworkExperiments extends Construct {
    * single-AZ fault selected by the wrong index injects into the wrong AZ, reports success,
    * and moves a different line on the chart than the one the operator was told about. This
    * repo has already lost a day to selecting an identifier by list position instead of by
-   * matching a field (AGENTS.md bug classes 18/19), so the pairing is built HERE, beside the
+   * matching a field (docs/lessons.md #18 and #19), so the pairing is built HERE, beside the
    * loop that creates it, and consumers read the name.
    */
   public readonly templatesByAz: Record<string, Record<string, string>> = {};
@@ -203,7 +203,7 @@ export class FisNetworkExperiments extends Construct {
     if (faults.includes('brownout') && !brownoutSources) {
       // FAIL AT SYNTH, not at demo time: the SSM document requires Sources, and an empty
       // list would shape NOTHING while the experiment reports success -- the recurring
-      // "reports success, injected nothing" failure mode (AGENTS.md bug class 22).
+      // "reports success, injected nothing" failure mode (docs/lessons.md #22).
       throw new Error("faults includes 'brownout' but brownoutSources is empty");
     }
 

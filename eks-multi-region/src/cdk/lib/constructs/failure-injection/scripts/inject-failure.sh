@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Inject failure by setting the error-rate SSM knob. Param name is parameterized
 # (read it from the FailureInjectionParameter `ErrorRateParamName` CfnOutput).
-# Generalized from five-nines scripts/inject-failure.sh:14-24 (only five-nines-ism
+# Generalized from the predecessor project scripts/inject-failure.sh:14-24 (only the predecessor project-ism
 # was the hardcoded --name).
 set -euo pipefail
 if [ $# -ne 3 ]; then
