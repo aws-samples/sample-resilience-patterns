@@ -1,0 +1,56 @@
+# Schema bootstrap. PRIMARY REGION ONLY — it writes, and only the primary cluster
+# accepts writes.
+#
+# Every statement is CREATE ... IF NOT EXISTS or CREATE OR REPLACE, so running this on
+# every deploy is safe.
+#
+# The name carries a per-deploy suffix because a Job pod template is IMMUTABLE:
+# re-applying an existing Job whose image tag has changed fails with
+#   field is immutable
+# and the deploy stops on something that is not actually a problem. A fresh name per image
+# sidesteps that, and ttlSecondsAfterFinished garbage-collects the old ones instead of
+# accumulating them.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: orders-schema-${SCHEMA_JOB_SUFFIX}
+  namespace: demo
+  labels:
+    app: orders-schema
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: orders-schema
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      containers:
+        - name: schema
+          image: ${APP_IMAGE_URI}
+          imagePullPolicy: IfNotPresent
+          command: ["python", "schema.py"]
+          env:
+            - name: AWS_REGION
+              value: "${APP_REGION}"
+            - name: DB_SECRET_NAME
+              value: "${DB_SECRET_NAME}"
+            # Unused by schema.py but required by common.py's module-scope reads, which
+            # are strict on purpose: a missing variable fails at startup rather than on
+            # the first request that needs it.
+            - name: DB_READ_HOST
+              value: "${DB_READ_HOST}"
+            - name: DB_WRITE_HOST
+              value: "${DB_WRITE_HOST}"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
