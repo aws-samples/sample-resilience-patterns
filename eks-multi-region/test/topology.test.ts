@@ -481,11 +481,11 @@ describe('operator entry points mirror the deploy rail (Makefile, cleanup.sh, ve
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     expect(body).toMatch(/REQUIRE_CONTAINER_BUILD=\$\$\{REQUIRE_CONTAINER_BUILD:-true\}/);
     expect(body).toContain('DOCKER_IMAGE_REGIONS=');
-    const tasks = JSON.parse(
+    const railTasks = JSON.parse(
       fs.readFileSync(path.join(__dirname, '..', '.projen', 'tasks.json'), 'utf8'),
     );
-    expect(JSON.stringify(tasks.tasks['ci:build:package'])).toContain('package:content');
-    expect(JSON.stringify(tasks.tasks['package:content'])).toContain('dist/content.zip');
+    expect(JSON.stringify(railTasks.tasks['ci:build:package'])).toContain('package:content');
+    expect(JSON.stringify(railTasks.tasks['package:content'])).toContain('dist/content.zip');
   });
 });
 
