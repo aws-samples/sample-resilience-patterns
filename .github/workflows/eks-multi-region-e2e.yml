@@ -42,6 +42,12 @@ jobs:
         run: chmod +x cleanup.sh && ./cleanup.sh || true
       - name: Create assets buckets
         run: make buckets
+      - name: Install crane
+        run: |-
+          CRANE_VERSION=v0.20.2
+          curl -fsSL "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_arm64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin crane
+          crane version
       - name: Mirror pinned third-party images into this account (no NAT in the node subnets)
         run: make mirror
       - name: Deploy the full rail
