@@ -101,6 +101,8 @@
         "eks:DescribeCluster",
         "eks:DescribeNodegroup",
         "eks:ListNodegroups",
+        "eks:DeleteCluster",
+        "eks:DeleteNodegroup",
         "ec2:DescribeInstances",
         "ec2:DescribeVpcPeeringConnections",
         "ec2:DescribeRouteTables",
