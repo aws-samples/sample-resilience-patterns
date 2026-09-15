@@ -86,6 +86,10 @@ interface Pattern {
   cleanupTimeoutMinutes?: number;
   /** Optional env block applied to the e2e workflow. */
   e2eEnv?: Record<string, string>;
+  /** Optional aws-cdk-lib floor when a pattern needs newer L1s than SHARED_CDK_CONFIG. */
+  cdkVersion?: string;
+  /** Optional TypeScript pin (new subprojects otherwise resolve TS 6, whose tsconfig defaults drop @types/*). */
+  typescriptVersion?: string;
 }
 
 // Common CDK app config — shared across all patterns.
@@ -464,6 +468,69 @@ const patterns: Pattern[] = [
       },
     ],
   },
+  // -------------------------------------------------------------------------
+  // drs-ec2 — DRS-replicated EC2 + Aurora Global + ARC Region Switch, with a
+  // reusable DRS step construct (fail-over, stateful fail-back onto the original
+  // instance, resting-state retire). Needs aws-cdk-lib >= 2.215 for the typed
+  // aws_arcregionswitch L1 (CfnPlan.StepProperty).
+  // -------------------------------------------------------------------------
+  {
+    outdir: 'drs-ec2',
+    cdkVersion: '2.215.0',
+    typescriptVersion: '~5.9.3',
+    e2eRoleArn: `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-drs-ec2`,
+    awsRegion: 'us-east-2',
+    e2eTimeoutMinutes: 300,
+    buildSteps: [
+      { uses: 'actions/checkout@v6' },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-python@v5', with: { 'python-version': '3.12' } },
+      { run: 'npm ci' },
+      { run: 'npx projen test' },
+      { name: 'Lambda unit tests', run: 'pip install -q boto3 pytest ruff && (cd lambda && ruff check . && python -m pytest -q)' },
+      { run: 'npx cdk synth --all' },
+    ],
+    cleanupSteps: [
+      { uses: 'actions/checkout@v6' },
+      {
+        uses: 'aws-actions/configure-aws-credentials@v6',
+        with: {
+          'role-to-assume': `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-drs-ec2`,
+          'aws-region': 'us-east-2',
+        },
+      },
+      { run: 'chmod +x cleanup.sh && ./cleanup.sh' },
+    ],
+    e2eSteps: [
+      { uses: 'actions/checkout@v6' },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      {
+        uses: 'aws-actions/configure-aws-credentials@v6',
+        with: {
+          'role-to-assume': `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-drs-ec2`,
+          'aws-region': 'us-east-2',
+          'role-duration-seconds': 14400,
+        },
+      },
+      { run: 'npm ci' },
+      { run: 'npx projen test' },
+      { name: 'Pre-flight cleanup (idempotent)', run: 'chmod +x cleanup.sh && ./cleanup.sh || true' },
+      // Full deploy: stacks in three regions + DRS agent install + wait for CONTINUOUS (~60 min).
+      { name: 'Deploy', run: 'make deploy' },
+      { name: 'Resting state', run: 'make status' },
+      // Two legs (out and back) with the resting-state invariant asserted after the fail-back.
+      { name: 'Fail-over / fail-back cycle', run: 'make rehearse-cycle LEGS=2' },
+      {
+        name: 'Refresh AWS credentials (pre-cleanup)',
+        uses: 'aws-actions/configure-aws-credentials@v6',
+        with: {
+          'role-to-assume': `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-drs-ec2`,
+          'aws-region': 'us-east-2',
+        },
+      },
+      { name: 'Cleanup on success', if: 'success()', run: './cleanup.sh' },
+    ],
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -479,6 +546,8 @@ for (const p of patterns) {
     outdir: p.outdir,
     name: p.outdir,
     ...SHARED_CDK_CONFIG,
+    ...(p.cdkVersion ? { cdkVersion: p.cdkVersion } : {}),
+    ...(p.typescriptVersion ? { typescriptVersion: p.typescriptVersion } : {}),
   });
   // licensed:false makes projen set "license": "UNLICENSED" in package.json.
   // Override to "MIT" so package.json matches the repo's root LICENSE.
