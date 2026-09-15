@@ -38,8 +38,20 @@ check-env:
 deps: ## Install Node dependencies (yarn berry via corepack)
 	corepack enable && yarn install --immutable
 
-build: deps ## Compile, synth, cfn-lint the templates, run all tests, stage assets
+build: deps ## Compile, synth, cfn-lint, test, stage assets, build the app images, zip dist/content.zip
 	CFN_LINT_REQUIRED=$${CFN_LINT_REQUIRED:-0} yarn ci:build:cdk
+	DOCKER_IMAGE_REGIONS="$$(echo $(REGIONS) | tr ' ' ',')" yarn ci:build:container-plan
+	REQUIRE_CONTAINER_BUILD=$${REQUIRE_CONTAINER_BUILD:-true} yarn build:docker
+	yarn ci:build:package
+
+# The four steps above are the four build jobs of the original pipeline
+# (build:cdk -> build:container-plan -> build:docker -> build:package), threaded
+# through artifacts there and through the working tree here. `yarn deploy` starts
+# by unzipping dist/content.zip -- e2e iteration 4 (2026-09-15) failed exactly
+# there because `build` stopped after ci:build:cdk and the zip was never made.
+# build:docker uses /kaniko/executor when present, else docker-wrapped kaniko
+# (needs a docker daemon; GitHub's ubuntu runners have one). It must run on an
+# arm64 host: kaniko cannot cross-build, and the cluster is arm64.
 
 buckets: check-env ## Create the per-region assets buckets (idempotent)
 	@for r in $(REGIONS); do \
