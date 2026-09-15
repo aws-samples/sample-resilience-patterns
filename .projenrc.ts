@@ -90,6 +90,8 @@ interface Pattern {
   cdkVersion?: string;
   /** Optional TypeScript pin (new subprojects otherwise resolve TS 6, whose tsconfig defaults drop @types/*). */
   typescriptVersion?: string;
+  /** Optional dependency overrides appended after SHARED_CDK_CONFIG.deps (e.g. pin cdk-nag major). */
+  deps?: string[];
 }
 
 // Common CDK app config — shared across all patterns.
@@ -478,6 +480,7 @@ const patterns: Pattern[] = [
     outdir: 'drs-ec2',
     cdkVersion: '2.215.0',
     typescriptVersion: '~5.9.3',
+    deps: ['cdk-nag@^2.37.55'], // same major as the other patterns; 3.x moved NagSuppressions
     e2eRoleArn: `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-drs-ec2`,
     awsRegion: 'us-east-2',
     e2eTimeoutMinutes: 300,
@@ -548,6 +551,7 @@ for (const p of patterns) {
     ...SHARED_CDK_CONFIG,
     ...(p.cdkVersion ? { cdkVersion: p.cdkVersion } : {}),
     ...(p.typescriptVersion ? { typescriptVersion: p.typescriptVersion } : {}),
+    ...(p.deps ? { deps: p.deps } : {}),
   });
   // licensed:false makes projen set "license": "UNLICENSED" in package.json.
   // Override to "MIT" so package.json matches the repo's root LICENSE.
