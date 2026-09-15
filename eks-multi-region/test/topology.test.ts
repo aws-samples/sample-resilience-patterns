@@ -382,6 +382,114 @@ describe('deploy parameter contract', () => {
   });
 });
 
+describe('GitHub role policy covers every API the rail calls under the runner role', () => {
+  // Run 7 of the e2e deployed six stacks over 50 minutes and then died on
+  //   AccessDenied: rds:DescribeGlobalClusters
+  // in a post-deploy step that runs under the RUNNER role, not the CloudFormation
+  // execution role. Runs 3 and 6 were the same class (iam:CreateServiceLinkedRole,
+  // eks:DeleteCluster). Nothing tied the CLI calls the generated task makes to the
+  // policy document operators are told to apply, so each missing grant cost a full
+  // deploy. This derives the call set from the GENERATED rail and every script it or
+  // the workflow invokes, and asserts each maps to a granted action. New aws calls
+  // therefore fail here, at build time, not at minute 50 of a live run.
+  const root = path.join(__dirname, '..');
+  const policy = JSON.parse(fs.readFileSync(path.join(root, 'docs', 'iam', 'github-actions-role-policy.json'), 'utf8'));
+  const granted = new Set<string>();
+  for (const st of policy.Statement as { Effect: string; Action: string | string[] }[]) {
+    if (st.Effect !== 'Allow') continue;
+    for (const a of ([] as string[]).concat(st.Action)) granted.add(a);
+  }
+
+  // CLI service names that differ from the IAM service prefix.
+  const SERVICE_PREFIX: Record<string, string> = { elbv2: 'elasticloadbalancing', s3api: 's3' };
+  // Commands whose IAM action is not the PascalCase of the operation: waiters (poll a
+  // Describe*), login helpers, and the high-level s3 commands.
+  const SPECIAL: Record<string, string[]> = {
+    'ec2 wait vpc-peering-connection-exists': ['ec2:DescribeVpcPeeringConnections'],
+    'eks wait cluster-deleted': ['eks:DescribeCluster'],
+    'eks wait nodegroup-deleted': ['eks:DescribeNodegroup'],
+    'cloudformation wait stack-delete-complete': ['cloudformation:DescribeStacks'],
+    'cloudformation wait stack-create-complete': ['cloudformation:DescribeStacks'],
+    'cloudformation wait stack-update-complete': ['cloudformation:DescribeStacks'],
+    'cloudformation wait change-set-create-complete': ['cloudformation:DescribeChangeSet'],
+    'ecr get-login-password': ['ecr:GetAuthorizationToken'],
+    'ecr-public get-login-password': ['ecr-public:GetAuthorizationToken'],
+    's3 cp': ['s3:GetObject', 's3:PutObject', 's3:ListBucket'],
+    's3 sync': ['s3:GetObject', 's3:PutObject', 's3:ListBucket'],
+    's3 rm': ['s3:DeleteObject', 's3:ListBucket'],
+    's3 ls': ['s3:ListBucket'],
+    's3api head-bucket': ['s3:ListBucket'],
+    's3api put-public-access-block': ['s3:PutBucketPublicAccessBlock'],
+    's3api get-public-access-block': ['s3:GetBucketPublicAccessBlock'],
+  };
+  const pascal = (kebab: string) => kebab.split('-').map((w) => w[0].toUpperCase() + w.slice(1)).join('');
+  const actionsFor = (service: string, op: string, waiter?: string): string[] => {
+    const key = waiter ? `${service} ${op} ${waiter}` : `${service} ${op}`;
+    if (SPECIAL[key]) return SPECIAL[key];
+    return [`${SERVICE_PREFIX[service] ?? service}:${pascal(op)}`];
+  };
+
+  // Every surface that executes `aws` as the GitHub role. tasks.json is the generated
+  // rail (so a new step's call is caught even before its projenrc source is read);
+  // the scripts are what the rail, the Makefile and the workflow shell out to.
+  const tasks = JSON.parse(fs.readFileSync(path.join(root, '.projen', 'tasks.json'), 'utf8'));
+  const taskText = Object.values(tasks.tasks as Record<string, { steps?: { exec?: string }[] }>)
+    .flatMap((t) => (t.steps ?? []).map((s) => s.exec ?? ''))
+    .join('\n');
+  const files = [
+    'Makefile', 'cleanup.sh',
+    'build/deploy-stack.sh', 'build/mirror-images.sh', 'build/verify-stacks.sh',
+    'build/verify-arc-health-checks.py', 'build/verify-zonal-shift-azs.py',
+    '../.github/workflows/eks-multi-region-e2e.yml',
+    '../.github/workflows/eks-multi-region-cleanup.yml',
+  ];
+  const sources: [string, string][] = [['.projen/tasks.json', taskText]];
+  for (const f of files) sources.push([f, fs.readFileSync(path.join(root, f), 'utf8')]);
+
+  // `aws <service> <operation> [waiter]` in shell, and the verifiers' aws("svc", "op")
+  // helper in Python. The operation must be kebab-case (or a known s3 verb) so prose
+  // such as "aws is a" in a comment is not read as a call.
+  const SHELL = /\baws\s+([a-z0-9-]+)\s+([a-z]+(?:-[a-z0-9]+)+|cp|rm|ls|sync|wait)(?:\s+([a-z]+(?:-[a-z0-9]+)+))?/g;
+  const PY = /\baws\(\s*"([a-z0-9-]+)",\s*"([a-z0-9-]+)"/g;
+  const calls = new Map<string, string>(); // "svc op [waiter]" -> first file seen in
+  for (const [file, text] of sources) {
+    for (const m of text.matchAll(SHELL)) {
+      const [, svc, op, waiter] = m;
+      if (svc === 'is' || svc === 'cli') continue;
+      const key = op === 'wait' ? `${svc} ${op} ${waiter ?? ''}`.trim() : `${svc} ${op}`;
+      if (op === 'wait' && !waiter) continue;
+      if (!calls.has(key)) calls.set(key, file);
+    }
+    for (const m of text.matchAll(PY)) {
+      const key = `${m[1]} ${m[2]}`;
+      if (!calls.has(key)) calls.set(key, file);
+    }
+  }
+
+  it('finds the rail\'s own calls (the scan is not vacuous)', () => {
+    expect(calls.has('rds describe-global-clusters')).toBe(true); // the run-7 failure
+    expect(calls.has('cloudformation create-change-set')).toBe(true); // deploy-stack.sh
+    expect(calls.has('arc-region-switch list-route53-health-checks')).toBe(true); // python helper, multi-line
+    expect(calls.size).toBeGreaterThan(30);
+  });
+
+  for (const [key, file] of [...calls.entries()].sort()) {
+    it(`grants ${key}  (${file})`, () => {
+      const [svc, op, waiter] = key.split(' ');
+      for (const action of actionsFor(svc, op, waiter)) {
+        expect({ call: key, action, granted: granted.has(action) }).toEqual({ call: key, action, granted: true });
+      }
+    });
+  }
+
+  it('scopes the three single-purpose grants to their resources, not *', () => {
+    const bySid = Object.fromEntries((policy.Statement as { Sid: string; Resource: unknown }[]).map((s) => [s.Sid, s.Resource]));
+    expect(bySid.GlobalWriterEndpointLookup).toBe('arn:aws:rds::ACCOUNT_ID:global-cluster:*');
+    expect(bySid.ArcPlanNoOpUpdateForcesRescan).toBe('arn:aws:arc-region-switch::ACCOUNT_ID:plan/*');
+    expect(bySid.InstallerBuildLogsOnFailure).toBe('arn:aws:logs:*:ACCOUNT_ID:log-group:/aws/codebuild/*:log-stream:*');
+  });
+});
+
 describe('operator entry points mirror the deploy rail (Makefile, cleanup.sh, verify-stacks.sh)', () => {
   // The rail in .projen/tasks.json is the single source of truth for WHICH stacks exist
   // and WHERE. cleanup.sh and verify-stacks.sh each carry their own region:stack list --
