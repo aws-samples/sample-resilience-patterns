@@ -137,6 +137,15 @@
       "Resource": "arn:aws:arc-region-switch::ACCOUNT_ID:plan/*"
     },
     {
+      "Sid": "ArcPlanUpdateMustPassTheExecutionRole",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::ACCOUNT_ID:role/eks-mr-demo-arc-execution",
+      "Condition": {
+        "StringEquals": { "iam:PassedToService": "arc-region-switch.amazonaws.com" }
+      }
+    },
+    {
       "Sid": "InstallerBuildLogsOnFailure",
       "Effect": "Allow",
       "Action": "logs:GetLogEvents",

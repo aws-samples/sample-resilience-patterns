@@ -488,6 +488,41 @@ describe('GitHub role policy covers every API the rail calls under the runner ro
     expect(bySid.ArcPlanNoOpUpdateForcesRescan).toBe('arn:aws:arc-region-switch::ACCOUNT_ID:plan/*');
     expect(bySid.InstallerBuildLogsOnFailure).toBe('arn:aws:logs:*:ACCOUNT_ID:log-group:/aws/codebuild/*:log-stream:*');
   });
+
+  it('update-plan implies iam:PassRole on the plan execution role (run 8 failed here)', () => {
+    // Run 8 deployed all 12 stacks and then died in the phase-7.0 verifier:
+    //   AccessDeniedException ... not authorized to perform: iam:PassRole on
+    //   role/eks-mr-demo-arc-execution
+    // UpdatePlan REQUIRES executionRole in its input, and ARC validates PassRole on it
+    // on every call -- a verbatim no-op rescan included. The CLI-call scan above cannot
+    // see that: the second action is implied by the API, not spelled in the command. So
+    // it is pinned explicitly, with the role name read from the SYNTHESIZED failover
+    // template rather than typed here, so renaming the role fails this test instead of
+    // the deploy.
+    expect(calls.has('arc-region-switch update-plan')).toBe(true);
+    type RoleProps = {
+      RoleName?: unknown;
+      AssumeRolePolicyDocument?: { Statement: { Principal: { Service: string } }[] };
+    };
+    const failover = synthAll().get(`${APP_ID}-failover`)!.toJSON() as {
+      Resources: Record<string, { Type: string; Properties: RoleProps }>;
+    };
+    const roles = Object.values(failover.Resources).filter((r) => r.Type === 'AWS::IAM::Role'
+      && typeof r.Properties.RoleName === 'string' && r.Properties.RoleName.endsWith('-arc-execution'));
+    expect(roles).toHaveLength(1);
+    const roleName = roles[0].Properties.RoleName as string;
+    const principal = roles[0].Properties.AssumeRolePolicyDocument!.Statement[0].Principal.Service;
+    expect(principal).toBe('arc-region-switch.amazonaws.com');
+
+    type Stmt = { Effect: string; Action: string | string[]; Resource: string | string[]; Condition?: Record<string, Record<string, string>> };
+    const passStmts = (policy.Statement as Stmt[]).filter((s) => s.Effect === 'Allow'
+      && ([] as string[]).concat(s.Action).includes('iam:PassRole')
+      && ([] as string[]).concat(s.Resource).includes(`arn:aws:iam::ACCOUNT_ID:role/${roleName}`));
+    expect(passStmts).toHaveLength(1);
+    // Scoped to the service that consumes it -- the same shape as the cfn-exec PassRole --
+    // so the runner cannot hand this role to anything else.
+    expect(passStmts[0].Condition).toEqual({ StringEquals: { 'iam:PassedToService': principal } });
+  });
 });
 
 describe('operator entry points mirror the deploy rail (Makefile, cleanup.sh, verify-stacks.sh)', () => {
