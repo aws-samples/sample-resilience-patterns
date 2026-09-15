@@ -11,6 +11,12 @@
       }
     },
     {
+      "Sid": "FisServiceLinkedRoleCheckAndCreate",
+      "Effect": "Allow",
+      "Action": ["iam:GetRole", "iam:CreateServiceLinkedRole"],
+      "Resource": "arn:aws:iam::ACCOUNT_ID:role/aws-service-role/fis.amazonaws.com/AWSServiceRoleForFIS"
+    },
+    {
       "Sid": "CloudFormationChangeSets",
       "Effect": "Allow",
       "Action": [
