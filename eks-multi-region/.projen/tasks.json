@@ -172,7 +172,7 @@
           "exec": "mkdir -p dist && bash -c 'printf \"%s\" \"${ASSETS_PREFIX:-eks-mr-demo/$(date -u +%Y-%m-%dT%H-%M-%SZ)/}\" > dist/assets_prefix'"
         },
         {
-          "exec": "bash -c 'ERR=$(aws iam create-service-linked-role --aws-service-name fis.amazonaws.com 2>&1) && echo \"FIS service-linked role created\" || { echo \"$ERR\" | grep -q \"has been taken\" && echo \"FIS service-linked role already exists\" || { echo \"$ERR\" >&2; exit 1; }; }'"
+          "exec": "bash -c 'if aws iam get-role --role-name AWSServiceRoleForFIS >/dev/null 2>&1; then echo \"FIS service-linked role already exists\"; else ERR=$(aws iam create-service-linked-role --aws-service-name fis.amazonaws.com 2>&1) && echo \"FIS service-linked role created\" || { echo \"$ERR\" | grep -q \"has been taken\" && echo \"FIS service-linked role already exists\" || { echo \"$ERR\" | grep -q \"AccessDenied\" && echo \"WARNING: deployer lacks iam:GetRole/iam:CreateServiceLinkedRole for AWSServiceRoleForFIS; continuing (first FIS experiment will fail if the role is absent)\" || { echo \"$ERR\" >&2; exit 1; }; }; }; fi'"
         },
         {
           "say": "Phase 1: publishing assets"

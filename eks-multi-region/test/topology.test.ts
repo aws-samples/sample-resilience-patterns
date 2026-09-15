@@ -6494,3 +6494,73 @@ describe('cluster-wide pod log shipping (fluent-bit)', () => {
     }
   });
 });
+
+describe('FIS service-linked role step (deploy phase 0)', () => {
+  // Runs the GENERATED exec from .projen/tasks.json -- not the snippet in
+  // deploy-tasks.ts -- against a fake `aws`, because bug class 1 (dax shell
+  // quoting) only shows in the generated string. e2e iteration 3 (2026-09-15)
+  // failed the whole rail on AccessDenied here while the role already existed:
+  // a least-privilege deployer must never be blocked by an account-scoped role
+  // the deploy itself does not use. Contract: exists / fresh-create / has-been-
+  // taken / AccessDenied all exit 0; any OTHER error still aborts.
+  const tasks = JSON.parse(
+    fs.readFileSync(path.join(__dirname, '..', '.projen', 'tasks.json'), 'utf8'),
+  );
+  const step = (tasks.tasks.deploy.steps as { exec?: string }[])
+    .map((s) => s.exec ?? '')
+    .find((e) => e.includes('create-service-linked-role'))!;
+
+  function run(mode: string): { code: number; out: string } {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'slr-'));
+    const inner = step.slice("bash -c '".length, -1);
+    expect(inner).not.toContain("'");
+    fs.writeFileSync(path.join(dir, 'step.sh'), inner);
+    fs.writeFileSync(
+      path.join(dir, 'aws'),
+      [
+        '#!/bin/bash',
+        'case "$MODE:$2" in',
+        '  exists:get-role) exit 0;;',
+        '  *:get-role) echo "AccessDenied" >&2; exit 254;;',
+        '  fresh:create-service-linked-role) exit 0;;',
+        '  taken:create-service-linked-role) echo "role AWSServiceRoleForFIS has been taken" >&2; exit 254;;',
+        '  denied:create-service-linked-role) echo "An error occurred (AccessDenied) when calling CreateServiceLinkedRole" >&2; exit 254;;',
+        '  *) echo "An error occurred (Throttling) unrelated" >&2; exit 254;;',
+        'esac',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    try {
+      const out = execSync(`bash ${path.join(dir, 'step.sh')} 2>&1`, {
+        env: { ...process.env, MODE: mode, PATH: `${dir}:${process.env.PATH}` },
+      }).toString();
+      return { code: 0, out };
+    } catch (e: any) {
+      return { code: e.status, out: String(e.stdout ?? '') };
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test('the step exists in the deploy rail', () => {
+    expect(step).toBeDefined();
+    expect(step).toContain('get-role --role-name AWSServiceRoleForFIS');
+  });
+
+  test.each([
+    ['exists', 'already exists'],
+    ['fresh', 'created'],
+    ['taken', 'already exists'],
+    ['denied', 'WARNING: deployer lacks'],
+  ])('mode %s exits 0 and reports "%s"', (mode, expected) => {
+    const r = run(mode);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain(expected);
+  });
+
+  test('an unrelated error still aborts the deploy', () => {
+    const r = run('other');
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('Throttling');
+  });
+});

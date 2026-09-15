@@ -495,11 +495,25 @@ export function createDeployTasks(
       // AWS::IAM::ServiceLinkedRole CREATE fails when the role already exists, and
       // the role is account-scoped, not stack-owned. Idempotent here instead:
       // tolerate ONLY the has-been-taken error, stay loud on everything else.
+      //
+      // CHECK BEFORE CREATE, AND NEVER FAIL THE DEPLOY ON A PERMISSIONS GAP.
+      // e2e iteration 3 (2026-09-15) failed here with AccessDenied on
+      // iam:CreateServiceLinkedRole while the role had existed in the account
+      // since April: a least-privilege deployer may lack the grant, and the create
+      // call is denied BEFORE the service can report "has been taken". iam:GetRole
+      // is tried first (a read); the create only when the role is absent. An
+      // AccessDenied on EITHER is a WARNING, not a failure: nothing in the deploy
+      // rail depends on this role -- only the first cockpit-fired FIS experiment
+      // does, and that path reports its own AccessDenied at the time. Any other
+      // error still aborts. docs/iam/github-actions-role-policy.json grants both
+      // actions scoped to the FIS SLR ARN so the step is quiet with the full policy.
       exec:
-        'bash -c \'ERR=$(aws iam create-service-linked-role --aws-service-name fis.amazonaws.com 2>&1) ' +
+        'bash -c \'if aws iam get-role --role-name AWSServiceRoleForFIS >/dev/null 2>&1; then echo "FIS service-linked role already exists"; ' +
+        'else ERR=$(aws iam create-service-linked-role --aws-service-name fis.amazonaws.com 2>&1) ' +
         '&& echo "FIS service-linked role created" ' +
         '|| { echo "$ERR" | grep -q "has been taken" && echo "FIS service-linked role already exists" ' +
-        '|| { echo "$ERR" >&2; exit 1; }; }\'',
+        '|| { echo "$ERR" | grep -q "AccessDenied" && echo "WARNING: deployer lacks iam:GetRole/iam:CreateServiceLinkedRole for AWSServiceRoleForFIS; continuing (first FIS experiment will fail if the role is absent)" ' +
+        '|| { echo "$ERR" >&2; exit 1; }; }; }; fi\'',
     },
     { say: 'Phase 1: publishing assets' },
     { spawn: 'deploy:upload' },
