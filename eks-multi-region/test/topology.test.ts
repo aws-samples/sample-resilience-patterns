@@ -4118,18 +4118,44 @@ describe('third-party image mirror (step 10a)', () => {
     // sync line per region targeting that region's OWN bucket with a matching
     // --region flag — and that the $AWS_REGION-shaped single-region sync is GONE
     // (its survival is exactly the bug).
+    //
+    // Same gap, third region, live-proven 2026-09-15 (e2e iteration 5): the observer
+    // stack is a singleton in us-east-1 and died at create-change-set with "The
+    // specified bucket does not exist" after FIVE stacks had deployed. So the
+    // expected bucket set is derived from the deploy rail itself -- every region
+    // any `deploy-stack.sh` step names via AWS_REGION -- not from REGIONS.
     const s3 = tasks.tasks['deploy:s3'];
     expect(s3).toBeDefined();
     const execs = s3.steps.map((s: any) => s.exec ?? '');
-    for (const r of REGIONS) {
+    const deployedRegions = new Set<string>();
+    for (const step of tasks.tasks.deploy.steps as { exec?: string }[]) {
+      const e = step.exec ?? '';
+      if (!e.includes('build/deploy-stack.sh')) continue;
+      const m = e.match(/AWS_REGION="([a-z]{2}-[a-z]+-\d)"/);
+      if (m) deployedRegions.add(m[1]);
+    }
+    expect(deployedRegions.size).toBeGreaterThanOrEqual(3);
+    for (const r of REGIONS) expect(deployedRegions.has(r.name)).toBe(true);
+    for (const name of deployedRegions) {
       const line = execs.find((e: string) =>
-        e.includes(`s3://$ASSETS_BUCKET_PREFIX-${r.name}/$ASSETS_PREFIX`),
+        e.includes(`s3://$ASSETS_BUCKET_PREFIX-${name}/$ASSETS_PREFIX`),
       );
-      expect(line).toBeDefined();
-      expect(line).toContain(`--region "${r.name}"`);
+      expect({ region: name, synced: line !== undefined }).toEqual({ region: name, synced: true });
+      expect(line).toContain(`--region "${name}"`);
       expect(line).toContain('aws s3 sync');
     }
     expect(execs.join('\n')).not.toContain('$ASSETS_BUCKET_PREFIX-$AWS_REGION');
+    // `make buckets` must create, and cleanup.sh must delete, the SAME set.
+    const mk = fs.readFileSync(path.join(__dirname, '..', 'Makefile'), 'utf8');
+    const cleanup = fs.readFileSync(path.join(__dirname, '..', 'cleanup.sh'), 'utf8');
+    const mkRegions = new Set([
+      ...(mk.match(/^REGIONS \?= (.+)$/m)?.[1].split(/\s+/) ?? []),
+      mk.match(/^OBSERVER_REGION \?= (\S+)$/m)?.[1] ?? '',
+    ]);
+    expect([...mkRegions].sort()).toEqual([...deployedRegions].sort());
+    expect(mk).toMatch(/buckets:[\s\S]*for r in \$\(BUCKET_REGIONS\)/);
+    expect(cleanup).toMatch(/for r in "\$PRIMARY" "\$SECONDARY" "\$OBSERVER"; do\n\s+b="\$ASSETS_BUCKET_PREFIX-\$r"/);
+    expect(cleanup.match(/OBSERVER="\$\{OBSERVER_REGION:-([a-z0-9-]+)\}"/)?.[1]).toBe(mk.match(/^OBSERVER_REGION \?= (\S+)$/m)?.[1]);
     // And the fan-out must run before any stack deploy: deploy:upload (which
     // spawns deploy:s3) stays Phase 1.
     const upload = tasks.tasks['deploy:upload'];
