@@ -4197,12 +4197,23 @@ describe('third-party image mirror (step 10a)', () => {
     const copyLines = script
       .split('\n')
       .map((l) => l.trim())
-      .filter((l) => l.startsWith('crane copy'));
+      // Every real copy goes through copy_with_retry (bounded backoff on registry
+      // 429s -- e2e iteration 2 died on public.ecr.aws "Rate exceeded"). A bare
+      // `crane copy` outside the wrapper would be a regression, so both forms are
+      // collected and the bare form is asserted absent below.
+      .filter((l) => /^(copy_with_retry )?crane copy/.test(l));
     expect(copyLines.length).toBeGreaterThan(0);
     for (const line of copyLines) {
       expect(line).toContain('@${DIGEST}');
       expect(line).not.toContain(':${TAG}');
+      expect(line.startsWith('copy_with_retry ')).toBe(true);
     }
+    // The wrapper retries ONLY on throttling signatures and gives up after a bound;
+    // a denied push or a wrong digest must never be retried into a pass.
+    const retryFn = script.slice(script.indexOf('copy_with_retry() {'), script.indexOf('login_ecr_public() {'));
+    expect(retryFn).toMatch(/TOOMANYREQUESTS|rate exceeded/i);
+    expect(retryFn).toMatch(/max=\d+/);
+    expect(retryFn).toMatch(/\|\| ! printf .* \| grep -qiE/);
     expect(script).toContain('digest_present');
     expect(script).toContain('imageDigest=$digest');
     // The fail-loud branch is the point of the read-back. Assert the branch that
