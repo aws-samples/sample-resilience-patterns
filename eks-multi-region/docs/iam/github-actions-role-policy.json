@@ -27,6 +27,7 @@
         "cloudformation:DescribeStacks",
         "cloudformation:DescribeStackEvents",
         "cloudformation:DescribeStackResources",
+        "cloudformation:ListStackResources",
         "cloudformation:ListStacks",
         "cloudformation:DeleteStack",
         "cloudformation:GetTemplateSummary"
@@ -106,16 +107,40 @@
         "ec2:DescribeInstances",
         "ec2:DescribeVpcPeeringConnections",
         "ec2:DescribeRouteTables",
+        "ec2:DescribeNetworkInterfaces",
+        "ec2:DescribeAvailabilityZones",
         "ec2:CreateTags",
         "ec2:DeleteTags",
+        "elasticloadbalancing:DescribeLoadBalancers",
         "ssm:DescribeInstanceInformation",
         "arc-region-switch:GetPlan",
         "arc-region-switch:GetPlanExecution",
+        "arc-region-switch:GetPlanEvaluationStatus",
         "arc-region-switch:ListPlanExecutions",
+        "arc-region-switch:ListRoute53HealthChecks",
+        "arc-zonal-shift:GetManagedResource",
         "route53:GetHealthCheckStatus",
         "route53:ListResourceRecordSets"
       ],
       "Resource": "*"
+    },
+    {
+      "Sid": "GlobalWriterEndpointLookup",
+      "Effect": "Allow",
+      "Action": "rds:DescribeGlobalClusters",
+      "Resource": "arn:aws:rds::ACCOUNT_ID:global-cluster:*"
+    },
+    {
+      "Sid": "ArcPlanNoOpUpdateForcesRescan",
+      "Effect": "Allow",
+      "Action": "arc-region-switch:UpdatePlan",
+      "Resource": "arn:aws:arc-region-switch::ACCOUNT_ID:plan/*"
+    },
+    {
+      "Sid": "InstallerBuildLogsOnFailure",
+      "Effect": "Allow",
+      "Action": "logs:GetLogEvents",
+      "Resource": "arn:aws:logs:*:ACCOUNT_ID:log-group:/aws/codebuild/*:log-stream:*"
     },
     {
       "Sid": "ObserverPeeringAccepterStep",
