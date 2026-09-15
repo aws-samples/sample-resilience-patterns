@@ -465,6 +465,28 @@ describe('operator entry points mirror the deploy rail (Makefile, cleanup.sh, ve
       expect({ target, defined: new RegExp(`^${target}:`, 'm').test(mk) }).toEqual({ target, defined: true });
     }
   });
+
+  it('make build produces the complete deploy artifact: cdk -> container-plan -> docker -> content.zip', () => {
+    // `yarn deploy` begins by unzipping dist/content.zip, which only package:content
+    // writes, and the container manifest inside it only exists after build:docker.
+    // The original pipeline threaded these as four jobs; here they are four lines
+    // of one target. e2e iteration 4 (2026-09-15) failed at "cannot find
+    // dist/content.zip" because build stopped after ci:build:cdk. Order matters and
+    // is asserted, as is the fail-loud default for a skipped container build.
+    const mk = fs.readFileSync(path.join(__dirname, '..', 'Makefile'), 'utf8');
+    const body = mk.slice(mk.indexOf('\nbuild:'), mk.indexOf('\nbuckets:'));
+    const order = ['yarn ci:build:cdk', 'yarn ci:build:container-plan', 'yarn build:docker', 'yarn ci:build:package']
+      .map((cmd) => body.indexOf(cmd));
+    expect(order.every((i) => i >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(body).toMatch(/REQUIRE_CONTAINER_BUILD=\$\$\{REQUIRE_CONTAINER_BUILD:-true\}/);
+    expect(body).toContain('DOCKER_IMAGE_REGIONS=');
+    const tasks = JSON.parse(
+      fs.readFileSync(path.join(__dirname, '..', '.projen', 'tasks.json'), 'utf8'),
+    );
+    expect(JSON.stringify(tasks.tasks['ci:build:package'])).toContain('package:content');
+    expect(JSON.stringify(tasks.tasks['package:content'])).toContain('dist/content.zip');
+  });
 });
 
 describe('observability wiring (coherence finding C-1)', () => {
