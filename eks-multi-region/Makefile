@@ -25,6 +25,12 @@ SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
 REGIONS ?= us-east-2 us-west-2
+# The observer stack (SSM bastion) lives in a THIRD region and CloudFormation reads
+# its template from the assets bucket IN THAT REGION, so the bucket set is one larger
+# than the workload-region set. Must match OBSERVER_REGION in src/cdk/regions.ts and
+# OBSERVER_REGION in cleanup.sh (a test pins all three to the generated deploy:s3 task).
+OBSERVER_REGION ?= us-east-1
+BUCKET_REGIONS := $(REGIONS) $(OBSERVER_REGION)
 
 .PHONY: help check-env deps build buckets mirror deploy verify tunnel clean
 
@@ -53,8 +59,8 @@ build: deps ## Compile, synth, cfn-lint, test, stage assets, build the app image
 # (needs a docker daemon; GitHub's ubuntu runners have one). It must run on an
 # arm64 host: kaniko cannot cross-build, and the cluster is arm64.
 
-buckets: check-env ## Create the per-region assets buckets (idempotent)
-	@for r in $(REGIONS); do \
+buckets: check-env ## Create the per-region assets buckets, observer region included (idempotent)
+	@for r in $(BUCKET_REGIONS); do \
 	  b="$$ASSETS_BUCKET_PREFIX-$$r"; \
 	  if aws s3api head-bucket --bucket "$$b" --region "$$r" 2>/dev/null; then \
 	    echo "bucket $$b exists"; \

@@ -343,6 +343,9 @@
         },
         {
           "exec": "echo \"Syncing dist/content/ → s3://$ASSETS_BUCKET_PREFIX-us-west-2/$ASSETS_PREFIX\"; aws s3 sync --no-progress --region \"us-west-2\" --exclude \"containers/*\" dist/content \"s3://$ASSETS_BUCKET_PREFIX-us-west-2/$ASSETS_PREFIX\""
+        },
+        {
+          "exec": "echo \"Syncing dist/content/ → s3://$ASSETS_BUCKET_PREFIX-us-east-1/$ASSETS_PREFIX\"; aws s3 sync --no-progress --region \"us-east-1\" --exclude \"containers/*\" dist/content \"s3://$ASSETS_BUCKET_PREFIX-us-east-1/$ASSETS_PREFIX\""
         }
       ]
     },

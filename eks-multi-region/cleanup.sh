@@ -92,8 +92,9 @@ for r in "$PRIMARY" "$SECONDARY"; do
   done
 done
 
-# Assets buckets (created by `make buckets`). Empty, then delete.
-for r in "$PRIMARY" "$SECONDARY"; do
+# Assets buckets (created by `make buckets`), the observer region's included -- the
+# observer template is read from that bucket. Empty, then delete.
+for r in "$PRIMARY" "$SECONDARY" "$OBSERVER"; do
   b="$ASSETS_BUCKET_PREFIX-$r"
   if aws s3api head-bucket --bucket "$b" --region "$r" 2>/dev/null; then
     echo "  s3     $b"
