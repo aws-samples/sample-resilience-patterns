@@ -47,6 +47,7 @@
     },
     {
       "name": "cdk-nag",
+      "version": "^2.37.55",
       "type": "runtime"
     },
     {
