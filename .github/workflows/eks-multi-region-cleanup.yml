@@ -2,7 +2,13 @@
 
 name: "eks-multi-region: cleanup"
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      assets_bucket_prefix:
+        description: ASSETS_BUCKET_PREFIX of the run to clean (e2e uses eks-multi-region-<sha6>)
+        required: false
+        default: eks-multi-region
+        type: string
 jobs:
   cleanup:
     runs-on: ubuntu-24.04-arm
@@ -21,3 +27,8 @@ jobs:
           role-duration-seconds: 28800
       - run: chmod +x cleanup.sh && ./cleanup.sh
     timeout-minutes: 60
+env:
+  AWS_REGION: us-east-2
+  AWS_DEFAULT_REGION: us-east-2
+  ROLE_ARN: arn:aws:iam::563688183446:role/eks-multi-region-cfn-exec
+  ASSETS_BUCKET_PREFIX: ${{ inputs.assets_bucket_prefix || 'eks-multi-region' }}

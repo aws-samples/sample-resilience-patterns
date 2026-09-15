@@ -574,6 +574,20 @@ const patterns: Pattern[] = [
         run: 'make buckets',
       },
       {
+        // crane does the daemonless registry-to-registry copies: build/mirror-images.sh
+        // (third-party images -> private ECR) and build/deploy-docker.sh (the app image).
+        // Static Go binary, pinned; arm64 to match the runner. Iteration 1 of the e2e
+        // failed at `make mirror` with "crane not found on PATH" -- the internal CI had
+        // installed it in a before_script that was not carried into this workflow.
+        name: 'Install crane',
+        run: [
+          'CRANE_VERSION=v0.20.2',
+          'curl -fsSL "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_arm64.tar.gz" \\',
+          '  | sudo tar -xz -C /usr/local/bin crane',
+          'crane version',
+        ].join('\n'),
+      },
+      {
         name: 'Mirror pinned third-party images into this account (no NAT in the node subnets)',
         run: 'make mirror',
       },
@@ -715,7 +729,30 @@ for (const p of patterns) {
 
   // ----------- Cleanup workflow (manual only) -----------------------------
   const cleanupWf = new github.GithubWorkflow(root.github!, `${p.outdir}-cleanup`);
-  cleanupWf.on({ workflowDispatch: {} });
+  if (p.selfManaged) {
+    // A self-managed rail names its assets buckets by a per-run prefix (sha-suffixed in
+    // e2e). Cleanup runs only on e2e SUCCESS, so a failed run leaves buckets under the
+    // failed head's prefix -- and the next run's pre-flight cleanup uses the NEW prefix and
+    // never sees them. This input lets an operator sweep a specific failed run's prefix.
+    cleanupWf.on({
+      workflowDispatch: {
+        inputs: {
+          assets_bucket_prefix: {
+            description: 'ASSETS_BUCKET_PREFIX of the run to clean (e2e uses eks-multi-region-<sha6>)',
+            required: false,
+            default: p.outdir,
+            type: 'string',
+          },
+        },
+      },
+    });
+    cleanupWf.file?.addOverride('env', {
+      ...(p.e2eEnv ?? {}),
+      ASSETS_BUCKET_PREFIX: `\${{ inputs.assets_bucket_prefix || '${p.outdir}' }}`,
+    });
+  } else {
+    cleanupWf.on({ workflowDispatch: {} });
+  }
   cleanupWf.file?.addOverride('name', `${p.outdir}: cleanup`);
   cleanupWf.addJobs({
     cleanup: {
