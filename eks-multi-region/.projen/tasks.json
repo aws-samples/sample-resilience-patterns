@@ -1,0 +1,704 @@
+{
+  "manifestVersion": 3,
+  "env": {
+    "PATH": "$(yarn exec node --print process.env.PATH)",
+    "PROJECT_NAME": "eks-mr-demo",
+    "ENABLE_COCKPIT": "true"
+  },
+  "tasks": {
+    "argo:render": {
+      "name": "argo:render",
+      "description": "Regenerate src/argo/*.yaml from the upstream Argo CD and metrics-server manifests (needs egress).",
+      "steps": [
+        {
+          "exec": "bash src/argo/render.sh"
+        }
+      ]
+    },
+    "build": {
+      "name": "build",
+      "description": "Full release build",
+      "steps": [
+        {
+          "spawn": "default"
+        },
+        {
+          "spawn": "pre-compile"
+        },
+        {
+          "spawn": "compile"
+        },
+        {
+          "spawn": "post-compile"
+        },
+        {
+          "spawn": "test"
+        },
+        {
+          "spawn": "package"
+        }
+      ]
+    },
+    "build:container-plan": {
+      "name": "build:container-plan",
+      "description": "Enumerate DockerImageAssets into manifest.json + container-plan.tsv",
+      "steps": [
+        {
+          "exec": "bash build/container-plan.sh"
+        }
+      ]
+    },
+    "build:docker": {
+      "name": "build:docker",
+      "description": "Build every DockerImageAsset into assets/containers/ (kaniko)",
+      "steps": [
+        {
+          "exec": "sh build/build-docker.sh"
+        }
+      ]
+    },
+    "bundle": {
+      "name": "bundle",
+      "description": "Prepare assets"
+    },
+    "ci:build:cdk": {
+      "name": "ci:build:cdk",
+      "description": "CI: CDK synthesis + tests + asset staging (provider build-job entry point)",
+      "steps": [
+        {
+          "exec": "rm -rf assets cdk.out && mkdir -p assets dist"
+        },
+        {
+          "spawn": "compile"
+        },
+        {
+          "spawn": "synth:silent"
+        },
+        {
+          "spawn": "lint:templates"
+        },
+        {
+          "spawn": "test"
+        },
+        {
+          "spawn": "package:assets"
+        }
+      ]
+    },
+    "ci:build:container-plan": {
+      "name": "ci:build:container-plan",
+      "description": "CI: produce manifest.json + container-plan.tsv (container-plan job entry point)",
+      "steps": [
+        {
+          "spawn": "build:container-plan"
+        }
+      ]
+    },
+    "ci:build:package": {
+      "name": "ci:build:package",
+      "description": "CI: zip assets/ into dist/content.zip (provider package-job entry point)",
+      "steps": [
+        {
+          "spawn": "package:content"
+        }
+      ]
+    },
+    "clobber": {
+      "name": "clobber",
+      "description": "hard resets to HEAD of origin and cleans the local repo",
+      "env": {
+        "BRANCH": "$(git branch --show-current)"
+      },
+      "steps": [
+        {
+          "exec": "git checkout -b scratch",
+          "name": "save current HEAD in \"scratch\" branch"
+        },
+        {
+          "exec": "git checkout $BRANCH"
+        },
+        {
+          "exec": "git fetch origin",
+          "name": "fetch latest changes from origin"
+        },
+        {
+          "exec": "git reset --hard origin/$BRANCH",
+          "name": "hard reset to origin commit"
+        },
+        {
+          "exec": "git clean -fdx",
+          "name": "clean all untracked files"
+        },
+        {
+          "say": "ready to rock! (unpushed commits are under the \"scratch\" branch)"
+        }
+      ],
+      "condition": "git diff --exit-code > /dev/null"
+    },
+    "compile": {
+      "name": "compile",
+      "description": "Only compile"
+    },
+    "default": {
+      "name": "default",
+      "description": "Synthesize project files",
+      "steps": [
+        {
+          "execArgs": [
+            "ts-node",
+            "--project",
+            "projenrc/tsconfig.json",
+            ".projenrc.ts"
+          ]
+        }
+      ]
+    },
+    "deploy": {
+      "name": "deploy",
+      "description": "Publish assets, deploy every region stack, then the peering stack.",
+      "env": {
+        "ASSETS_PREFIX": "$(cat dist/assets_prefix 2>/dev/null || true)",
+        "REGION_0_VPC_CIDR": "$(bash -c 'echo \"${REGION_0_VPC_CIDR:-10.0.0.0/16}\"')",
+        "REGION_1_VPC_CIDR": "$(bash -c 'echo \"${REGION_1_VPC_CIDR:-10.1.0.0/16}\"')"
+      },
+      "requiredEnv": [
+        "ASSETS_BUCKET_PREFIX"
+      ],
+      "steps": [
+        {
+          "say": "Phase 0: setting ASSETS_PREFIX"
+        },
+        {
+          "exec": "mkdir -p dist && bash -c 'printf \"%s\" \"${ASSETS_PREFIX:-eks-mr-demo/$(date -u +%Y-%m-%dT%H-%M-%SZ)/}\" > dist/assets_prefix'"
+        },
+        {
+          "exec": "bash -c 'if aws iam get-role --role-name AWSServiceRoleForFIS >/dev/null 2>&1; then echo \"FIS service-linked role already exists\"; else ERR=$(aws iam create-service-linked-role --aws-service-name fis.amazonaws.com 2>&1) && echo \"FIS service-linked role created\" || { echo \"$ERR\" | grep -q \"has been taken\" && echo \"FIS service-linked role already exists\" || { echo \"$ERR\" | grep -q \"AccessDenied\" && echo \"WARNING: deployer lacks iam:GetRole/iam:CreateServiceLinkedRole for AWSServiceRoleForFIS; continuing (first FIS experiment will fail if the role is absent)\" || { echo \"$ERR\" >&2; exit 1; }; }; }; fi'"
+        },
+        {
+          "say": "Phase 1: publishing assets"
+        },
+        {
+          "spawn": "deploy:upload"
+        },
+        {
+          "say": "Phase 2.0: deploying region stack us-east-2"
+        },
+        {
+          "exec": "ASSETS_PREFIX=\"$(cat dist/assets_prefix)\" AWS_REGION=\"us-east-2\" ASSETS_BUCKET=\"$ASSETS_BUCKET_PREFIX-us-east-2\" STACK_NAME=\"$PROJECT_NAME-region-us-east-2\" TEMPLATE_NAME=\"$PROJECT_NAME-region-us-east-2\" OUTPUTS_PREFIX=\"REGION_0\" STACK_PARAMETERS=\"VpcCidr=$REGION_0_VPC_CIDR\nPeerVpcCidrs=$REGION_1_VPC_CIDR\" bash build/deploy-stack.sh"
+        },
+        {
+          "say": "Phase 2.1: deploying region stack us-west-2"
+        },
+        {
+          "exec": "ASSETS_PREFIX=\"$(cat dist/assets_prefix)\" AWS_REGION=\"us-west-2\" ASSETS_BUCKET=\"$ASSETS_BUCKET_PREFIX-us-west-2\" STACK_NAME=\"$PROJECT_NAME-region-us-west-2\" TEMPLATE_NAME=\"$PROJECT_NAME-region-us-west-2\" OUTPUTS_PREFIX=\"REGION_1\" STACK_PARAMETERS=\"VpcCidr=$REGION_1_VPC_CIDR\nPeerVpcCidrs=$REGION_0_VPC_CIDR\" bash build/deploy-stack.sh"
+        },
+        {
+          "say": "Phase 3: deploying the peering stack (cross-region mesh)"
+        },
+        {
+          "exec": "bash -c '. dist/$PROJECT_NAME-region-us-east-2.env && . dist/$PROJECT_NAME-region-us-west-2.env && ASSETS_PREFIX=\"$(cat dist/assets_prefix)\" AWS_REGION=\"us-east-2\" ASSETS_BUCKET=\"$ASSETS_BUCKET_PREFIX-us-east-2\" STACK_NAME=\"$PROJECT_NAME-peering\" TEMPLATE_NAME=\"$PROJECT_NAME-peering\" OUTPUTS_PREFIX=\"PEERING\" STACK_PARAMETERS=\"R0Region=$REGION_0_REGION\nR0VpcId=$REGION_0_VPCID\nR0VpcCidr=$REGION_0_VPCCIDROUT\nR0RouteTableIds=$REGION_0_ROUTETABLEIDS\nR1Region=$REGION_1_REGION\nR1VpcId=$REGION_1_VPCID\nR1VpcCidr=$REGION_1_VPCCIDROUT\nR1RouteTableIds=$REGION_1_ROUTETABLEIDS\" bash build/deploy-stack.sh'"
+        },
+        {
+          "say": "Phase 4.0: deploying globaldata into us-east-2"
+        },
+        {
+          "exec": "bash -c '. dist/$PROJECT_NAME-region-us-east-2.env && ASSETS_PREFIX=\"$(cat dist/assets_prefix)\" AWS_REGION=\"us-east-2\" ASSETS_BUCKET=\"$ASSETS_BUCKET_PREFIX-us-east-2\" STACK_NAME=\"$PROJECT_NAME-globaldata\" TEMPLATE_NAME=\"$PROJECT_NAME-globaldata\" OUTPUTS_PREFIX=\"GLOBALDATA\" STACK_PARAMETERS=\"PrimaryDbClusterArn=$REGION_0_DBCLUSTERARN\" bash build/deploy-stack.sh'"
+        },
+        {
+          "say": "Phase 4.1: deploying secondarydb into us-west-2"
+        },
+        {
+          "exec": "bash -c '. dist/$PROJECT_NAME-globaldata.env && . dist/$PROJECT_NAME-region-us-west-2.env && ASSETS_PREFIX=\"$(cat dist/assets_prefix)\" AWS_REGION=\"us-west-2\" ASSETS_BUCKET=\"$ASSETS_BUCKET_PREFIX-us-west-2\" STACK_NAME=\"$PROJECT_NAME-secondarydb\" TEMPLATE_NAME=\"$PROJECT_NAME-secondarydb\" OUTPUTS_PREFIX=\"SECONDARYDB\" STACK_PARAMETERS=\"GlobalClusterIdentifier=$GLOBALDATA_GLOBALCLUSTERIDENTIFIER\nVpcId=$REGION_1_VPCID\nIsolatedSubnetIds=$REGION_1_ISOLATEDSUBNETIDS\nIsolatedSubnetAzs=$REGION_1_ISOLATEDSUBNETAZS\nEksClusterSecurityGroupId=$REGION_1_EKSCLUSTERSECURITYGROUPID\" bash build/deploy-stack.sh'"
+        },
+        {
+          "say": "Phase 4.2: deploying observer into us-east-1"
+        },
+        {
+          "exec": "bash -c '. dist/$PROJECT_NAME-region-us-east-2.env && . dist/$PROJECT_NAME-region-us-west-2.env && ASSETS_PREFIX=\"$(cat dist/assets_prefix)\" AWS_REGION=\"us-east-1\" ASSETS_BUCKET=\"$ASSETS_BUCKET_PREFIX-us-east-1\" STACK_NAME=\"$PROJECT_NAME-observer\" TEMPLATE_NAME=\"$PROJECT_NAME-observer\" OUTPUTS_PREFIX=\"OBSERVER\" STACK_PARAMETERS=\"R0VpcId=$REGION_0_VPCID\nR0VpcCidr=$REGION_0_VPCCIDROUT\nR1VpcId=$REGION_1_VPCID\nR1VpcCidr=$REGION_1_VPCCIDROUT\" bash build/deploy-stack.sh'"
+        },
+        {
+          "say": "Phase 5.0: read the Aurora global writer endpoint (us-east-2)"
+        },
+        {
+          "exec": "bash -c 'set -eo pipefail && . dist/$PROJECT_NAME-globaldata.env && export AWS_REGION=\"us-east-2\" AWS_DEFAULT_REGION=\"us-east-2\" && ENDPOINT=$(aws rds describe-global-clusters --global-cluster-identifier \"$GLOBALDATA_GLOBALCLUSTERIDENTIFIER\" --query \"GlobalClusters[0].Endpoint\" --output text) && if test -z \"$ENDPOINT\" || test \"$ENDPOINT\" = None; then echo \"global cluster reported no writer endpoint\" >&2; exit 1; fi && printf \"GLOBAL_WRITER_ENDPOINT=%s\\n\" \"$ENDPOINT\" > dist/global-writer.env && echo \"global writer endpoint: $ENDPOINT\"'"
+        },
+        {
+          "say": "Phase 5.1: stage kubectl for the in-VPC installers (us-east-2)"
+        },
+        {
+          "exec": "bash -c 'set -eo pipefail && . dist/$PROJECT_NAME-region-us-east-2.env && export AWS_REGION=\"us-east-2\" AWS_DEFAULT_REGION=\"us-east-2\" CLUSTER_NAME=\"$REGION_0_EKSCLUSTERNAME\" && KVER=$(aws eks describe-cluster --name \"$CLUSTER_NAME\" --query cluster.version --output text) && PATCH=$(curl -fsSL \"https://dl.k8s.io/release/stable-$KVER.txt\") && echo \"staging kubectl $PATCH (linux/arm64) for cluster version $KVER\" && curl -fsSLo dist/kubectl \"https://dl.k8s.io/release/$PATCH/bin/linux/arm64/kubectl\" && for R in us-east-2 us-west-2; do   aws s3 cp dist/kubectl \"s3://$ASSETS_BUCKET_PREFIX-$R/$(cat dist/assets_prefix)k8s/kubectl\" --region \"$R\"; done'"
+        },
+        {
+          "say": "Phase 5.2: install the workload in us-east-2 (us-east-2)"
+        },
+        {
+          "exec": "bash -c 'set -eo pipefail && . dist/$PROJECT_NAME-region-us-east-2.env && . dist/$PROJECT_NAME-globaldata.env && . dist/global-writer.env && export AWS_REGION=\"us-east-2\" AWS_DEFAULT_REGION=\"us-east-2\" CLUSTER_NAME=\"$REGION_0_EKSCLUSTERNAME\" APP_IMAGE_URI=\"$REGION_0_APPIMAGEURI\" APP_REGION=\"us-east-2\" DB_SECRET_NAME=\"$REGION_0_DBSECRETNAME\" DB_READ_HOST=\"$REGION_0_DBREADERENDPOINT\" DB_WRITE_HOST=\"$GLOBAL_WRITER_ENDPOINT\" ERROR_RATE_PARAM=\"$REGION_0_ERRORRATEPARAMNAME\" LOGGING_NAMESPACE=\"logging\" FLUENTBIT_ROLE_ARN=\"$REGION_0_FLUENTBITROLEARN\" FLUENTBIT_IMAGE_REPO=\"$REGION_0_FLUENTBITIMAGEREPO\" LOG_GROUP_NAME=\"$REGION_0_PODLOGGROUPNAME\" KARPENTER_CLUSTER_NAME=\"$REGION_0_EKSCLUSTERNAME\" KARPENTER_IMAGE_REPO=\"$REGION_0_KARPENTERIMAGEREPO\" KARPENTER_CONTROLLER_ROLE_ARN=\"$REGION_0_KARPENTERCONTROLLERROLEARN\" KARPENTER_INSTANCE_PROFILE=\"$REGION_0_KARPENTERINSTANCEPROFILE\" KARPENTER_SECURITY_GROUP_ID=\"$REGION_0_KARPENTERSECURITYGROUPID\" LBC_CLUSTER_NAME=\"$REGION_0_EKSCLUSTERNAME\" LBC_REGION=\"us-east-2\" LBC_VPC_ID=\"$REGION_0_LBCVPCID\" LBC_IMAGE_REPO=\"$REGION_0_LBCIMAGEREPO\" LBC_CONTROLLER_ROLE_ARN=\"$REGION_0_LBCCONTROLLERROLEARN\" MIRROR_REGISTRY=\"$REGION_0_MIRRORREGISTRY\" INSTALLER_PROJECT=\"$REGION_0_INSTALLERPROJECTNAME\" && export SCHEMA_JOB_SUFFIX=$(echo \"$APP_IMAGE_URI\" | sed \"s|.*:||\" | cut -c1-8) && python3 build/render-manifest.py k8s/app.yaml > dist/app-rendered-us-east-2.yaml && python3 build/package-chart.py dist/app-rendered-us-east-2.yaml dist/chart-content-us-east-2.yaml && python3 build/render-manifest.py k8s/namespaces.yaml k8s/fluent-bit.yaml k8s/app.yaml k8s/schema-job.yaml src/karpenter/karpenter.yaml src/argo/metrics-server.yaml src/argo/argocd-install.yaml k8s/argocd-config.yaml k8s/chart-repo.yaml > dist/manifest-us-east-2.yaml && cat dist/chart-content-us-east-2.yaml >> dist/manifest-us-east-2.yaml && aws s3 cp dist/manifest-us-east-2.yaml \"s3://$ASSETS_BUCKET_PREFIX-us-east-2/$(cat dist/assets_prefix)k8s/manifest-us-east-2.yaml\" --region us-east-2 && python3 build/render-manifest.py src/lbc/lbc.yaml > dist/lbc-us-east-2.yaml && aws s3 cp dist/lbc-us-east-2.yaml \"s3://$ASSETS_BUCKET_PREFIX-us-east-2/$(cat dist/assets_prefix)k8s/lbc-us-east-2.yaml\" --region us-east-2 && python3 build/render-manifest.py k8s/karpenter-nodepool.yaml k8s/argo-application.yaml > dist/cr-manifest-us-east-2.yaml && aws s3 cp dist/cr-manifest-us-east-2.yaml \"s3://$ASSETS_BUCKET_PREFIX-us-east-2/$(cat dist/assets_prefix)k8s/cr-manifest-us-east-2.yaml\" --region us-east-2 && BID=$(aws codebuild start-build --project-name \"$INSTALLER_PROJECT\" --region us-east-2   --environment-variables-override     name=MANIFEST_S3_URI,value=\"s3://$ASSETS_BUCKET_PREFIX-us-east-2/$(cat dist/assets_prefix)k8s/manifest-us-east-2.yaml\",type=PLAINTEXT     name=KUBECTL_S3_URI,value=\"s3://$ASSETS_BUCKET_PREFIX-us-east-2/$(cat dist/assets_prefix)k8s/kubectl\",type=PLAINTEXT     name=ENDPOINT_S3_URI,value=\"s3://$ASSETS_BUCKET_PREFIX-us-east-2/$(cat dist/assets_prefix)k8s/endpoint-us-east-2.txt\",type=PLAINTEXT     name=ARGOCD_ENDPOINT_S3_URI,value=\"s3://$ASSETS_BUCKET_PREFIX-us-east-2/$(cat dist/assets_prefix)k8s/argocd-endpoint-us-east-2.txt\",type=PLAINTEXT     name=LBC_MANIFEST_S3_URI,value=\"s3://$ASSETS_BUCKET_PREFIX-us-east-2/$(cat dist/assets_prefix)k8s/lbc-us-east-2.yaml\",type=PLAINTEXT     name=CR_MANIFEST_S3_URI,value=\"s3://$ASSETS_BUCKET_PREFIX-us-east-2/$(cat dist/assets_prefix)k8s/cr-manifest-us-east-2.yaml\",type=PLAINTEXT   --query \"build.id\" --output text) && echo \"installer build: $BID\" && for i in $(seq 1 120); do   ST=$(aws codebuild batch-get-builds --ids \"$BID\" --region us-east-2 --query \"builds[0].buildStatus\" --output text);   if [ \"$ST\" != IN_PROGRESS ]; then break; fi;   sleep 10; done && if [ \"$ST\" != SUCCEEDED ]; then   echo \"installer build $BID finished as $ST — log follows:\" >&2;   LG=$(aws codebuild batch-get-builds --ids \"$BID\" --region us-east-2 --query \"builds[0].logs.groupName\" --output text);   LS=$(aws codebuild batch-get-builds --ids \"$BID\" --region us-east-2 --query \"builds[0].logs.streamName\" --output text);   aws logs get-log-events --log-group-name \"$LG\" --log-stream-name \"$LS\" --region us-east-2 --query \"events[*].message\" --output text >&2;   exit 1; fi && aws s3 cp \"s3://$ASSETS_BUCKET_PREFIX-us-east-2/$(cat dist/assets_prefix)k8s/endpoint-us-east-2.txt\" dist/endpoint-0.txt --region us-east-2 && printf \"APP_ENDPOINT_0=%s\\n\" \"$(cat dist/endpoint-0.txt)\" > dist/app-endpoint-0.env && ZID=$(aws elbv2 describe-load-balancers --region us-east-2   --query \"LoadBalancers[].[DNSName,CanonicalHostedZoneId]\" --output text   | grep -F \"$(cat dist/endpoint-0.txt)\" | cut -f2 | head -n1) && if test -z \"$ZID\"; then   echo \"no load balancer in us-east-2 matches the captured endpoint\" >&2; exit 1; fi && printf \"APP_LB_ZONE_0=%s\\n\" \"$ZID\" >> dist/app-endpoint-0.env && APPARN=$(aws elbv2 describe-load-balancers --region us-east-2   --query \"LoadBalancers[].[DNSName,LoadBalancerArn]\" --output text   | grep -F \"$(cat dist/endpoint-0.txt)\" | cut -f2 | head -n1) && if test -z \"$APPARN\"; then   echo \"no load balancer in us-east-2 matches the app endpoint\" >&2; exit 1; fi && printf \"APP_NLB_ARN_0=%s\\n\" \"$APPARN\" >> dist/app-endpoint-0.env && echo \"app endpoint 0: $(cat dist/endpoint-0.txt) (zone $ZID, arn $APPARN)\" && aws s3 cp \"s3://$ASSETS_BUCKET_PREFIX-us-east-2/$(cat dist/assets_prefix)k8s/argocd-endpoint-us-east-2.txt\" dist/argocd-endpoint-0.txt --region us-east-2 && printf \"ARGO_NLB_DNS_0=%s\\n\" \"$(cat dist/argocd-endpoint-0.txt)\" > dist/argo-nlb-0.env && AARN=$(aws elbv2 describe-load-balancers --region us-east-2   --query \"LoadBalancers[].[DNSName,LoadBalancerArn]\" --output text   | grep -F \"$(cat dist/argocd-endpoint-0.txt)\" | cut -f2 | head -n1) && if test -z \"$AARN\"; then   echo \"no load balancer in us-east-2 matches the argocd endpoint\" >&2; exit 1; fi && printf \"ARGO_NLB_ARN_0=%s\\n\" \"$AARN\" >> dist/argo-nlb-0.env && LBPATH=$(echo \"$AARN\" | cut -d/ -f2-4) && NLBIPS=$(aws ec2 describe-network-interfaces --region us-east-2   --filters \"Name=description,Values=ELB $LBPATH\"   --query \"NetworkInterfaces[].PrivateIpAddress\" --output text | tr -s \"[:blank:]\" \",\") && NIPCOUNT=$(echo \"$NLBIPS\" | tr , \"\\n\" | grep -c .) && if test \"$NIPCOUNT\" != \"3\"; then   echo \"argocd NLB 0: expected 3 ENI ips, got $NIPCOUNT ($NLBIPS)\" >&2; exit 1; fi && printf \"ARGO_NLB_IPS_0=%s\\n\" \"$NLBIPS\" >> dist/argo-nlb-0.env && echo \"argocd NLB 0: $AARN ips=$NLBIPS\"'"
+        },
+        {
+          "say": "Phase 5.3: install the workload in us-west-2 (us-west-2)"
+        },
+        {
+          "exec": "bash -c 'set -eo pipefail && . dist/$PROJECT_NAME-region-us-west-2.env && . dist/$PROJECT_NAME-region-us-east-2.env && . dist/$PROJECT_NAME-secondarydb.env && . dist/global-writer.env && export AWS_REGION=\"us-west-2\" AWS_DEFAULT_REGION=\"us-west-2\" CLUSTER_NAME=\"$REGION_1_EKSCLUSTERNAME\" APP_IMAGE_URI=\"$REGION_1_APPIMAGEURI\" APP_REGION=\"us-west-2\" DB_SECRET_NAME=\"$REGION_0_DBSECRETNAME\" DB_READ_HOST=\"$SECONDARYDB_DBREADERENDPOINT\" DB_WRITE_HOST=\"$GLOBAL_WRITER_ENDPOINT\" ERROR_RATE_PARAM=\"$REGION_1_ERRORRATEPARAMNAME\" LOGGING_NAMESPACE=\"logging\" FLUENTBIT_ROLE_ARN=\"$REGION_1_FLUENTBITROLEARN\" FLUENTBIT_IMAGE_REPO=\"$REGION_1_FLUENTBITIMAGEREPO\" LOG_GROUP_NAME=\"$REGION_1_PODLOGGROUPNAME\" KARPENTER_CLUSTER_NAME=\"$REGION_1_EKSCLUSTERNAME\" KARPENTER_IMAGE_REPO=\"$REGION_1_KARPENTERIMAGEREPO\" KARPENTER_CONTROLLER_ROLE_ARN=\"$REGION_1_KARPENTERCONTROLLERROLEARN\" KARPENTER_INSTANCE_PROFILE=\"$REGION_1_KARPENTERINSTANCEPROFILE\" KARPENTER_SECURITY_GROUP_ID=\"$REGION_1_KARPENTERSECURITYGROUPID\" LBC_CLUSTER_NAME=\"$REGION_1_EKSCLUSTERNAME\" LBC_REGION=\"us-west-2\" LBC_VPC_ID=\"$REGION_1_LBCVPCID\" LBC_IMAGE_REPO=\"$REGION_1_LBCIMAGEREPO\" LBC_CONTROLLER_ROLE_ARN=\"$REGION_1_LBCCONTROLLERROLEARN\" MIRROR_REGISTRY=\"$REGION_1_MIRRORREGISTRY\" INSTALLER_PROJECT=\"$REGION_1_INSTALLERPROJECTNAME\" && python3 build/render-manifest.py k8s/app.yaml > dist/app-rendered-us-west-2.yaml && python3 build/package-chart.py dist/app-rendered-us-west-2.yaml dist/chart-content-us-west-2.yaml && python3 build/render-manifest.py k8s/namespaces.yaml k8s/fluent-bit.yaml k8s/app.yaml src/karpenter/karpenter.yaml src/argo/metrics-server.yaml src/argo/argocd-install.yaml k8s/argocd-config.yaml k8s/chart-repo.yaml > dist/manifest-us-west-2.yaml && cat dist/chart-content-us-west-2.yaml >> dist/manifest-us-west-2.yaml && aws s3 cp dist/manifest-us-west-2.yaml \"s3://$ASSETS_BUCKET_PREFIX-us-west-2/$(cat dist/assets_prefix)k8s/manifest-us-west-2.yaml\" --region us-west-2 && python3 build/render-manifest.py src/lbc/lbc.yaml > dist/lbc-us-west-2.yaml && aws s3 cp dist/lbc-us-west-2.yaml \"s3://$ASSETS_BUCKET_PREFIX-us-west-2/$(cat dist/assets_prefix)k8s/lbc-us-west-2.yaml\" --region us-west-2 && python3 build/render-manifest.py k8s/karpenter-nodepool.yaml k8s/argo-application.yaml > dist/cr-manifest-us-west-2.yaml && aws s3 cp dist/cr-manifest-us-west-2.yaml \"s3://$ASSETS_BUCKET_PREFIX-us-west-2/$(cat dist/assets_prefix)k8s/cr-manifest-us-west-2.yaml\" --region us-west-2 && BID=$(aws codebuild start-build --project-name \"$INSTALLER_PROJECT\" --region us-west-2   --environment-variables-override     name=MANIFEST_S3_URI,value=\"s3://$ASSETS_BUCKET_PREFIX-us-west-2/$(cat dist/assets_prefix)k8s/manifest-us-west-2.yaml\",type=PLAINTEXT     name=KUBECTL_S3_URI,value=\"s3://$ASSETS_BUCKET_PREFIX-us-west-2/$(cat dist/assets_prefix)k8s/kubectl\",type=PLAINTEXT     name=ENDPOINT_S3_URI,value=\"s3://$ASSETS_BUCKET_PREFIX-us-west-2/$(cat dist/assets_prefix)k8s/endpoint-us-west-2.txt\",type=PLAINTEXT     name=ARGOCD_ENDPOINT_S3_URI,value=\"s3://$ASSETS_BUCKET_PREFIX-us-west-2/$(cat dist/assets_prefix)k8s/argocd-endpoint-us-west-2.txt\",type=PLAINTEXT     name=LBC_MANIFEST_S3_URI,value=\"s3://$ASSETS_BUCKET_PREFIX-us-west-2/$(cat dist/assets_prefix)k8s/lbc-us-west-2.yaml\",type=PLAINTEXT     name=CR_MANIFEST_S3_URI,value=\"s3://$ASSETS_BUCKET_PREFIX-us-west-2/$(cat dist/assets_prefix)k8s/cr-manifest-us-west-2.yaml\",type=PLAINTEXT   --query \"build.id\" --output text) && echo \"installer build: $BID\" && for i in $(seq 1 120); do   ST=$(aws codebuild batch-get-builds --ids \"$BID\" --region us-west-2 --query \"builds[0].buildStatus\" --output text);   if [ \"$ST\" != IN_PROGRESS ]; then break; fi;   sleep 10; done && if [ \"$ST\" != SUCCEEDED ]; then   echo \"installer build $BID finished as $ST — log follows:\" >&2;   LG=$(aws codebuild batch-get-builds --ids \"$BID\" --region us-west-2 --query \"builds[0].logs.groupName\" --output text);   LS=$(aws codebuild batch-get-builds --ids \"$BID\" --region us-west-2 --query \"builds[0].logs.streamName\" --output text);   aws logs get-log-events --log-group-name \"$LG\" --log-stream-name \"$LS\" --region us-west-2 --query \"events[*].message\" --output text >&2;   exit 1; fi && aws s3 cp \"s3://$ASSETS_BUCKET_PREFIX-us-west-2/$(cat dist/assets_prefix)k8s/endpoint-us-west-2.txt\" dist/endpoint-1.txt --region us-west-2 && printf \"APP_ENDPOINT_1=%s\\n\" \"$(cat dist/endpoint-1.txt)\" > dist/app-endpoint-1.env && ZID=$(aws elbv2 describe-load-balancers --region us-west-2   --query \"LoadBalancers[].[DNSName,CanonicalHostedZoneId]\" --output text   | grep -F \"$(cat dist/endpoint-1.txt)\" | cut -f2 | head -n1) && if test -z \"$ZID\"; then   echo \"no load balancer in us-west-2 matches the captured endpoint\" >&2; exit 1; fi && printf \"APP_LB_ZONE_1=%s\\n\" \"$ZID\" >> dist/app-endpoint-1.env && APPARN=$(aws elbv2 describe-load-balancers --region us-west-2   --query \"LoadBalancers[].[DNSName,LoadBalancerArn]\" --output text   | grep -F \"$(cat dist/endpoint-1.txt)\" | cut -f2 | head -n1) && if test -z \"$APPARN\"; then   echo \"no load balancer in us-west-2 matches the app endpoint\" >&2; exit 1; fi && printf \"APP_NLB_ARN_1=%s\\n\" \"$APPARN\" >> dist/app-endpoint-1.env && echo \"app endpoint 1: $(cat dist/endpoint-1.txt) (zone $ZID, arn $APPARN)\" && aws s3 cp \"s3://$ASSETS_BUCKET_PREFIX-us-west-2/$(cat dist/assets_prefix)k8s/argocd-endpoint-us-west-2.txt\" dist/argocd-endpoint-1.txt --region us-west-2 && printf \"ARGO_NLB_DNS_1=%s\\n\" \"$(cat dist/argocd-endpoint-1.txt)\" > dist/argo-nlb-1.env && AARN=$(aws elbv2 describe-load-balancers --region us-west-2   --query \"LoadBalancers[].[DNSName,LoadBalancerArn]\" --output text   | grep -F \"$(cat dist/argocd-endpoint-1.txt)\" | cut -f2 | head -n1) && if test -z \"$AARN\"; then   echo \"no load balancer in us-west-2 matches the argocd endpoint\" >&2; exit 1; fi && printf \"ARGO_NLB_ARN_1=%s\\n\" \"$AARN\" >> dist/argo-nlb-1.env && LBPATH=$(echo \"$AARN\" | cut -d/ -f2-4) && NLBIPS=$(aws ec2 describe-network-interfaces --region us-west-2   --filters \"Name=description,Values=ELB $LBPATH\"   --query \"NetworkInterfaces[].PrivateIpAddress\" --output text | tr -s \"[:blank:]\" \",\") && NIPCOUNT=$(echo \"$NLBIPS\" | tr , \"\\n\" | grep -c .) && if test \"$NIPCOUNT\" != \"3\"; then   echo \"argocd NLB 1: expected 3 ENI ips, got $NIPCOUNT ($NLBIPS)\" >&2; exit 1; fi && printf \"ARGO_NLB_IPS_1=%s\\n\" \"$NLBIPS\" >> dist/argo-nlb-1.env && echo \"argocd NLB 1: $AARN ips=$NLBIPS\"'"
+        },
+        {
+          "say": "Phase 5.4: accept the observer peering and route the observer CIDR in us-east-2 (us-east-2)"
+        },
+        {
+          "exec": "bash -c 'set -eo pipefail && . dist/$PROJECT_NAME-observer.env && . dist/$PROJECT_NAME-region-us-east-2.env && export AWS_REGION=\"us-east-2\" AWS_DEFAULT_REGION=\"us-east-2\" ACCEPT_PCX=\"$OBSERVER_PEERINGTO0ID\" ACCEPT_CIDR=\"$OBSERVER_VPCCIDR\" RTBS=\"$REGION_0_ROUTETABLEIDS\" && aws ec2 wait vpc-peering-connection-exists --vpc-peering-connection-ids \"$ACCEPT_PCX\" && aws ec2 accept-vpc-peering-connection --vpc-peering-connection-id \"$ACCEPT_PCX\" 2>/dev/null || true && for RTB in $(echo \"$RTBS\" | tr , \" \"); do   aws ec2 create-route --route-table-id \"$RTB\" --destination-cidr-block \"$ACCEPT_CIDR\"     --vpc-peering-connection-id \"$ACCEPT_PCX\" 2>/dev/null || true; done && echo \"observer peering $ACCEPT_PCX accepted and routed in us-east-2\"'"
+        },
+        {
+          "say": "Phase 5.5: accept the observer peering and route the observer CIDR in us-west-2 (us-west-2)"
+        },
+        {
+          "exec": "bash -c 'set -eo pipefail && . dist/$PROJECT_NAME-observer.env && . dist/$PROJECT_NAME-region-us-west-2.env && export AWS_REGION=\"us-west-2\" AWS_DEFAULT_REGION=\"us-west-2\" ACCEPT_PCX=\"$OBSERVER_PEERINGTO1ID\" ACCEPT_CIDR=\"$OBSERVER_VPCCIDR\" RTBS=\"$REGION_1_ROUTETABLEIDS\" && aws ec2 wait vpc-peering-connection-exists --vpc-peering-connection-ids \"$ACCEPT_PCX\" && aws ec2 accept-vpc-peering-connection --vpc-peering-connection-id \"$ACCEPT_PCX\" 2>/dev/null || true && for RTB in $(echo \"$RTBS\" | tr , \" \"); do   aws ec2 create-route --route-table-id \"$RTB\" --destination-cidr-block \"$ACCEPT_CIDR\"     --vpc-peering-connection-id \"$ACCEPT_PCX\" 2>/dev/null || true; done && echo \"observer peering $ACCEPT_PCX accepted and routed in us-west-2\"'"
+        },
+        {
+          "say": "Phase 6.0: deploying dns into us-east-2"
+        },
+        {
+          "exec": "bash -c '. dist/$PROJECT_NAME-region-us-east-2.env && . dist/$PROJECT_NAME-region-us-west-2.env && ASSETS_PREFIX=\"$(cat dist/assets_prefix)\" AWS_REGION=\"us-east-2\" ASSETS_BUCKET=\"$ASSETS_BUCKET_PREFIX-us-east-2\" STACK_NAME=\"$PROJECT_NAME-dns\" TEMPLATE_NAME=\"$PROJECT_NAME-dns\" OUTPUTS_PREFIX=\"DNS\" STACK_PARAMETERS=\"R0VpcId=$REGION_0_VPCID\nR1VpcId=$REGION_1_VPCID\" bash build/deploy-stack.sh'"
+        },
+        {
+          "say": "Phase 6.1: deploying loadgen into us-east-2"
+        },
+        {
+          "exec": "bash -c '. dist/$PROJECT_NAME-region-us-east-2.env && ASSETS_PREFIX=\"$(cat dist/assets_prefix)\" AWS_REGION=\"us-east-2\" ASSETS_BUCKET=\"$ASSETS_BUCKET_PREFIX-us-east-2\" STACK_NAME=\"$PROJECT_NAME-loadgen\" TEMPLATE_NAME=\"$PROJECT_NAME-loadgen\" OUTPUTS_PREFIX=\"LOADGEN\" STACK_PARAMETERS=\"VpcId=$REGION_0_VPCID\nIsolatedSubnetIds=$REGION_0_ISOLATEDSUBNETIDS\nIsolatedSubnetAzs=$REGION_0_ISOLATEDSUBNETAZS\" bash build/deploy-stack.sh'"
+        },
+        {
+          "say": "Phase 6.2: deploying failover into us-east-2"
+        },
+        {
+          "exec": "bash -c '. dist/$PROJECT_NAME-region-us-east-2.env && . dist/$PROJECT_NAME-region-us-west-2.env && . dist/$PROJECT_NAME-globaldata.env && . dist/$PROJECT_NAME-secondarydb.env && . dist/$PROJECT_NAME-dns.env && . dist/app-endpoint-0.env && . dist/app-endpoint-1.env && ASSETS_PREFIX=\"$(cat dist/assets_prefix)\" AWS_REGION=\"us-east-2\" ASSETS_BUCKET=\"$ASSETS_BUCKET_PREFIX-us-east-2\" STACK_NAME=\"$PROJECT_NAME-failover\" TEMPLATE_NAME=\"$PROJECT_NAME-failover\" OUTPUTS_PREFIX=\"FAILOVER\" STACK_PARAMETERS=\"HostedZoneId=$DNS_HOSTEDZONEID\nR0LbDns=$APP_ENDPOINT_0\nR0LbZoneId=$APP_LB_ZONE_0\nR1LbDns=$APP_ENDPOINT_1\nR1LbZoneId=$APP_LB_ZONE_1\nPrimaryClusterName=$REGION_0_EKSCLUSTERNAME\nR0ClusterArn=$REGION_0_EKSCLUSTERARN\nR1ClusterArn=$REGION_1_EKSCLUSTERARN\nR0AppHealthAlarmArn=$REGION_0_APPHEALTHALARMARN0\nR1AppHealthAlarmArn=$REGION_0_APPHEALTHALARMARN1\nGlobalClusterIdentifier=$GLOBALDATA_GLOBALCLUSTERIDENTIFIER\nR0DbClusterArn=$REGION_0_DBCLUSTERARN\nR1DbClusterArn=$SECONDARYDB_DBCLUSTERARN\" bash build/deploy-stack.sh'"
+        },
+        {
+          "say": "Phase 6.3: deploying standbyaccess into us-west-2"
+        },
+        {
+          "exec": "bash -c '. dist/$PROJECT_NAME-region-us-west-2.env && . dist/$PROJECT_NAME-failover.env && ASSETS_PREFIX=\"$(cat dist/assets_prefix)\" AWS_REGION=\"us-west-2\" ASSETS_BUCKET=\"$ASSETS_BUCKET_PREFIX-us-west-2\" STACK_NAME=\"$PROJECT_NAME-standbyaccess\" TEMPLATE_NAME=\"$PROJECT_NAME-standbyaccess\" OUTPUTS_PREFIX=\"STANDBYACCESS\" STACK_PARAMETERS=\"ClusterName=$REGION_1_EKSCLUSTERNAME\nExecutionRoleArn=$FAILOVER_EXECUTIONROLEARN\" bash build/deploy-stack.sh'"
+        },
+        {
+          "say": "Phase 6.4: deploying access-us-east-2 into us-east-2"
+        },
+        {
+          "exec": "bash -c '. dist/argo-nlb-0.env && . dist/$PROJECT_NAME-region-us-east-2.env && ASSETS_PREFIX=\"$(cat dist/assets_prefix)\" AWS_REGION=\"us-east-2\" ASSETS_BUCKET=\"$ASSETS_BUCKET_PREFIX-us-east-2\" STACK_NAME=\"$PROJECT_NAME-access-us-east-2\" TEMPLATE_NAME=\"$PROJECT_NAME-access-us-east-2\" OUTPUTS_PREFIX=\"ACCESS_0\" STACK_PARAMETERS=\"ArgoNlbIps=$ARGO_NLB_IPS_0\nVpcId=$REGION_0_VPCID\nIsolatedSubnetIds=$REGION_0_ISOLATEDSUBNETIDS\nIsolatedSubnetAzs=$REGION_0_ISOLATEDSUBNETAZS\" bash build/deploy-stack.sh'"
+        },
+        {
+          "say": "Phase 6.5: deploying access-us-west-2 into us-west-2"
+        },
+        {
+          "exec": "bash -c '. dist/argo-nlb-1.env && . dist/$PROJECT_NAME-region-us-west-2.env && . dist/$PROJECT_NAME-region-us-east-2.env && . dist/$PROJECT_NAME-failover.env && . dist/app-endpoint-0.env && ASSETS_PREFIX=\"$(cat dist/assets_prefix)\" AWS_REGION=\"us-west-2\" ASSETS_BUCKET=\"$ASSETS_BUCKET_PREFIX-us-west-2\" STACK_NAME=\"$PROJECT_NAME-access-us-west-2\" TEMPLATE_NAME=\"$PROJECT_NAME-access-us-west-2\" OUTPUTS_PREFIX=\"ACCESS_1\" STACK_PARAMETERS=\"ArgoNlbIps=$ARGO_NLB_IPS_1\nVpcId=$REGION_1_VPCID\nIsolatedSubnetIds=$REGION_1_ISOLATEDSUBNETIDS\nIsolatedSubnetAzs=$REGION_1_ISOLATEDSUBNETAZS\nPlanArn=$FAILOVER_PLANARN\nPrimaryKnobParam=$REGION_0_ERRORRATEPARAMNAME\nStandbyKnobParam=$REGION_1_ERRORRATEPARAMNAME\nFisRoleArn=$REGION_0_FISROLEARN\nFisPacketLossTemplateIds=$REGION_0_FISPACKETLOSSTEMPLATEIDS\nFisLatencyTemplateIds=$REGION_0_FISLATENCYTEMPLATEIDS\nFisLatencyTemplatesByAz=$REGION_0_FISLATENCYTEMPLATESBYAZ\nFisPacketLossTemplatesByAz=$REGION_0_FISPACKETLOSSTEMPLATESBYAZ\nFisPowerTemplatesByAz=$REGION_0_FISPOWERTEMPLATESBYAZ\nFisBrownoutTemplatesByAz=$REGION_0_FISBROWNOUTTEMPLATESBYAZ\nPrimaryClusterName=$REGION_0_EKSCLUSTERNAME\nPrimaryNodeGroupName=$REGION_0_NODEGROUPNAME\nAppNlbArn=$APP_NLB_ARN_0\nAzNameIdPairs=$REGION_0_AZNAMEIDPAIRS\" bash build/deploy-stack.sh'"
+        },
+        {
+          "say": "Phase 7.0: verify the ARC health checks are attached and the plan evaluates clean (us-east-2)"
+        },
+        {
+          "exec": "bash -c 'set -eo pipefail && . dist/$PROJECT_NAME-dns.env && . dist/$PROJECT_NAME-failover.env && export AWS_REGION=\"us-east-2\" AWS_DEFAULT_REGION=\"us-east-2\" HOSTEDZONEID=\"$DNS_HOSTEDZONEID\" APPRECORDNAME=\"$DNS_APPRECORDNAME\" PLANARN=\"$FAILOVER_PLANARN\" && python3 build/verify-arc-health-checks.py'"
+        },
+        {
+          "say": "Phase 7.1: verify the zonal-shift AZ mapping and that the app NLB is opted in (us-east-2)"
+        },
+        {
+          "exec": "bash -c 'set -eo pipefail && . dist/$PROJECT_NAME-region-us-east-2.env && . dist/app-endpoint-0.env && export AWS_REGION=\"us-east-2\" AWS_DEFAULT_REGION=\"us-east-2\" APPNLBARN=\"$APP_NLB_ARN_0\" AZNAMEIDPAIRS=\"$REGION_0_AZNAMEIDPAIRS\" && python3 build/verify-zonal-shift-azs.py'"
+        }
+      ]
+    },
+    "deploy:docker": {
+      "name": "deploy:docker",
+      "description": "Push pre-built image tarballs to ECR via crane (build/deploy-docker.sh).",
+      "steps": [
+        {
+          "exec": "bash build/deploy-docker.sh"
+        }
+      ]
+    },
+    "deploy:mirror": {
+      "name": "deploy:mirror",
+      "description": "Mirror pinned third-party images into private ECR via crane (build/mirror-images.sh).",
+      "env": {
+        "MIRROR_REGIONS": "us-east-2,us-west-2"
+      },
+      "steps": [
+        {
+          "exec": "bash build/mirror-images.sh"
+        }
+      ]
+    },
+    "deploy:s3": {
+      "name": "deploy:s3",
+      "description": "Sync dist/content.zip contents to the regional assets buckets.",
+      "requiredEnv": [
+        "ASSETS_BUCKET_PREFIX",
+        "ASSETS_PREFIX",
+        "AWS_REGION"
+      ],
+      "steps": [
+        {
+          "say": "Unpacking dist/content.zip..."
+        },
+        {
+          "exec": "rm -rf dist/content && mkdir -p dist/content && unzip -q dist/content.zip -d dist/content"
+        },
+        {
+          "exec": "echo \"Syncing dist/content/ → s3://$ASSETS_BUCKET_PREFIX-us-east-2/$ASSETS_PREFIX\"; aws s3 sync --no-progress --region \"us-east-2\" --exclude \"containers/*\" dist/content \"s3://$ASSETS_BUCKET_PREFIX-us-east-2/$ASSETS_PREFIX\""
+        },
+        {
+          "exec": "echo \"Syncing dist/content/ → s3://$ASSETS_BUCKET_PREFIX-us-west-2/$ASSETS_PREFIX\"; aws s3 sync --no-progress --region \"us-west-2\" --exclude \"containers/*\" dist/content \"s3://$ASSETS_BUCKET_PREFIX-us-west-2/$ASSETS_PREFIX\""
+        },
+        {
+          "exec": "echo \"Syncing dist/content/ → s3://$ASSETS_BUCKET_PREFIX-us-east-1/$ASSETS_PREFIX\"; aws s3 sync --no-progress --region \"us-east-1\" --exclude \"containers/*\" dist/content \"s3://$ASSETS_BUCKET_PREFIX-us-east-1/$ASSETS_PREFIX\""
+        }
+      ]
+    },
+    "deploy:stack": {
+      "name": "deploy:stack",
+      "description": "Deploy one CFN stack from the uploaded content (once per stack/region).",
+      "requiredEnv": [
+        "AWS_REGION",
+        "STACK_NAME",
+        "TEMPLATE_NAME",
+        "ASSETS_BUCKET",
+        "ASSETS_PREFIX"
+      ],
+      "steps": [
+        {
+          "exec": "bash build/deploy-stack.sh"
+        }
+      ]
+    },
+    "deploy:upload": {
+      "name": "deploy:upload",
+      "description": "Publish build artifacts: S3 content (containers added on demand by load-gen).",
+      "steps": [
+        {
+          "spawn": "deploy:s3"
+        },
+        {
+          "spawn": "deploy:docker"
+        },
+        {
+          "spawn": "deploy:mirror"
+        }
+      ]
+    },
+    "destroy": {
+      "name": "destroy",
+      "description": "Destroys your cdk app in the AWS cloud",
+      "steps": [
+        {
+          "execArgs": [
+            "cdk",
+            "destroy"
+          ],
+          "receiveArgs": true
+        }
+      ]
+    },
+    "diff": {
+      "name": "diff",
+      "description": "Diffs the currently deployed app against your code",
+      "steps": [
+        {
+          "execArgs": [
+            "cdk",
+            "diff"
+          ]
+        }
+      ]
+    },
+    "eject": {
+      "name": "eject",
+      "description": "Remove projen from the project",
+      "env": {
+        "PROJEN_EJECTING": "true"
+      },
+      "steps": [
+        {
+          "spawn": "default"
+        }
+      ]
+    },
+    "eslint": {
+      "name": "eslint",
+      "description": "Runs eslint against the codebase",
+      "env": {
+        "ESLINT_USE_FLAT_CONFIG": "false",
+        "NODE_NO_WARNINGS": "1"
+      },
+      "steps": [
+        {
+          "exec": "eslint --ext .ts,.tsx --fix --no-error-on-unmatched-pattern $@ src test src/cdk build-tools .projenrc.ts projenrc",
+          "receiveArgs": true
+        }
+      ]
+    },
+    "install": {
+      "name": "install",
+      "description": "Install project dependencies and update lockfile (non-frozen)",
+      "steps": [
+        {
+          "exec": "yarn install --no-immutable"
+        }
+      ]
+    },
+    "install:ci": {
+      "name": "install:ci",
+      "description": "Install project dependencies using frozen lockfile",
+      "steps": [
+        {
+          "exec": "yarn install --immutable"
+        }
+      ]
+    },
+    "karpenter:render": {
+      "name": "karpenter:render",
+      "description": "Regenerate src/karpenter/karpenter.yaml from the upstream Helm chart (needs egress).",
+      "steps": [
+        {
+          "exec": "bash src/karpenter/render.sh"
+        }
+      ]
+    },
+    "lbc:render": {
+      "name": "lbc:render",
+      "description": "Regenerate src/lbc/lbc.yaml from the upstream aws-load-balancer-controller chart (needs egress).",
+      "steps": [
+        {
+          "exec": "bash src/lbc/render.sh"
+        }
+      ]
+    },
+    "lint:templates": {
+      "name": "lint:templates",
+      "description": "cfn-lint the synthesized CloudFormation templates in cdk.out/",
+      "steps": [
+        {
+          "exec": "bash build/lint-templates.sh"
+        }
+      ]
+    },
+    "package": {
+      "name": "package",
+      "description": "Stage CFN assets and zip into dist/content.zip",
+      "steps": [
+        {
+          "spawn": "package:assets"
+        },
+        {
+          "spawn": "package:content"
+        }
+      ]
+    },
+    "package:assets": {
+      "name": "package:assets",
+      "description": "Stage every stack's assets into assets/ and rewrite nested templates",
+      "steps": [
+        {
+          "exec": "chmod +x build/package.py"
+        },
+        {
+          "exec": "build/package.py $PROJECT_NAME-region-us-east-2 ."
+        },
+        {
+          "exec": "build/package.py $PROJECT_NAME-region-us-west-2 ."
+        },
+        {
+          "exec": "build/package.py $PROJECT_NAME-peering ."
+        },
+        {
+          "exec": "build/package.py $PROJECT_NAME-globaldata ."
+        },
+        {
+          "exec": "build/package.py $PROJECT_NAME-secondarydb ."
+        },
+        {
+          "exec": "build/package.py $PROJECT_NAME-dns ."
+        },
+        {
+          "exec": "build/package.py $PROJECT_NAME-loadgen ."
+        },
+        {
+          "exec": "build/package.py $PROJECT_NAME-failover ."
+        },
+        {
+          "exec": "build/package.py $PROJECT_NAME-standbyaccess ."
+        },
+        {
+          "exec": "build/package.py $PROJECT_NAME-observer ."
+        },
+        {
+          "exec": "build/package.py $PROJECT_NAME-access-us-east-2 ."
+        },
+        {
+          "exec": "build/package.py $PROJECT_NAME-access-us-west-2 ."
+        }
+      ]
+    },
+    "package:content": {
+      "name": "package:content",
+      "description": "Build dist/content.zip — the artifact the deploy stage consumes",
+      "steps": [
+        {
+          "exec": "rm -f dist/content.zip"
+        },
+        {
+          "exec": "mkdir -p dist && cd assets && zip -r ../dist/content.zip ."
+        }
+      ]
+    },
+    "post-compile": {
+      "name": "post-compile",
+      "description": "Runs after successful compilation",
+      "steps": [
+        {
+          "spawn": "synth:silent"
+        },
+        {
+          "spawn": "lint:templates"
+        },
+        {
+          "spawn": "build:container-plan"
+        },
+        {
+          "spawn": "build:docker"
+        }
+      ]
+    },
+    "post-upgrade": {
+      "name": "post-upgrade",
+      "description": "Runs after upgrading dependencies"
+    },
+    "pre-compile": {
+      "name": "pre-compile",
+      "description": "Prepare the project for compilation",
+      "steps": [
+        {
+          "exec": "rm -rf assets cdk.out && mkdir -p assets dist"
+        }
+      ]
+    },
+    "synth": {
+      "name": "synth",
+      "description": "Synthesizes your cdk app into cdk.out",
+      "steps": [
+        {
+          "execArgs": [
+            "cdk",
+            "synth"
+          ]
+        }
+      ]
+    },
+    "synth:silent": {
+      "name": "synth:silent",
+      "description": "Synthesizes your cdk app into cdk.out and suppresses the template in stdout (part of \"yarn build\")",
+      "steps": [
+        {
+          "execArgs": [
+            "cdk",
+            "synth",
+            "-q"
+          ]
+        }
+      ]
+    },
+    "test": {
+      "name": "test",
+      "description": "Run tests",
+      "steps": [
+        {
+          "exec": "jest --passWithNoTests --updateSnapshot",
+          "receiveArgs": true
+        },
+        {
+          "spawn": "eslint"
+        }
+      ]
+    },
+    "test:watch": {
+      "name": "test:watch",
+      "description": "Run jest in watch mode",
+      "steps": [
+        {
+          "exec": "jest --watch"
+        }
+      ]
+    },
+    "upgrade": {
+      "name": "upgrade",
+      "description": "upgrade dependencies",
+      "env": {
+        "CI": "0",
+        "YARN_ENABLE_IMMUTABLE_INSTALLS": "false"
+      },
+      "steps": [
+        {
+          "execArgs": [
+            "yarn",
+            "dlx",
+            "npm-check-updates@20",
+            "--upgrade",
+            "--target=minor",
+            "--peer",
+            "--no-deprecated",
+            "--dep=dev,prod,peer,optional",
+            "--filter=@types/jest,@types/node,esbuild,eslint-import-resolver-typescript,eslint-plugin-import,jest,projen,ts-jest,ts-node"
+          ]
+        },
+        {
+          "exec": "yarn install --no-immutable"
+        },
+        {
+          "execArgs": [
+            "yarn",
+            "up",
+            "-R",
+            "@stylistic/eslint-plugin",
+            "@types/jest",
+            "@types/node",
+            "@typescript-eslint/eslint-plugin",
+            "@typescript-eslint/parser",
+            "aws-cdk",
+            "esbuild",
+            "eslint-import-resolver-typescript",
+            "eslint-plugin-import",
+            "eslint",
+            "jest",
+            "jest-junit",
+            "projen",
+            "ts-jest",
+            "ts-node",
+            "typescript",
+            "aws-cdk-lib",
+            "constructs"
+          ]
+        },
+        {
+          "exec": "yarn projen"
+        },
+        {
+          "spawn": "post-upgrade"
+        }
+      ]
+    },
+    "watch": {
+      "name": "watch",
+      "description": "Watches changes in your source code and rebuilds and deploys to the current account",
+      "steps": [
+        {
+          "execArgs": [
+            "cdk",
+            "deploy",
+            "--hotswap"
+          ]
+        },
+        {
+          "execArgs": [
+            "cdk",
+            "watch"
+          ]
+        }
+      ]
+    }
+  },
+  "//": "~~ Generated by projen. To modify, edit .projenrc.ts and run \"yarn projen\"."
+}

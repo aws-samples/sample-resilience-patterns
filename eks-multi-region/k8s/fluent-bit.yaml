@@ -1,0 +1,338 @@
+# Cluster-wide pod log shipping: every namespace's stdout/stderr -> CloudWatch Logs.
+#
+# ── WHY THIS EXISTS ────────────────────────────────────────────────────────────────
+#
+# Until this landed the demo emitted metrics but no application logs. Availability
+# could be watched dropping with no way to see WHY: anyone (or anything) with account
+# access but no repo access had nothing to work from. EKS guidance lists "Enable
+# Kubernetes CloudWatch logs for pods" as a cluster-level recommendation for the same
+# reason.
+#
+# The app already logs the evidence. src/app/server.py logs every request through an
+# overridden log_message, and logs `write failed: <exc>` / `read failed: <exc>` on
+# each failure. So the signature of any write-path incident -- for example the single
+# failed write per pooled connection that a writer failover costs before the pool
+# replaces its sockets -- is already in pod stdout. Nothing needed to be added to the
+# app; the logs simply had nowhere to go.
+#
+# ── SCOPE: CLUSTER-WIDE, DELIBERATELY ──────────────────────────────────────────────
+#
+# All three namespaces are collected, because during a region failover the
+# interesting evidence is spread across them and the correlation IS the diagnosis:
+#
+#   demo         orders-api (the defect), the schema job, the replica reporter
+#   argocd       application-controller reconcile/sync activity -- the Argo-vs-ARC
+#                coexistence story this demo exists to show
+#   kube-system  aws-load-balancer-controller (target group register/deregister),
+#                karpenter (node provisioning during ARC's EKS scaling block),
+#                metrics-server, coredns, kube-proxy, aws-node
+#
+# One log group, not one per namespace, so a single Logs Insights query spans
+# components. `namespace` is a real field on every record (see the parser filter), so
+# `filter namespace = "argocd"` narrows without needing separate groups.
+#
+# COST. The dominant source is the app's own per-request access log, which is
+# collected under any scope: at ~736 req/min that is ~1M lines/day on its own.
+# Adding argocd and kube-system is a minority of total volume, not a multiple of it.
+# The standby region runs the same DaemonSet but carries no traffic, so its ingest is
+# near zero until a failover. Retention is set on the log group in CDK, not here.
+#
+# ── NAMESPACE: WHY NOT `demo` ──────────────────────────────────────────────────────
+#
+# This DaemonSet lives in its own `logging` namespace, and that is load-bearing.
+#
+# A log shipper must mount /var/log from the host. The `demo` namespace carries
+# `pod-security.kubernetes.io/enforce: baseline`, and baseline FORBIDS hostPath
+# volumes -- AWS's EKS pod-security guidance says so outright ("You can use the Pod
+# Security Standards Baseline or Restricted policies to prevent the use of
+# hostPath"). Placed in `demo`, the DaemonSet object would be admitted happily and
+# every one of its PODS would be rejected by the admission webhook: a DaemonSet with
+# 0/0 ready, no logs arriving, and no error anywhere except a pod event. That reads
+# exactly like a missing IAM grant or an unreachable endpoint, which is the most
+# expensive possible way to find a namespace label.
+#
+# So `logging` is declared with `enforce: privileged` in k8s/namespaces.yaml, the way
+# `argocd` already is -- an explicit decision on the record rather than a default
+# nobody looked at. The pod still drops ALL capabilities, forbids privilege
+# escalation and mounts the host paths read-only; `privileged` is what permits
+# hostPath at all, not a licence to stop hardening.
+#
+# ── THE DAEMONSET PRIVILEGE PROBLEM ────────────────────────────────────────────────
+#
+# AWS guidance (Aristotle 509 / AWS-446, "Assign least privilege Role Based Access Control
+# to Kubernetes users and service accounts") is explicit:
+#
+#   "Avoid granting DaemonSets excessive cluster-wide Kubernetes permissions. As
+#    DaemonSets run on all nodes, a container breakout on any node may allow an
+#    attacker to get hold of these permissions."
+#
+# and the EKS best practice adds "...or AWS permissions (via IRSA)". A log shipper is
+# a DaemonSet by nature and this one now reads every namespace, so both halves apply
+# with more force than before. Three consequences, all deliberate:
+#
+# 1. NO ClusterRole AND NO ClusterRoleBinding. The stock aws-for-fluent-bit install
+#    grants cluster-wide get/list/watch on pods so the `kubernetes` filter can
+#    enrich records with pod metadata. That hands a cluster-wide read primitive to
+#    every node. It is also unnecessary: the container log FILENAME already encodes
+#    the three facts that filter fetches --
+#      /var/log/containers/<pod>_<namespace>_<container>-<containerid>.log
+#    -- so a regex on the path recovers pod, namespace and container with ZERO
+#    Kubernetes API access. This DaemonSet holds no Kubernetes RBAC whatsoever.
+#    Going cluster-wide did not widen its Kubernetes permissions, because it has
+#    none to widen.
+#
+# 2. NO CloudWatchAgentServerPolicy. That AWS managed policy is the conventional
+#    attachment for this job and carries logs:CreateLogGroup,
+#    cloudwatch:PutMetricData, ec2:DescribeTags and ssm:GetParameter on "*" -- the
+#    exact "excessive AWS permissions" shape. The recommendation engine's "Use IAM
+#    Roles and Scoped Down Policies" says avoid managed policies and scope to exact
+#    actions plus resource ARNs. The role behind ${FLUENTBIT_ROLE_ARN} holds only
+#    logs:CreateLogStream and logs:PutLogEvents on one log group ARN. The group is
+#    created in CDK, so this pod never needs logs:CreateLogGroup.
+#
+# 3. Host paths are mounted READ-ONLY. AWS's guidance on hostPath is to set
+#    volumeMounts readOnly, since a root pod otherwise gets write access to the host
+#    filesystem it exposes. The state directory is the one exception and is scoped to
+#    /var/fluent-bit/state rather than a shared location.
+#
+# WORTH KNOWING, not mitigated here: collecting argocd means Argo CD's own component
+# logs land in this group. Argo does not log secret VALUES, but its server logs do
+# carry auth attempts and repo URLs. The group therefore inherits CloudWatch's
+# default (AWS-managed) encryption and is reachable only via the account's IAM --
+# acceptable for a demo account holding no real data, and a decision to revisit
+# before this pattern is copied anywhere holding customer data. A customer-managed
+# KMS key would also require kms:Decrypt alongside every reader grant (docs/lessons.md bug
+# class 5), which is a trap worth entering deliberately rather than by default.
+#
+# NOT set: automountServiceAccountToken: false. Appealing for a pod that never calls
+# the Kubernetes API, but IRSA delivers its credential via a projected
+# service-account token and that interaction is unverified on this cluster. Small
+# gain, real risk of a confusing deploy failure. Revisit with a live test.
+#
+# ── MECHANICS ──────────────────────────────────────────────────────────────────────
+#
+# Every namespaced document below carries an explicit metadata.namespace. The
+# installer applies ONE concatenated manifest with no `-n`, so an omitted namespace
+# lands the object in `default` where nothing selects it (docs/lessons.md #13). A
+# test sweeps every namespaced doc in k8s/ for this.
+#
+# ${...} placeholders are substituted by build/render-manifest.py from the
+# environment, which REFUSES to emit if any is unset or empty. Those values arrive as
+# CloudFormation stack outputs sourced from a dotenv, where they are unexported and
+# prefixed -- so they must be mapped through the deploy step's env block or the
+# render fails loudly (docs/lessons.md #20).
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fluent-bit
+  namespace: ${LOGGING_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: fluent-bit
+    app.kubernetes.io/part-of: eks-mr-demo
+  annotations:
+    # IRSA. The role's trust policy pins `sub` to this exact
+    # system:serviceaccount:<ns>:fluent-bit and `aud` to sts.amazonaws.com with
+    # StringEquals -- per AWS guidance, scope IRSA trust to the service account level so no
+    # other pod in this namespace can assume it. StringLike with a wildcard `sub` is
+    # a privilege-escalation path out of any compromised pod; see karpenter-iam.ts.
+    eks.amazonaws.com/role-arn: ${FLUENTBIT_ROLE_ARN}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluent-bit-config
+  namespace: ${LOGGING_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: fluent-bit
+    app.kubernetes.io/part-of: eks-mr-demo
+data:
+  fluent-bit.conf: |
+    [SERVICE]
+        Flush                     5
+        Grace                     30
+        Log_Level                 info
+        Daemon                    off
+        Parsers_File              parsers.conf
+        # Health endpoint only. There is no HTTP *input*; nothing here accepts
+        # remote data, it only answers the liveness probe.
+        HTTP_Server               On
+        HTTP_Listen               0.0.0.0
+        HTTP_Port                 2020
+        # Filesystem buffering so a CloudWatch Logs blip during a failover queues to
+        # disk instead of being dropped -- the failover window is exactly when these
+        # records matter, and exactly when the endpoint is most likely to wobble.
+        storage.path              /var/fluent-bit/state/flb-storage/
+        storage.sync              normal
+        storage.checksum          off
+        storage.backlog.mem_limit 32M
+
+    [INPUT]
+        Name                  tail
+        Tag                   k8s.*
+        # CLUSTER-WIDE: every namespace. Namespace identity is recovered from the
+        # filename by the parser filter below, not from the Kubernetes API.
+        Path                  /var/log/containers/*.log
+        # Exclude self, or the shipper's own output becomes its own input and a
+        # single error line loops. Matches this pod in this namespace only.
+        Exclude_Path          /var/log/containers/fluent-bit-*_${LOGGING_NAMESPACE}_*.log
+        # Adds the source filename to the record so the parser filter can mine it.
+        Path_Key              file
+        # containerd/CRI writes `<time> <stream> <P|F> <message>`; this parser also
+        # reassembles partial (P) lines, so a long stack trace arrives as one record
+        # rather than shredded across many.
+        multiline.parser      cri
+        DB                    /var/fluent-bit/state/flb_container.db
+        DB.locking            true
+        Mem_Buf_Limit         32MB
+        Skip_Long_Lines       On
+        Refresh_Interval      10
+        Rotate_Wait           30
+        storage.type          filesystem
+
+    [FILTER]
+        # Recover namespace / pod / container from the PATH instead of asking the
+        # Kubernetes API. This one filter is what buys the DaemonSet zero cluster
+        # RBAC while still producing per-namespace queryable records.
+        Name                  parser
+        Match                 k8s.*
+        Key_Name              file
+        Parser                k8s_container_path
+        # Keep the CRI fields (log, stream, time) that are already on the record...
+        Reserve_Data          On
+        # ...and keep `file` itself, so the raw source path stays auditable.
+        Preserve_Key          On
+
+    [OUTPUT]
+        Name                  cloudwatch_logs
+        Match                 k8s.*
+        region                ${APP_REGION}
+        log_group_name        ${LOG_GROUP_NAME}
+        # One stream per namespace/pod/container, from the fields the parser filter
+        # extracted. RECORD ACCESSOR SEPARATOR RULE: only `.` and `,` may follow a
+        # template variable -- `$namespace-$pod` is silently invalid, `$namespace.$pod`
+        # is not. Do not "tidy" these dots into dashes.
+        log_stream_template   $namespace.$pod.$container
+        # Required fallback: if a template translation fails the plugin logs an error
+        # and falls back to prefix/name, and one of those must be configured. A
+        # stream appearing under this prefix is the visible signal that the path
+        # regex stopped matching -- treat it as a defect, not as noise.
+        log_stream_prefix     unparsed.
+        # The group is created by CDK with an explicit retention. Leaving this On
+        # would require logs:CreateLogGroup in the role -- exactly the over-grant the
+        # scoped policy exists to avoid.
+        auto_create_group     false
+        retry_limit           2
+
+  parsers.conf: |
+    [PARSER]
+        Name        k8s_container_path
+        Format      regex
+        # /var/log/containers/<pod>_<namespace>_<container>-<64 hex container id>.log
+        #
+        # pod and namespace cannot contain `_` (RFC 1123 label), so [^_]+ is exact
+        # for both. The container name CAN contain `-`, so it is greedy and pinned by
+        # the fixed-width hex id that follows -- backtracking resolves that
+        # unambiguously.
+        Regex       ^/var/log/containers/(?<pod>[^_]+)_(?<namespace>[^_]+)_(?<container>.+)-(?<container_id>[0-9a-f]{64})\.log$
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: fluent-bit
+  namespace: ${LOGGING_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: fluent-bit
+    app.kubernetes.io/part-of: eks-mr-demo
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fluent-bit
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fluent-bit
+        app.kubernetes.io/part-of: eks-mr-demo
+    spec:
+      serviceAccountName: fluent-bit
+      priorityClassName: system-node-critical
+      # Tolerate everything. A node whose logs are not shipped is a blind spot
+      # exactly when that node is unhealthy -- which is when the logs matter most.
+      # Karpenter nodes and the chaos-tagged MNG nodes both carry taints.
+      tolerations:
+        - operator: Exists
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: fluent-bit
+          # Mirrored into private ECR and pinned by digest. The node groups sit in
+          # isolated subnets with no NAT, so public.ecr.aws is unreachable at
+          # runtime; only private ECR resolves, over the interface endpoints.
+          image: ${FLUENTBIT_IMAGE_REPO}:2.34.3@sha256:cae481d800b15f4d87ab40c5174d1da6a4764ce7522553e65c39b8c81b9996d7
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: FLB_LOG_LEVEL
+              value: info
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              # No CPU limit on purpose: throttling the shipper during a burst is
+              # how you lose the burst. Memory is capped because filesystem
+              # buffering means backpressure spills to disk, not to the heap.
+              memory: 256Mi
+          securityContext:
+            # Root is required to traverse /var/log/containers, whose entries are
+            # root-owned symlinks. Nothing beyond that: no privilege escalation, no
+            # capabilities, read-only root filesystem.
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /fluent-bit/etc/fluent-bit.conf
+              subPath: fluent-bit.conf
+              readOnly: true
+            - name: config
+              mountPath: /fluent-bit/etc/parsers.conf
+              subPath: parsers.conf
+              readOnly: true
+            # readOnly on every host mount, per AWS hostPath guidance: a root pod
+            # otherwise holds WRITE access to the host filesystem it exposes.
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+            - name: varlibdockercontainers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+            - name: state
+              mountPath: /var/fluent-bit/state
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 2020
+            initialDelaySeconds: 10
+            periodSeconds: 30
+      volumes:
+        - name: config
+          configMap:
+            name: fluent-bit-config
+        - name: varlog
+          hostPath:
+            path: /var/log
+        # /var/log/containers holds symlinks into this directory, so it must be
+        # mounted too or every tailed file resolves to a dangling link.
+        - name: varlibdockercontainers
+          hostPath:
+            path: /var/lib/docker/containers
+        - name: state
+          hostPath:
+            path: /var/fluent-bit/state
+            type: DirectoryOrCreate
+        # readOnlyRootFilesystem: true means scratch space must be an explicit mount.
+        - name: tmp
+          emptyDir: {}

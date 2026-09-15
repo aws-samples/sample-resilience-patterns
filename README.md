@@ -17,6 +17,7 @@ These samples show how to build resilient, multi-region, and fault-tolerant syst
 |-----------|-------------|
 | [`s3mrap-crr/`](s3mrap-crr/) | S3 Multi-Region Access Points with bidirectional Cross-Region Replication, ARC-based failover, CloudWatch observability, and replication latency load testing |
 | [`aurora/`](aurora/) | Aurora Global Database + Aurora DSQL multi-region resilience with ARC Region Switch failover, CloudWatch Synthetics, RPO monitoring, post-failover reconciliation, FIS chaos testing, and load generation |
+| [`eks-multi-region/`](eks-multi-region/) | Multi-region EKS behind ARC Region Switch (EKS scaling + Aurora Global writer move + Route 53 health checks), Argo CD coexisting with ARC, single-AZ gray-failure injection with FIS from a resilience cockpit, a self-healing write pool, NAT-free isolated node subnets with a mirrored image registry, and an SSM-only observer bastion instead of any public ingress |
 
 ## Technology
 

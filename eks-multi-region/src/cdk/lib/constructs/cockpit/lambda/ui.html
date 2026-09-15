@@ -1,0 +1,809 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Resilience Cockpit — eks-mr-demo</title>
+<style>
+  :root {
+    --bg:#0f1b2d; --panel:#152538; --line:#24354d; --ink:#eaf1f9;
+    --muted:#9fb3c8; --ok:#2ecc71; --warn:#f39c12; --bad:#e74c3c; --accent:#ff9900;
+    /* Third series colour for the per-AZ chart. Its absence was a LATENT DEFECT until
+       2026-09-03: colours[2] was var(--info), which nothing defined, so an invalid
+       stroke made the THIRD zone's line silently not render. With three AZs that is a
+       third of the chart -- and the faulted zone is frequently the third by sort order,
+       so the one line the card exists to show was the one missing. Pinned now by 'every
+       CSS variable the UI references is defined'. */
+    --info:#4aa3ff;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg); color:var(--ink); }
+  header { padding:16px 22px; border-bottom:1px solid var(--line); display:flex;
+    align-items:center; gap:16px; }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
+  .accent { color:var(--accent); }
+  #active { margin-left:auto; font-size:13px; color:var(--muted); }
+  #active b { color:var(--ink); }
+  .pill { display:inline-block; padding:2px 10px; border-radius:12px; font-weight:600;
+    font-size:12px; }
+  .pill.east { background:#1d3a5f; color:#8ec8ff; }
+  .pill.west { background:#5f3a1d; color:#ffc48e; }
+  /* FIXED 3-column grid, not auto-fit. auto-fit with a 260px minimum allowed a 4th
+     column to form, and with five single-width cards one always wrapped alone and left a
+     ragged half-empty row. A fixed column count lets every row be filled deliberately:
+     each row below sums to exactly 3 (1+1+1, or 1+2, or a full-width span). */
+  main { padding:22px; display:grid; gap:16px; align-content:start;
+    grid-template-columns:repeat(3,1fr); max-width:1180px; }
+  @media (max-width:980px) { main { grid-template-columns:repeat(2,1fr); } }
+  @media (max-width:680px) { main { grid-template-columns:1fr; } }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:16px; }
+  .card h2 { margin:0 0 10px; font-size:12px; letter-spacing:.06em; text-transform:uppercase;
+    color:var(--muted); font-weight:600; }
+  .big { font-size:28px; font-weight:700; }
+  .sub { color:var(--muted); font-size:12px; margin-top:4px; }
+  .row { display:flex; justify-content:space-between; padding:4px 0;
+    border-top:1px solid var(--line); }
+  .row:first-of-type { border-top:0; }
+  .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); }
+  .na { color:var(--muted); font-style:italic; }
+  footer { padding:12px 22px; color:var(--muted); font-size:12px;
+    border-top:1px solid var(--line); }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
+  .wide { grid-column:1 / -1; }
+  .span2 { grid-column:span 2; }
+  @media (max-width:680px) { .span2 { grid-column:span 1; } }
+  .ctl { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; align-items:center; }
+  .btn { background:var(--accent); color:#1a1000; border:0; border-radius:6px;
+    padding:6px 12px; font:inherit; font-weight:600; cursor:pointer; }
+  .btn:hover { filter:brightness(1.1); }
+  .btn:disabled { opacity:.5; cursor:not-allowed; filter:none; }
+  .btn.ghost { background:transparent; color:var(--ink); border:1px solid var(--line); }
+  .btn.warnbtn { background:var(--warn); color:#1a1000; }
+  .btn.badbtn { background:var(--bad); color:#fff; }
+  select, input { background:#0d1828; color:var(--ink); border:1px solid var(--line);
+    border-radius:6px; padding:6px 8px; font:inherit; }
+  input { width:90px; }
+  input::placeholder { color:var(--muted); }
+  .out { margin-top:10px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:11px; white-space:pre-wrap; word-break:break-all; color:var(--muted);
+    max-height:170px; overflow:auto; }
+  .out.ok { color:var(--ok); } .out.bad { color:var(--bad); }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px;
+    background:#0d1828; padding:1px 4px; border-radius:3px; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="accent">Resilience</span> Cockpit <span class="sub">— eks-mr-demo</span></h1>
+  <div id="active">active region <span class="sub">(by observed traffic)</span>: <span id="activeRegion" class="na">loading…</span> <span class="sub" id="activeNote"></span></div>
+</header>
+<main>
+  <section class="card wide">
+    <h2>Client-perceived availability <span class="sub">(per minute, last 45 min)</span></h2>
+    <!-- Inline SVG, drawn by hand. NO charting library: this page is served by the Lambda
+         itself, reached only through the operator access door, so a CDN <script src> is
+         both a new external
+         dependency and one more thing that can fail closed in front of an audience.
+         This card REPLACED a pair of big current-percentage tiles -- the chart's last
+         point carries the same number, and the shape carries what the tiles could not:
+         whether a sag is deepening or already recovering, which is the actual failover
+         judgement. Current values are kept inline in the legend so nothing was lost. -->
+    <div id="availChart" class="na">loading…</div>
+    <div class="sub">
+      <span style="color:var(--ok)">■</span> reads <span id="readNow">—</span>
+      <span style="color:var(--accent)">■</span> writes <span id="writeNow">—</span>
+    </div>
+    <div class="sub">
+      the write line is the failover story: reads stay healthy while writes move regions
+      &middot; the dashed line is the 50% FIS guardrail: below it the experiment
+      self-terminates, so a useful fault stays above it
+    </div>
+  </section>
+
+  <section class="card wide">
+    <h2>Client-perceived availability by AZ
+      <span class="sub">(answered within <span id="sloLabel">—</span>, per minute, same 45 min)</span></h2>
+    <!-- THE BUSINESS CARD (2026-09-03). ONE chart, one axis, one question: what share of each
+         zone's customers were served acceptably? "Acceptably" means non-error AND inside the
+         SLO bar -- so a zone that answers every request in 2.2s counts as degraded, which it
+         is. The bar travels with the data (series.sloMs) and is printed above rather than
+         hand-typed, because a label that drifts from the definition it describes is worse
+         than no label.
+
+         WHAT THIS REPLACED, AND WHY. Two cards used to live here: per-AZ NLB target health,
+         and a per-AZ client-latency chart carrying a "2s health-check timeout" reference
+         line. Both were retired on the evidence of experiment EXPXEWF6Dbb2B6qiug: at the
+         calibrated brownout every target stayed HEALTHY, every request succeeded, aggregate
+         availability read 100.00%, and one zone's customers were waiting 2,240ms -- 24x
+         baseline. Three cards, and none of them said a zone was in trouble. The reference
+         line was actively misleading too: it invited a comparison between CLIENT latency and
+         a HEALTH-CHECK timeout, quantities separated by the ~3x request amplification.
+
+         The two retired signals did not vanish, they were demoted to their honest weight:
+         target health is the platform's competing verdict in the badge below (green while
+         this line sags -- that disagreement IS the gray failure, and it is also what covers
+         the BLACK fault, where the pod emitters die and this line gaps instead of diving),
+         and client p90 is a number in the tiles at the bottom, where magnitude is one glance
+         and needs no axis to misread. -->
+    <div id="platformBadge" class="sub">—</div>
+    <div id="azChart" class="na">loading…</div>
+    <div class="sub" id="azLegend">—</div>
+    <div class="sub" id="latTiles">—</div>
+  </section>
+
+  <!-- STATUS ROW: three single-width cards, so the row is exactly full. -->
+  <section class="card">
+    <h2>Replicas <span style="font-weight:normal;font-size:.8em">(ready/desired, ~1 min lag)</span></h2>
+    <div id="replicas" class="na">loading…</div>
+  </section>
+
+  <section class="card">
+    <h2>Aurora writer</h2>
+    <div id="aurora" class="big na">—</div>
+    <div class="sub">the database side of the switch</div>
+  </section>
+
+  <section class="card">
+    <h2>ARC region-switch plan</h2>
+    <div class="row"><span>evaluation</span><span id="arcEval" class="na">—</span></div>
+    <div class="row"><span>last execution</span><span id="arcExec" class="na">—</span></div>
+    <!-- Per-step progress. The execution status alone says "inProgress" for ten minutes;
+         the operator's one live decision (skip a wedged step / switch to ungraceful) needs
+         to know WHICH step is stuck. -->
+    <div id="arcSteps"></div>
+    <div class="sub" id="arcPlan"></div>
+  </section>
+
+  <!-- CONTROLS ROW: knob (1) + FIS (2) = 3. The FIS card is the wider of the two
+       because it carries the fault selector, the armed count and the note. -->
+  <section class="card">
+    <h2>Fault knob (error rate %)</h2>
+    <div class="row"><span id="knobEastLabel">us-east-2</span><span id="knobEast" class="na">—</span></div>
+    <div class="row"><span id="knobWestLabel">us-west-2</span><span id="knobWest" class="na">—</span></div>
+    <div class="ctl">
+      <select id="knobRegion" aria-label="knob region"></select>
+      <input id="knobRate" type="number" min="0" max="100" step="1" value="5"
+             aria-label="error rate percent" />
+      <button id="knobSet" class="btn">Set</button>
+      <button id="knobHeal" class="btn ghost">Heal (0%)</button>
+    </div>
+    <div class="sub">0 = healthy. Deterministic availability lever. The app caches the
+      value for 5s, so expect the change to land within ~5 seconds.</div>
+    <div class="out" id="knobOut"></div>
+  </section>
+
+  <section class="card span2">
+    <h2>FIS gray failure <span class="sub" id="fisRegion"></span></h2>
+    <div class="row"><span>nodes armed</span><span id="fisArmed" class="na">—</span></div>
+    <div class="row"><span>running experiments</span><span id="fisRunning" class="na">—</span></div>
+    <div class="ctl">
+      <button id="fisArm" class="btn">Arm nodes</button>
+      <button id="fisDisarm" class="btn ghost">Disarm</button>
+    </div>
+    <div class="ctl">
+      <select id="fisFault" aria-label="fault"></select>
+      <button id="fisStart" class="btn warnbtn">Start</button>
+      <button id="fisStop" class="btn ghost">Stop all</button>
+    </div>
+    <div class="sub" id="fisFaultNote"></div>
+    <div class="sub">Arming tags the nodes <code>ChaosAllowed=true</code>. Unarmed, an
+      experiment resolves zero targets and reports success having injected nothing —
+      so Start refuses until the fleet is armed. Start fans every per-AZ template of ONE
+      fault, because one sick AZ's correct answer is a zonal shift, not a Region switch.</div>
+    <!-- ZONAL SHIFT lives INSIDE the FIS card, deliberately: the fault and its mitigation
+         are ONE operator story (fault an AZ, watch its line dive, shift away, watch it
+         recover). A separate card would imply two independent controls and invite a shift
+         with no fault running — which the server refuses anyway (the shift always targets
+         the RUNNING fault's AZ, derived server-side; the page never chooses). -->
+    <div class="row" style="margin-top:8px"><span>zonal shift</span><span id="zsState" class="na">—</span></div>
+    <div class="ctl">
+      <input id="zsExpires" value="15m" size="4" aria-label="shift duration">
+      <button id="zsStart" class="btn warnbtn">Shift away from faulted AZ</button>
+      <button id="zsCancel" class="btn ghost">Cancel shift</button>
+    </div>
+    <div class="sub" id="zsNote"></div>
+    <div class="out" id="fisOut"></div>
+  </section>
+
+  <section class="card wide">
+    <h2>ARC failover</h2>
+    <div class="ctl">
+      <select id="foRegion" aria-label="target region"></select>
+      <select id="foMode" aria-label="mode">
+        <option value="graceful">graceful</option>
+        <option value="ungraceful">ungraceful</option>
+      </select>
+      <button id="foDry" class="btn">Dry run</button>
+      <button id="foGo" class="btn badbtn">Fail over</button>
+    </div>
+    <div class="sub">Dry run calls nothing — it renders the exact
+      <code>start-plan-execution</code> this would issue. The plan is activePassive with a
+      single <code>activate</code> workflow, so activating one region deactivates the other
+      as one sequenced cutover, and the API endpoint is always the region being activated.</div>
+    <div class="out" id="foOut"></div>
+    <details style="margin-top:10px">
+      <summary class="sub">Stuck step? Recovery options</summary>
+      <div class="ctl" style="margin-top:8px">
+        <input id="stExec" placeholder="executionId" aria-label="execution id" />
+        <input id="stStep" placeholder="stepName" aria-label="step name" />
+        <select id="stRegion" aria-label="endpoint region"></select>
+      </div>
+      <div class="ctl">
+        <button id="stSkip" class="btn ghost">skip</button>
+        <button id="stUngraceful" class="btn ghost">switchToUngraceful</button>
+      </div>
+      <div class="sub">Only these two exist. There is no retry action — confirmed live on
+        two separate executions where the EKS scale step exceeded its 20-minute budget.
+        Skipping it still lets Aurora switchover and the DNS shift complete.</div>
+      <div class="out" id="stOut"></div>
+    </details>
+  </section>
+
+</main>
+<footer>
+  <span class="dot" id="pollDot" style="background:var(--muted)"></span>
+  <span id="pollStatus">starting…</span> · status + chaos controls (PDD steps 0-4) ·
+  polls every 5s · every write needs a typed confirmation
+</footer>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function regionPill(r) {
+  if (!r) return '<span class="na">unknown</span>';
+  const cls = r.indexOf("east") >= 0 ? "east" : "west";
+  return '<span class="pill ' + cls + '">' + r + '</span>';
+}
+
+async function refresh() {
+  try {
+    const r = await fetch("/cockpit/api/status", { cache: "no-store" });
+    const s = await r.json();
+
+    // Active region comes from OBSERVED TRAFFIC (RegionSuccess/RegionError per Region),
+    // not a probe — see handler.py::_region_traffic. region can legitimately be null
+    // (load generator stopped), so render the reason instead of guessing a region.
+    const act = s.activeRegion || {};
+    if (act.available && act.region) {
+      $("activeRegion").innerHTML = regionPill(act.region);
+      $("activeNote").textContent = act.note ? "— " + act.note : "";
+    } else {
+      $("activeRegion").textContent = act.note || "n/a";
+      $("activeRegion").className = "na";
+      $("activeNote").textContent = "";
+    }
+
+
+    const a = s.aurora || {};
+    $("aurora").innerHTML = a.available ? regionPill(a.region) : '<span class="na">n/a</span>';
+
+    const arc = s.arc || {};
+    $("arcEval").textContent = arc.available ? (arc.evaluation || "—") : "n/a";
+    $("arcEval").className = arc.evaluation === "passed" ? "ok" : "warn";
+    $("arcExec").textContent = (arc.lastExecution && arc.lastExecution.status) || "none";
+    renderArcSteps(arc.lastExecution || {});
+    renderAvailChart(s.availabilitySeries || {});
+    // faultedAz is produced by the handler (_faulted_az, derived from the RUNNING experiment's
+    // template matched back to the threaded az=id pairs -- not from anything this page sent, so
+    // it survives a reload). Landed in the same change as its producer: bug class 6.
+    renderClientAzChart(s.availabilitySeries || {}, s.faultedAz || null);
+    renderPlatformBadge(s.availabilitySeries || {}, s.faultedAz || null);
+    renderLatencyTiles(s.availabilitySeries || {}, s.faultedAz || null);
+    $("arcPlan").textContent = arc.planArn ? arc.planArn.split("/").pop() : (arc.note || "");
+
+    const k = s.knob || {};
+    const east = k[s.primaryRegion] || {}, west = k[s.standbyRegion] || {};
+    $("knobEastLabel").textContent = s.primaryRegion;
+    $("knobWestLabel").textContent = s.standbyRegion;
+    $("knobEast").textContent = east.available ? east.rate + "%" : "n/a";
+    $("knobEast").className = east.rate > 0 ? "bad" : "ok";
+    $("knobWest").textContent = west.available ? west.rate + "%" : "n/a";
+    $("knobWest").className = west.rate > 0 ? "bad" : "ok";
+
+    const rep = s.replicas || {};
+    if (rep.available && rep.regions) {
+      // "us-east-2: 3/3 · us-west-2: 2/2" (ready/desired); a region without reporter
+      // data shows its note inline so one dead region never blanks the whole tile.
+      $("replicas").textContent = Object.entries(rep.regions)
+        .map(([r, v]) => r + ": " + (v.note ? v.note : (v.ready ?? "?") + "/" + (v.desired ?? "?")))
+        .join(" \u00b7 ");
+      $("replicas").className = "";
+    } else {
+      $("replicas").textContent = rep.note || "unavailable";
+      $("replicas").className = "na";
+    }
+
+    // --- control state -------------------------------------------------------------
+    // Populate the region selectors from the API rather than hardcoding, so a renamed
+    // region pair cannot leave the controls pointing at a region that does not exist.
+    if (!REGIONS.length) {
+      REGIONS = [s.primaryRegion, s.standbyRegion];
+      for (const id of ["knobRegion", "foRegion", "stRegion"]) {
+        $(id).innerHTML = REGIONS.map((r) => '<option value="' + r + '">' + r + "</option>").join("");
+      }
+      // Default the failover target to the region NOT currently serving traffic.
+      const serving = (s.activeRegion || {}).region;
+      if (serving && REGIONS.indexOf(serving) >= 0) {
+        $("foRegion").value = REGIONS[1 - REGIONS.indexOf(serving)];
+      }
+    }
+
+    const f = s.fis || {};
+    $("fisRegion").textContent = f.region ? "— " + f.region + " only" : "";
+    if (f.armed === null || f.armed === undefined) {
+      $("fisArmed").textContent = f.armedNote ? "n/a" : "—";
+      $("fisArmed").className = "na";
+      $("fisArmed").title = f.armedNote || "";
+    } else {
+      $("fisArmed").textContent = f.armed + " / " + f.nodeCount;
+      $("fisArmed").className = f.armed > 0 ? "warn" : "ok";
+    }
+    const running = f.running || [];
+    $("fisRunning").textContent = running.length
+      ? running.length + " (" + running.map((e) => e.state).join(", ") + ")" : "none";
+    $("fisRunning").className = running.length ? "warn" : "ok";
+    // Start is refused server-side when unarmed; disable it here too so the affordance
+    // matches the contract instead of inviting a 409.
+    $("fisStart").disabled = !(f.armed > 0);
+    if (!FAULTS_LOADED && f.faults) {
+      FAULTS_LOADED = true;
+      const names = Object.keys(f.faults);
+      $("fisFault").innerHTML = names.map((n) => {
+        const meta = f.faults[n];
+        const suffix = meta.movesAvailability ? "" : " (latency graph only)";
+        return '<option value="' + n + '">' + n + suffix + " — " +
+               meta.templateCount + " AZ templates</option>";
+      }).join("");
+      FAULT_META = f.faults;
+      renderFaultNote();
+    }
+
+    // Zonal shift tile (F5/F6). The countdown re-renders on a 1s local timer from the
+    // expiryTime stored here; this block only updates the stored state. The start
+    // button needs BOTH the control enabled (traffic in the primary, F6) AND a running
+    // single-AZ fault (the shift targets ITS AZ) — matching the server's contract so the
+    // affordance never invites a 409. The confirm token is the faulted AZ name.
+    const zs = s.zonalShift || {};
+    ZS_EXPIRY = zs.zonalShiftId ? zs.expiryTime : null;
+    FAULTED_AZ = s.faultedAz || null;
+    renderZsCountdown(zs);
+    $("zsNote").textContent = zs.available === false
+      ? ("shift status unavailable: " + (zs.note || ""))
+      : (zs.reason || (FAULTED_AZ ? "" : "start a single-AZ fault first — the shift targets its AZ"));
+    $("zsStart").disabled = !(zs.enabled && FAULTED_AZ);
+    $("zsCancel").disabled = !zs.zonalShiftId;
+
+    $("pollDot").style.background = "var(--ok)";
+    $("pollStatus").textContent = "updated " + new Date().toLocaleTimeString();
+  } catch (e) {
+    $("pollDot").style.background = "var(--bad)";
+    $("pollStatus").textContent = "status fetch failed: " + e;
+  }
+}
+
+// --- controls -------------------------------------------------------------------
+// Every write requires a TYPED confirmation, and the server enforces it independently —
+// the browser prompt is friction, the IAM grant and the access path are the authorization.
+let REGIONS = [];
+let FAULT_META = {};
+let FAULTS_LOADED = false;
+// Zonal shift state: last-known shift (for the tile) + expiry for the 1s countdown.
+let ZS_EXPIRY = null;
+let ZS_LAST = {};
+let FAULTED_AZ = null;
+
+function renderZsCountdown(zs) {
+  if (zs !== undefined) ZS_LAST = zs || {};
+  const el = $("zsState");
+  if (!ZS_LAST.zonalShiftId) {
+    el.textContent = "none";
+    el.className = "ok";
+    return;
+  }
+  // Live countdown, pure client-side arithmetic on the expiryTime the tile returned.
+  // Clamped at 0 rather than going negative: past expiry the service auto-cancels and
+  // the next 5s poll clears the tile.
+  let left = "";
+  const t = Date.parse(ZS_EXPIRY || "");
+  if (!isNaN(t)) {
+    const secs = Math.max(0, Math.floor((t - Date.now()) / 1000));
+    left = " · expires in " + Math.floor(secs / 60) + "m" + String(secs % 60).padStart(2, "0") + "s";
+  }
+  el.textContent = (ZS_LAST.status || "ACTIVE") + " away from " + ZS_LAST.awayFrom + left;
+  el.className = "warn";
+}
+setInterval(() => renderZsCountdown(), 1000);
+
+// Availability chart, drawn as inline SVG. Deliberately dependency-free: this page is
+// served by the Lambda, reached only through the operator access door, so pulling a
+// charting library from a CDN adds an external dependency that can fail closed mid-demo.
+function renderAvailChart(series) {
+  const el = $("availChart");
+  // CURRENT VALUES come from the series' last non-null point rather than a second
+  // CloudWatch call. Removing the old tiles removed two GetMetricData queries from every
+  // 5-second poll; re-adding them just to print a number would put them straight back.
+  const last = (arr) => {
+    if (!arr) return null;
+    for (let i = arr.length - 1; i >= 0; i--) if (arr[i] !== null && arr[i] !== undefined) return arr[i];
+    return null;
+  };
+  const label = (id, v) => {
+    const n = $(id);
+    if (v === null) { n.textContent = "idle"; n.className = "na"; return; }
+    n.textContent = v.toFixed(1) + "%";
+    n.className = v >= 99 ? "ok" : v >= 90 ? "warn" : "bad";
+  };
+  label("readNow", last(series.read));
+  label("writeNow", last(series.write));
+  if (!series.available || !series.minutes || !series.minutes.length) {
+    el.className = "na";
+    el.textContent = series.note || "no data yet";
+    return;
+  }
+  el.className = "";
+  const W = 720, H = 150, PAD = 26;
+  const n = series.minutes.length;
+  const x = (i) => PAD + (i * (W - PAD - 8)) / Math.max(1, n - 1);
+  // Fixed 0-100 y-axis: an autoscaled axis makes a 99.8% dip look like a catastrophe and a
+  // real 60% sag look mild. The decision thresholds only mean something on a fixed scale.
+  const y = (v) => H - PAD - (v / 100) * (H - PAD - 10);
+  // Gaps are REAL: a minute with no traffic is null, and the line must break rather than
+  // interpolate across it, or a stalled load generator reads as healthy.
+  const path = (vals) => {
+    let d = "", pen = false;
+    vals.forEach((v, i) => {
+      if (v === null || v === undefined) { pen = false; return; }
+      d += (pen ? " L " : " M ") + x(i).toFixed(1) + " " + y(v).toFixed(1);
+      pen = true;
+    });
+    return d.trim();
+  };
+  const guard = y(50), decide = y(99);
+  el.innerHTML =
+    '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" height="' + H + '" role="img" ' +
+      'aria-label="client-perceived availability per minute">' +
+      // axis
+      '<line x1="' + PAD + '" y1="' + y(0) + '" x2="' + (W - 8) + '" y2="' + y(0) +
+        '" stroke="var(--line)"/>' +
+      '<text x="2" y="' + (y(100) + 4) + '" fill="var(--muted)" font-size="10">100</text>' +
+      '<text x="2" y="' + (y(0) + 4) + '" fill="var(--muted)" font-size="10">0</text>' +
+      // the two thresholds that define the usable band
+      '<line x1="' + PAD + '" y1="' + decide + '" x2="' + (W - 8) + '" y2="' + decide +
+        '" stroke="var(--warn)" stroke-dasharray="2 3" opacity="0.7"/>' +
+      '<line x1="' + PAD + '" y1="' + guard + '" x2="' + (W - 8) + '" y2="' + guard +
+        '" stroke="var(--bad)" stroke-dasharray="4 4" opacity="0.8"/>' +
+      '<text x="' + (W - 60) + '" y="' + (guard - 3) + '" fill="var(--bad)" ' +
+        'font-size="9">50% guardrail</text>' +
+      '<path d="' + path(series.read) + '" fill="none" stroke="var(--ok)" stroke-width="2"/>' +
+      '<path d="' + path(series.write) + '" fill="none" stroke="var(--accent)" ' +
+        'stroke-width="2"/>' +
+      '<text x="' + PAD + '" y="' + (H - 6) + '" fill="var(--muted)" font-size="9">' +
+        series.minutes[0] + '</text>' +
+      '<text x="' + (W - 44) + '" y="' + (H - 6) + '" fill="var(--muted)" font-size="9">' +
+        series.minutes[n - 1] + '</text>' +
+    '</svg>';
+}
+
+function renderClientAzChart(series, faultedAz) {
+  const el = $("azChart"), legend = $("azLegend");
+  // THE HERO LINE (2026-09-03). Client-perceived availability: AzSloSuccess over everything
+  // attempted, i.e. the share of that zone's requests that were BOTH non-error AND answered
+  // inside series.sloMs. Reframed from NLB target health, which now sits in the badge above
+  // as the platform's competing verdict.
+  //
+  // Why this measure and not the error rate: the error rate reads 100% through a brownout,
+  // because a browned-out zone answers everything -- slowly. A chart that cannot distinguish
+  // "answered" from "answered acceptably" reports a 24x latency regression as perfect health,
+  // which is what it did live on 2026-09-03 before this change.
+  const azs = series.clientAz || {};
+  const names = Object.keys(azs).sort();
+  // The bar is PRINTED from the payload, never from a literal here: the emitter classifies
+  // with AZ_SLO_MS and this page only describes what it did, so a local constant would let
+  // the heading keep claiming "2s" after the definition moved (bug class 6, both directions).
+  if (series.sloMs) $("sloLabel").textContent = (series.sloMs / 1000) + "s";
+  if (!series.available || !series.minutes || !series.minutes.length || !names.length) {
+    el.className = "na";
+    el.textContent = series.note || "no per-AZ data yet";
+    legend.textContent = "—";
+    return;
+  }
+  el.className = "";
+  // Same geometry, same fixed 0-100 axis and same gap handling as the aggregate chart: an
+  // autoscaled per-AZ axis would make a 99.8% dip look catastrophic, and interpolating across
+  // a null would make a stalled emitter read as healthy.
+  const W = 720, H = 150, PAD = 26;
+  const n = series.minutes.length;
+  const x = (i) => PAD + (i * (W - PAD - 8)) / Math.max(1, n - 1);
+  const y = (v) => H - PAD - (v / 100) * (H - PAD - 10);
+  const path = (vals) => {
+    let d = "", pen = false;
+    vals.forEach((v, i) => {
+      if (v === null || v === undefined) { pen = false; return; }
+      d += (pen ? " L " : " M ") + x(i).toFixed(1) + " " + y(v).toFixed(1);
+      pen = true;
+    });
+    return d.trim();
+  };
+  const last = (arr) => {
+    if (!arr) return null;
+    for (let i = arr.length - 1; i >= 0; i--) if (arr[i] !== null && arr[i] !== undefined) return arr[i];
+    return null;
+  };
+  // Deliberately NOT a per-AZ colour scale keyed to AZ name: AZ names differ per region and
+  // a name-keyed palette would silently recolour the whole chart after a failover. Index
+  // order over the sorted names is stable within a region and obvious to read.
+  const colours = ["var(--ok)", "var(--accent)", "var(--info)", "var(--muted)"];
+  const guard = y(50), decide = y(99);
+  let svg =
+    '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" height="' + H + '" role="img" ' +
+      'aria-label="client-perceived availability per minute, by availability zone">' +
+      '<line x1="' + PAD + '" y1="' + y(0) + '" x2="' + (W - 8) + '" y2="' + y(0) +
+        '" stroke="var(--line)"/>' +
+      '<text x="2" y="' + (y(100) + 4) + '" fill="var(--muted)" font-size="10">100</text>' +
+      '<text x="2" y="' + (y(0) + 4) + '" fill="var(--muted)" font-size="10">0</text>' +
+      '<line x1="' + PAD + '" y1="' + decide + '" x2="' + (W - 8) + '" y2="' + decide +
+        '" stroke="var(--warn)" stroke-dasharray="2 3" opacity="0.7"/>' +
+      '<line x1="' + PAD + '" y1="' + guard + '" x2="' + (W - 8) + '" y2="' + guard +
+        '" stroke="var(--bad)" stroke-dasharray="4 4" opacity="0.8"/>';
+  names.forEach((az, i) => {
+    // The faulted AZ is drawn thicker so the eye lands on it without reading the legend --
+    // the whole point of the card is that the degraded zone is obvious. Until the single-AZ
+    // fault ships, faultedAz is always undefined and every line draws at the base weight.
+    const w = (faultedAz && az === faultedAz) ? 3 : 2;
+    svg += '<path d="' + path(azs[az]) + '" fill="none" stroke="' +
+      colours[i % colours.length] + '" stroke-width="' + w + '"/>';
+  });
+  svg +=
+      '<text x="' + PAD + '" y="' + (H - 6) + '" fill="var(--muted)" font-size="9">' +
+        series.minutes[0] + '</text>' +
+      '<text x="' + (W - 44) + '" y="' + (H - 6) + '" fill="var(--muted)" font-size="9">' +
+        series.minutes[n - 1] + '</text>' +
+    '</svg>';
+  el.innerHTML = svg;
+  legend.innerHTML = names.map((az, i) => {
+    const v = last(azs[az]);
+    const shown = v === null ? "idle" : v.toFixed(1) + "%";
+    const mark = (faultedAz && az === faultedAz) ? " (faulted)" : "";
+    return '<span style="color:' + colours[i % colours.length] + '">\u25a0</span> ' +
+      az + " " + shown + mark;
+  }).join(" &nbsp; ");
+}
+
+// PLATFORM VERDICT (2026-09-03). What the load balancer itself believes, rendered as TEXT
+// rather than as a second chart -- and the contradiction lands harder this way. Under a
+// brownout this badge reads "3 / 3 zones healthy" while the chart above shows one zone at
+// ~69%: the platform's probe pays ONE shaped network hop and passes, the customer pays
+// about three and does not. That disagreement IS the gray failure, and a green badge beside
+// a sagging line states it more plainly than two line charts the eye has to correlate.
+//
+// It also carries the BLACK fault, which the availability chart above cannot: stopping an
+// AZ's instances silences the pod emitters, so that line GAPS instead of diving, while this
+// badge -- published by the AWS-managed LB nodes, which survive the zone -- goes 2 / 3.
+function renderPlatformBadge(series, faultedAz) {
+  const el = $("platformBadge");
+  const azs = series.az || {};
+  const names = Object.keys(azs).sort();
+  const last = (arr) => {
+    if (!arr) return null;
+    for (let i = arr.length - 1; i >= 0; i--) if (arr[i] !== null && arr[i] !== undefined) return arr[i];
+    return null;
+  };
+  if (!series.available || !names.length) {
+    el.className = "sub";
+    el.textContent = "load balancer: no target data yet";
+    return;
+  }
+  // "idle" (null) is NOT counted as healthy. A zone with no registered targets is one we
+  // cannot vouch for, and rounding that up to healthy is how a dead zone reads as fine.
+  const healthy = names.filter((az) => last(azs[az]) === 100);
+  const degraded = names.filter((az) => { const v = last(azs[az]); return v !== null && v < 100; });
+  const ok = healthy.length === names.length;
+  const detail = degraded.length
+    ? " \u2014 " + degraded.map((az) => az + " " + last(azs[az]).toFixed(0) + "%").join(", ")
+    : "";
+  el.className = "";
+  el.innerHTML =
+    '<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:.85em;' +
+      'border:1px solid var(--line);background:transparent;color:' +
+      (ok ? "var(--ok)" : "var(--warn)") + '">' +
+      "load balancer: " + healthy.length + " / " + names.length + " zones healthy" + detail +
+    "</span>";
+}
+
+// Client p90 per AZ as NUMBERS, not a chart (2026-09-03). The magnitude is worth one glance
+// -- 2,240ms is WHY a zone reads 69% -- but it does not need an axis of its own, and the
+// axis is exactly what made the old latency card misleading: its "2s" reference line
+// invited a comparison between CLIENT latency and the HEALTH-CHECK timeout, two quantities
+// that differ by the ~3x request amplification and can never be read off one scale.
+function renderLatencyTiles(series, faultedAz) {
+  const el = $("latTiles");
+  const azs = series.latencyAz || {};
+  const names = Object.keys(azs).sort();
+  const last = (arr) => {
+    if (!arr) return null;
+    for (let i = arr.length - 1; i >= 0; i--) if (arr[i] !== null && arr[i] !== undefined) return arr[i];
+    return null;
+  };
+  if (!series.available || !names.length) {
+    el.className = "sub";
+    el.textContent = "\u2014";
+    return;
+  }
+  const slo = series.sloMs;
+  el.className = "sub";
+  el.innerHTML = names.map((az) => {
+    const v = last(azs[az]);
+    // Coloured against the SAME bar the chart divides by, so the tile and the line cannot
+    // tell different stories. Threshold comes from the payload, never a local literal.
+    const over = (v !== null && slo && v > slo);
+    const shown = v === null ? "idle" : (v >= 1000 ? (v / 1000).toFixed(2) + "s" : Math.round(v) + "ms");
+    const mark = (faultedAz && az === faultedAz) ? " (faulted)" : "";
+    return '<span style="margin-right:14px;color:' + (over ? "var(--warn)" : "var(--muted)") + '">' +
+      az + " p90 <b>" + shown + "</b>" + mark + "</span>";
+  }).join("");
+}
+
+function renderArcSteps(exec) {
+  const el = $("arcSteps");
+  if (!exec.steps || !exec.steps.length) {
+    el.innerHTML = exec.stepsNote
+      ? '<div class="sub na">' + exec.stepsNote + '</div>'
+      : "";
+    return;
+  }
+  const cls = (st) => {
+    const s = (st || "").toLowerCase();
+    if (s.includes("complet") || s.includes("success")) return "ok";
+    if (s.includes("fail") || s.includes("cancel")) return "bad";
+    if (s.includes("progress") || s.includes("pending") || s.includes("running")) return "warn";
+    return "na";
+  };
+  el.innerHTML = exec.steps.map((st, i) =>
+    '<div class="row"><span class="sub">' + (i + 1) + '. ' +
+      (st.name || "step") + '</span><span class="' + cls(st.status) + '">' +
+      (st.status || "—") + '</span></div>').join("") +
+    (exec.target ? '<div class="sub">target ' + exec.target +
+      (exec.mode ? " &middot; " + exec.mode : "") + '</div>' : "");
+}
+
+function renderFaultNote() {
+  const fault = $("fisFault").value;
+  const meta = FAULT_META[fault] || {};
+  // These strings are MEASURED, and two of them were inverted on 2026-09-01 after live
+  // testing: latency at the old 100ms genuinely could not move availability. The shipped
+  // 400ms straddles the app's 5s read timeout (delay is amplified ~12.3x by the per-read
+  // database round trips) so a FRACTION of reads fail — 500ms was tried and put EVERY read
+  // past the timeout, tripping the 50% guardrail and self-terminating the experiment.
+  // cpu-stress and memory-stress were REMOVED entirely rather than relabelled: stress-ng
+  // cannot install in these no-NAT subnets, so both delivered cleanly and moved nothing.
+  // Never let this text promise a dip a fault cannot deliver, and never let it deny one a
+  // fault does.
+  //
+  // The BROWNOUT gets its own branch for exactly that rule: the DB path is excluded by
+  // design, so the app's own timeouts are never crossed and the aggregate availability tile
+  // only RIPPLES. Its signal is the per-AZ CLIENT-PERCEIVED availability line, and the
+  // contradiction with the green target-health badge above it. The flap this text used to
+  // promise does NOT happen -- retracted 2026-09-04 after two live runs held 3/3 targets
+  // healthy -- and the generic movesAvailability text would overclaim.
+  $("fisFaultNote").innerHTML = fault === "brownout-single-az"
+    ? "<b>" + fault + "</b> is the GRAY beat: ~800ms &plusmn;400ms of latency on one AZ's " +
+      "pod&harr;NLB path, DB path untouched. That zone's CLIENT-PERCEIVED availability " +
+      "sags to ~66% (p90 ~2.2s, requests pay ~2.8 shaped round trips) while the other two " +
+      "hold at 100% &mdash; and the load-balancer badge stays GREEN, because the health " +
+      "check pays only ONE shaped hop and passes every time. Zero errors, nothing dies. " +
+      "The judgment call is the story: shift, or ride it out."
+    : meta.movesAvailability
+    ? "<b>" + fault + "</b> is calibrated to break the app's timeouts (5s read, 3s " +
+      "connect), so it SHOULD move the availability tile. Reads break before writes " +
+      "(~12.3x vs ~3.2x amplification). Allow a few minutes: the tile is a 5-minute " +
+      "rolling ratio, so it sags progressively rather than stepping."
+    : "<b>" + fault + "</b> moves the LATENCY graph ONLY, and cannot be cranked: the SSM " +
+      "document already runs all stressors at 100% load. This app is I/O bound on Aurora, " +
+      "so CPU pressure does not fail requests. Do not narrate it as an availability dip.";
+}
+
+function show(el, obj, ok) {
+  el.className = "out " + (ok ? "ok" : "bad");
+  el.textContent = typeof obj === "string" ? obj : JSON.stringify(obj, null, 1);
+}
+
+async function post(path, body, outEl) {
+  show(outEl, "working…", true);
+  try {
+    const r = await fetch(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    show(outEl, j, r.ok && j.ok !== false);
+    refresh();
+    return j;
+  } catch (e) {
+    show(outEl, "request failed: " + e, false);
+  }
+}
+
+// Returns the typed value, or null if the operator cancelled.
+function confirmTyped(expected, what) {
+  const v = window.prompt("Type " + expected + " to confirm " + what, "");
+  if (v === null) return null;
+  return v;
+}
+
+$("knobSet").onclick = () => {
+  const region = $("knobRegion").value;
+  const rate = parseInt($("knobRate").value, 10);
+  const c = confirmTyped(region, "setting the " + region + " error knob to " + rate + "%");
+  if (c === null) return;
+  post("/cockpit/api/knob", { region, rate, confirm: c }, $("knobOut"));
+};
+$("knobHeal").onclick = () => {
+  const region = $("knobRegion").value;
+  // Heal is still a write and still confirmed: setting the WRONG region back to 0 during
+  // a demo silently ends the injection everyone is watching.
+  const c = confirmTyped(region, "healing " + region + " (error knob to 0%)");
+  if (c === null) return;
+  post("/cockpit/api/knob", { region, rate: 0, confirm: c }, $("knobOut"));
+};
+
+$("fisArm").onclick = () => {
+  const c = confirmTyped("arm", "arming the node fleet (ChaosAllowed=true)");
+  if (c === null) return;
+  post("/cockpit/api/fis", { action: "arm", confirm: c }, $("fisOut"));
+};
+$("fisDisarm").onclick = () => {
+  const c = confirmTyped("disarm", "disarming the node fleet");
+  if (c === null) return;
+  post("/cockpit/api/fis", { action: "disarm", confirm: c }, $("fisOut"));
+};
+$("fisStart").onclick = () => {
+  const fault = $("fisFault").value;
+  const c = confirmTyped(fault, "starting " + fault + " on every AZ template");
+  if (c === null) return;
+  post("/cockpit/api/fis", { action: "start", fault, confirm: c }, $("fisOut"));
+};
+$("fisStop").onclick = () => post("/cockpit/api/fis", { action: "stop" }, $("fisOut"));
+$("fisFault").onchange = renderFaultNote;
+
+// Zonal shift: the confirm token is the FAULTED AZ NAME (the server re-derives the AZ
+// from the running experiment and requires typing exactly that name — so the operator
+// confirms the same AZ the shift will actually drain, not whatever the page believed).
+$("zsStart").onclick = () => {
+  const az = FAULTED_AZ;
+  if (!az) return;
+  const c = confirmTyped(az, "starting a zonal shift away from " + az);
+  if (c === null) return;
+  post("/cockpit/api/zonalshift", {
+    action: "start", expiresIn: $("zsExpires").value.trim() || "15m", confirm: c,
+  }, $("fisOut"));
+};
+$("zsCancel").onclick = () => post("/cockpit/api/zonalshift", { action: "cancel" }, $("fisOut"));
+
+$("foDry").onclick = () => post("/cockpit/api/failover", {
+  targetRegion: $("foRegion").value, mode: $("foMode").value, execute: false,
+}, $("foOut"));
+$("foGo").onclick = () => {
+  const target = $("foRegion").value;
+  const c = confirmTyped(target, "FAILING OVER to " + target);
+  if (c === null) return;
+  post("/cockpit/api/failover", {
+    targetRegion: target, mode: $("foMode").value, execute: true, confirm: c,
+  }, $("foOut"));
+};
+
+const stepRecover = (actionToTake) => post("/cockpit/api/step", {
+  actionToTake, executionId: $("stExec").value.trim(),
+  stepName: $("stStep").value.trim(), region: $("stRegion").value,
+}, $("stOut"));
+$("stSkip").onclick = () => stepRecover("skip");
+$("stUngraceful").onclick = () => stepRecover("switchToUngraceful");
+
+function tick() { refresh(); }
+tick();
+setInterval(tick, 5000);
+</script>
+</body>
+</html>
