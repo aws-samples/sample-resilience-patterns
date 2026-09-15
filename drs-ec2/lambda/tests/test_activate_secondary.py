@@ -2,7 +2,7 @@ import pytest
 
 from drs_region_switch import common as c
 from drs_region_switch import recover, register_target
-from tests.conftest import (PRIMARY, SECONDARY, SEC_TG, forward_server, recovery_instance, target)
+from tests.conftest import (SECONDARY, SEC_TG, forward_server, recovery_instance, target)
 
 
 def test_recover_starts_job_and_records_it(world):

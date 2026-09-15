@@ -90,7 +90,8 @@ def config() -> Config:
 
 ClientFactory = Callable[[str, str], Any]
 _clients: Dict[tuple, Any] = {}
-_factory: ClientFactory = lambda service, region: boto3.client(service, region_name=region)
+def _factory(service, region):
+    return boto3.client(service, region_name=region)
 
 
 def set_client_factory(factory: Optional[ClientFactory]) -> None:

@@ -4,9 +4,8 @@ Each test builds a ``World`` describing DRS/EC2/ELB state per region, then calls
 asserts on the outcome (return / RetryLater / StepFailed) and on the API calls recorded. The
 fakes implement only the operations the steps use, with the response shapes of the real APIs.
 """
-import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Tuple
+from typing import Dict, List, Tuple
 
 import pytest
 

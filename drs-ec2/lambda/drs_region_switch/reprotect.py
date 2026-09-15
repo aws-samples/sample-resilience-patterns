@@ -47,7 +47,7 @@ def handler(event, context):
         try:
             resp = drs_pri.reverse_replication(recoveryInstanceID=ri_pri["recoveryInstanceID"])
         except drs_pri.exceptions.ConflictException as e:
-            raise c.RetryLater(f"failback instance {failedback_ec2} still initializing: {e}")
+            raise c.RetryLater(f"failback instance {failedback_ec2} still initializing: {e}") from e
         c.log(STEP, "started re-protect", instanceId=failedback_ec2, reversedArn=resp.get("reversedDirectionSourceServerArn"))
         raise c.RetryLater(f"started re-protect replication for {failedback_ec2}")
 

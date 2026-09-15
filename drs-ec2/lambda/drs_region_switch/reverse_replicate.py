@@ -38,7 +38,7 @@ def handler(event, context):
         try:
             resp = drs_sec.reverse_replication(recoveryInstanceID=ri["recoveryInstanceID"])
         except drs_sec.exceptions.ConflictException as e:
-            raise c.RetryLater(f"recovery instance still initializing: {e}")
+            raise c.RetryLater(f"recovery instance still initializing: {e}") from e
         c.log(STEP, "started reversed replication", recoveryInstanceID=ri["recoveryInstanceID"],
               reversedArn=resp.get("reversedDirectionSourceServerArn"))
         raise c.RetryLater("started reversed replication; full block copy in progress")

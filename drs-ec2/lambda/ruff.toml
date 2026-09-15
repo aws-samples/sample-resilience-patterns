@@ -1,0 +1,6 @@
+line-length = 130
+target-version = "py39"
+[lint]
+select = ["E", "F", "W", "B"]
+[lint.per-file-ignores]
+"tests/conftest.py" = ["E701", "E702"]   # one-line fake-client methods are deliberate
