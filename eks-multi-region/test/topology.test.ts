@@ -4156,6 +4156,19 @@ describe('third-party image mirror (step 10a)', () => {
     expect(mk).toMatch(/buckets:[\s\S]*for r in \$\(BUCKET_REGIONS\)/);
     expect(cleanup).toMatch(/for r in "\$PRIMARY" "\$SECONDARY" "\$OBSERVER"; do\n\s+b="\$ASSETS_BUCKET_PREFIX-\$r"/);
     expect(cleanup.match(/OBSERVER="\$\{OBSERVER_REGION:-([a-z0-9-]+)\}"/)?.[1]).toBe(mk.match(/^OBSERVER_REGION \?= (\S+)$/m)?.[1]);
+    // Bug class 25: the CLI applies --query per page, so any length()/sort_by/max_by
+    // inside a --query on a list/describe is a latent per-page aggregation. cleanup.sh
+    // counts client-side (wc -w) -- proven live: the stuck region stack paginated into
+    // two pages and length(@) yielded "0\n0", which an exact compare rejected.
+    expect(cleanup).not.toMatch(/--query[^\n]*length\(/);
+    expect(cleanup).toMatch(/AWS::EKS::Cluster[^\n]*\n[^\n]*\| wc -w/);
+    // The orphan sweep must run BEFORE the region-stack wave (ENIs pin the subnets)
+    // and again after it (retain fallback).
+    const regionWave = cleanup.indexOf('delete_wave "$PRIMARY:$PROJECT-region-$PRIMARY"');
+    const sweeps = [...cleanup.matchAll(/sweep_eks "\$r"/g)].map((m) => m.index!);
+    expect(sweeps.length).toBe(2);
+    expect(sweeps[0]).toBeLessThan(regionWave);
+    expect(sweeps[1]).toBeGreaterThan(regionWave);
     // And the fan-out must run before any stack deploy: deploy:upload (which
     // spawns deploy:s3) stays Phase 1.
     const upload = tasks.tasks['deploy:upload'];
