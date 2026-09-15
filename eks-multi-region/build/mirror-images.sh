@@ -116,6 +116,47 @@ fi
 
 # ---- helpers --------------------------------------------------------------
 
+# Run a `crane copy` with bounded exponential backoff on registry rate limits.
+# Retries ONLY on the throttling signatures (HTTP 429 / TOOMANYREQUESTS / "Rate
+# exceeded" / "rate limit"); any other failure surfaces immediately, because a
+# wrong digest or a denied push must not be retried into a pass.
+copy_with_retry() {
+  local attempt=1 max=5 delay=10 out
+  while :; do
+    if out=$("$@" 2>&1); then
+      printf '%s\n' "$out"
+      return 0
+    fi
+    printf '%s\n' "$out"
+    if [ "$attempt" -ge "$max" ] \
+       || ! printf '%s' "$out" | grep -qiE 'TOOMANYREQUESTS|rate exceeded|rate limit|status 429|: 429'; then
+      return 1
+    fi
+    echo "    rate-limited by upstream (attempt $attempt/$max); retrying in ${delay}s"
+    sleep "$delay"
+    attempt=$((attempt + 1)); delay=$((delay * 2))
+  done
+}
+
+# Authenticate to ECR Public once. Anonymous pulls from public.ecr.aws are
+# rate-limited per source IP, and a CI runner shares its egress IP with many other
+# jobs -- five of the eight mirrored images come from there. An authenticated
+# session gets a far higher limit. BEST-EFFORT: the token needs
+# ecr-public:GetAuthorizationToken, which a local operator's identity may lack; in
+# that case say so and continue anonymously (the retry above still applies).
+# ECR Public tokens are issued only from us-east-1.
+login_ecr_public() {
+  if [ "$DRY_RUN" = "true" ]; then return 0; fi
+  if aws ecr-public get-login-password --region us-east-1 2>/dev/null \
+       | crane auth login --username AWS --password-stdin public.ecr.aws >/dev/null 2>&1; then
+    echo "Authenticated to public.ecr.aws (lifts the anonymous pull rate limit)"
+  else
+    echo "WARNING: could not authenticate to public.ecr.aws (needs ecr-public:GetAuthorizationToken);"
+    echo "         pulling anonymously -- rate limits are lower, retries will cover transient 429s"
+  fi
+}
+login_ecr_public
+
 ensure_repo() {
   local region="$1" repo="$2"
   if aws ecr describe-repositories --region "$region" --repository-names "$repo" >/dev/null 2>&1; then
@@ -227,10 +268,17 @@ while IFS="$(printf '\t')" read -r NAME UPSTREAM TAG DIGEST ARM64_DIGEST REPO; d
     # platforms — 8, 5 and 8 of them respectively. Flattening to one platform, the
     # default, never touches them. MIRROR_FULL_INDEX=true does, and if ECR rejects
     # them the copy fails LOUDLY here in CI rather than at demo time.
+    #
+    # BOUNDED RETRY. Every upstream here (public.ecr.aws, quay.io, ghcr.io,
+    # registry.k8s.io) rate-limits anonymous pulls, and a CI runner shares its egress
+    # IP with many others: e2e iteration 2 died on the SECOND image with
+    # "TOOMANYREQUESTS: Rate exceeded" from public.ecr.aws. A 429 is transient by
+    # definition, so retry with backoff (5 attempts, 10s..160s) instead of failing a
+    # 90-minute deploy on it. Any other error still fails on the first attempt.
     if [ -n "$MIRROR_PLATFORM" ]; then
-      crane copy --platform "$MIRROR_PLATFORM" "${UPSTREAM}@${DIGEST}" "$DEST"
+      copy_with_retry crane copy --platform "$MIRROR_PLATFORM" "${UPSTREAM}@${DIGEST}" "$DEST"
     else
-      crane copy "${UPSTREAM}@${DIGEST}" "$DEST"
+      copy_with_retry crane copy "${UPSTREAM}@${DIGEST}" "$DEST"
     fi
 
     # Read back. Whatever mode was used, the digest that landed must be the one

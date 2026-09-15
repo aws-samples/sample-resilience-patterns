@@ -69,6 +69,15 @@
       "Resource": "*"
     },
     {
+      "Sid": "EcrPublicAuthenticatedPulls",
+      "Effect": "Allow",
+      "Action": [
+        "ecr-public:GetAuthorizationToken",
+        "sts:GetServiceBearerToken"
+      ],
+      "Resource": "*"
+    },
+    {
       "Sid": "InVpcInstallerBuilds",
       "Effect": "Allow",
       "Action": [
