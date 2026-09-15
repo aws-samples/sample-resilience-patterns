@@ -238,7 +238,23 @@ export function createDeployTasks(
   // only shape that is both dax-safe and testable. When no regions are supplied
   // the original single-$AWS_REGION step is emitted BIT-FOR-BIT (green-baseline
   // invariant, see the parity note near the bottom of this file).
-  const syncRegions = (regions ?? []).map((r) => r.name);
+  // EVERY REGION A STACK DEPLOYS INTO, not just regions[]. The 7th gap was fixed
+  // for the workload regions only; the observer stack (a singleton in a THIRD
+  // region) hit the identical failure on 2026-09-15 -- "S3 error: The specified
+  // bucket does not exist" at create-change-set, after five stacks had already
+  // deployed. CloudFormation reads the template from the bucket in the STACK's
+  // region, so the set of buckets to populate is the set of regions any singleton
+  // or post-deploy stack names, unioned with regions[]. Derived here so a future
+  // stack in a fourth region cannot repeat this; the Makefile's `buckets` target
+  // and cleanup.sh read the same set from the generated task (a test pins all
+  // three to it).
+  const syncRegions = [
+    ...new Set([
+      ...(regions ?? []).map((r) => r.name),
+      ...(loadGenOpts.singletons ?? []).map((s) => s.region),
+      ...(loadGenOpts.postDeployStacks ?? []).map((s) => s.region),
+    ]),
+  ];
   const syncSteps =
     syncRegions.length >= 2
       ? syncRegions.map((name) => ({
