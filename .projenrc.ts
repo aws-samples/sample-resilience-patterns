@@ -567,7 +567,11 @@ const patterns: Pattern[] = [
       },
       {
         name: 'Pre-flight cleanup (idempotent)',
-        run: 'chmod +x cleanup.sh && ./cleanup.sh || true',
+        // No `|| true`: cleanup.sh exits 0 when nothing is left and non-zero when a
+        // stack remains. Run 9 tolerated a failed cleanup and then tried to UPDATE a
+        // DELETE_FAILED region stack -- a two-hour teardown followed by an instant
+        // ValidationError. Stop here instead, with cleanup's own diagnosis in the log.
+        run: 'chmod +x cleanup.sh && ./cleanup.sh',
       },
       {
         name: 'Create assets buckets',

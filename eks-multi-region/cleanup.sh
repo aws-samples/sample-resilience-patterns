@@ -41,8 +41,14 @@ begin_delete() {
 # within a minute or two. e2e iteration 6 (2026-09-15) hit exactly that on the
 # EKS cluster; the old code went straight to --retain-resources, which left an
 # ACTIVE cluster outside any stack -- its ENIs pinned the subnets, and the next
-# deploy would have collided on the cluster name. Only a second failure falls
-# back to retaining, and retained EKS clusters are swept explicitly below.
+# deploy would have collided on the cluster name.
+#
+# For the REGION stacks the first delete always fails on the VPC, and retaining is
+# never the answer: the VPC "has dependencies" that no stack owns -- see
+# drain_cluster_externals. So a region stack gets drain + plain re-delete, and a
+# second failure is reported with the resources that failed and counted (the script
+# exits non-zero), never retained. Only the other stacks keep the retain fallback.
+FAILED_STACKS=""
 wait_deleted() {
   local entry region stack status
   for entry in "$@"; do
@@ -53,8 +59,16 @@ wait_deleted() {
       status=$(aws cloudformation describe-stacks --region "$region" --stack-name "$stack" \
         --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo GONE)
       if [ "$status" = "DELETE_FAILED" ]; then
-        echo "  retry  $region $stack (DELETE_FAILED -> plain re-delete after 90s; transient 409s clear)"
-        sleep 90
+        case "$stack" in
+          "$PROJECT-region-"*)
+            echo "  retry  $region $stack (DELETE_FAILED -> drain what the cluster left in the VPC, then plain re-delete)"
+            drain_cluster_externals "$region"
+            ;;
+          *)
+            echo "  retry  $region $stack (DELETE_FAILED -> plain re-delete after 90s; transient 409s clear)"
+            sleep 90
+            ;;
+        esac
         aws cloudformation delete-stack --region "$region" --stack-name "$stack"
         if aws cloudformation wait stack-delete-complete --region "$region" --stack-name "$stack" 2>/dev/null; then
           continue
@@ -62,23 +76,133 @@ wait_deleted() {
         status=$(aws cloudformation describe-stacks --region "$region" --stack-name "$stack" \
           --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo GONE)
         [ "$status" = "DELETE_FAILED" ] || continue
-        echo "  retry  $region $stack (DELETE_FAILED again -> retain failed resources)"
-        failed=$(aws cloudformation describe-stack-resources --region "$region" --stack-name "$stack" \
-          --query "StackResources[?ResourceStatus=='DELETE_FAILED'].LogicalResourceId" --output text)
-        # shellcheck disable=SC2086
-        aws cloudformation delete-stack --region "$region" --stack-name "$stack" --retain-resources $failed
-        aws cloudformation wait stack-delete-complete --region "$region" --stack-name "$stack" || \
-          echo "  WARN   $region $stack still present; inspect manually" >&2
+        case "$stack" in
+          "$PROJECT-region-"*)
+            echo "  FAIL   $region $stack still DELETE_FAILED after the drain; resources:" >&2
+            aws cloudformation describe-stack-resources --region "$region" --stack-name "$stack" \
+              --query "StackResources[?ResourceStatus=='DELETE_FAILED'].[LogicalResourceId,PhysicalResourceId,ResourceStatusReason]" \
+              --output text >&2 || true
+            FAILED_STACKS="$FAILED_STACKS $region:$stack"
+            ;;
+          *)
+            echo "  retry  $region $stack (DELETE_FAILED again -> retain failed resources)"
+            failed=$(aws cloudformation describe-stack-resources --region "$region" --stack-name "$stack" \
+              --query "StackResources[?ResourceStatus=='DELETE_FAILED'].LogicalResourceId" --output text)
+            # shellcheck disable=SC2086
+            aws cloudformation delete-stack --region "$region" --stack-name "$stack" --retain-resources $failed
+            aws cloudformation wait stack-delete-complete --region "$region" --stack-name "$stack" || {
+              echo "  WARN   $region $stack still present; inspect manually" >&2
+              FAILED_STACKS="$FAILED_STACKS $region:$stack"
+            }
+            ;;
+        esac
       fi
     fi
   done
+}
+
+# Resources that Kubernetes CONTROLLERS created inside the cluster's VPC. No stack owns
+# them, and they outlive the cluster: once CloudFormation has deleted the EKS cluster,
+# nothing is left running to reconcile them away, so they pin the VPC and the region
+# stack ends DELETE_FAILED on "The vpc has dependencies" -- every time, on every
+# teardown, not only after a failed run (e2e run 9, 2026-09-15: both regions).
+#   * Karpenter's nodes: EC2 instances it launched for the NodePool (the managed
+#     nodegroup's nodes are stack-owned and go with the nodegroup). Tagged
+#     karpenter.sh/nodepool + kubernetes.io/cluster/<cluster>=owned.
+#   * The AWS Load Balancer Controller's NLBs (one per Service of type LoadBalancer:
+#     orders-api, argocd-server), their target groups, and its security groups (one
+#     managed SG per NLB plus the shared backend SG). Tagged elbv2.k8s.aws/cluster.
+#   * The EKS-created cluster security group, which EKS leaves behind when a node ENI
+#     still references it. Tagged aws:eks:cluster-name.
+# Selection is BY THOSE TAGS, which the controllers write themselves, so a renamed
+# Service or a second NodePool is still swept; the runner's IAM grants for these deletes
+# are conditioned on the same tag keys (docs/iam/github-actions-role-policy.json), and
+# test/topology.test.ts pins the two sets of keys to each other. Only meaningful once
+# the cluster is gone: while it runs, Karpenter replaces terminated nodes and the LBC
+# recreates deleted NLBs -- which is why this lives in the DELETE_FAILED path and not
+# before the stack delete. Idempotent: nothing found -> nothing done.
+drain_cluster_externals() {
+  local region="$1"
+  local cluster="$PROJECT-$region" ids arns sg pass
+  if [ "$(aws eks describe-cluster --region "$region" --name "$cluster" --query 'cluster.status' --output text 2>/dev/null || echo ABSENT)" != "ABSENT" ]; then
+    echo "  drain  $region $cluster still exists; its controllers would recreate what we delete -- skipping" >&2
+    return 0
+  fi
+  # Karpenter nodes.
+  ids=$(aws ec2 describe-instances --region "$region" \
+    --filters "Name=tag-key,Values=karpenter.sh/nodepool" "Name=tag:kubernetes.io/cluster/$cluster,Values=owned" \
+              "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+    --query 'Reservations[].Instances[].InstanceId' --output text | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//')
+  if [ -n "$ids" ]; then
+    echo "  drain  $region karpenter nodes: $ids -> terminate"
+    # shellcheck disable=SC2086
+    aws ec2 terminate-instances --region "$region" --instance-ids $ids >/dev/null
+  fi
+  # Load Balancer Controller NLBs and target groups: list all, keep those tagged for
+  # this cluster (describe-tags takes up to 20 ARNs per call).
+  arns=$(lbc_tagged "$region" "$cluster" \
+    "$(aws elbv2 describe-load-balancers --region "$region" --query 'LoadBalancers[].LoadBalancerArn' --output text)")
+  local arn; for arn in $arns; do
+    echo "  drain  $region ${arn##*loadbalancer/} -> delete"
+    aws elbv2 delete-load-balancer --region "$region" --load-balancer-arn "$arn"
+  done
+  arns=$(lbc_tagged "$region" "$cluster" \
+    "$(aws elbv2 describe-target-groups --region "$region" --query 'TargetGroups[].TargetGroupArn' --output text)")
+  for arn in $arns; do
+    echo "  drain  $region ${arn##*targetgroup/} -> delete"
+    aws elbv2 delete-target-group --region "$region" --target-group-arn "$arn"
+  done
+  # Their ENIs release a minute or two after the NLB and the instances go.
+  if [ -n "$ids$arns" ]; then
+    # shellcheck disable=SC2086
+    [ -z "$ids" ] || aws ec2 wait instance-terminated --region "$region" --instance-ids $ids
+    for pass in $(seq 1 40); do
+      [ "$(aws ec2 describe-network-interfaces --region "$region" \
+            --filters "Name=description,Values=ELB net/k8s-*" \
+            --query 'NetworkInterfaces[].NetworkInterfaceId' --output text | wc -w)" -eq 0 ] && break
+      sleep 15
+    done
+  fi
+  # Security groups: the LBC's and the EKS cluster SG. Their rules reference each
+  # other, so delete in passes until none is left rather than ordering them by hand.
+  for pass in 1 2 3 4 5; do
+    ids=$(aws ec2 describe-security-groups --region "$region" \
+      --filters "Name=tag:elbv2.k8s.aws/cluster,Values=$cluster" --query 'SecurityGroups[].GroupId' --output text
+      aws ec2 describe-security-groups --region "$region" \
+      --filters "Name=tag:aws:eks:cluster-name,Values=$cluster" --query 'SecurityGroups[].GroupId' --output text)
+    ids=$(echo "$ids" | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//')
+    [ -n "$ids" ] || break
+    for sg in $ids; do
+      if aws ec2 delete-security-group --region "$region" --group-id "$sg" 2>/dev/null; then
+        echo "  drain  $region $sg -> deleted"
+      fi
+    done
+    sleep 10
+  done
+  [ -z "$ids" ] || echo "  WARN   $region security groups still present after 5 passes: $ids" >&2
+}
+
+# Filter a whitespace-separated list of ELBv2 ARNs down to those tagged
+# elbv2.k8s.aws/cluster=<cluster>. describe-tags accepts at most 20 ARNs per call.
+lbc_tagged() {
+  local region="$1" cluster="$2" all="$3" batch
+  [ -n "$all" ] || return 0
+  echo "$all" | tr -s '[:space:]' '\n' | sed '/^$/d' | xargs -n 20 | while read -r batch; do
+    # shellcheck disable=SC2086
+    aws elbv2 describe-tags --region "$region" --resource-arns $batch \
+      --query "TagDescriptions[?Tags[?Key=='elbv2.k8s.aws/cluster' && Value=='$cluster']].ResourceArn" --output text
+  done | tr -s '[:space:]' ' '
 }
 
 # A retained EKS cluster is not a leak you can live with: the next deploy creates a
 # cluster with the SAME name and EKS refuses. Delete any cluster the rail would
 # name, whether or not a stack still owns it (idempotent: absent -> no-op).
 sweep_eks() {
-  local region="$1" name="$PROJECT-$region" status
+  # Two statements on purpose: bash expands every word of a `local` line BEFORE the
+  # builtin assigns any of them, so `local region="$1" name="$PROJECT-$region"` reads
+  # an unset $region and aborts under set -u (e2e run 9, masked by the step's || true).
+  local region="$1"
+  local name="$PROJECT-$region" status
   status=$(aws eks describe-cluster --region "$region" --name "$name" --query 'cluster.status' --output text 2>/dev/null || echo ABSENT)
   case "$status" in
     ABSENT|DELETING) return 0 ;;
@@ -153,4 +277,19 @@ for r in "$PRIMARY" "$SECONDARY" "$OBSERVER"; do
   fi
 done
 
+# ---- 6. nothing may remain --------------------------------------------------------------
+# A stack left behind is a hard failure, not a warning: run 9 deployed onto a
+# DELETE_FAILED region stack because the pre-flight step tolerated this script's exit
+# code. Idempotent success (nothing existed) still exits 0.
+for r in "$PRIMARY" "$SECONDARY" "$OBSERVER"; do
+  left=$(aws cloudformation list-stacks --region "$r" \
+    --stack-status-filter CREATE_COMPLETE CREATE_FAILED CREATE_IN_PROGRESS ROLLBACK_COMPLETE ROLLBACK_FAILED \
+      UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE UPDATE_ROLLBACK_FAILED DELETE_FAILED DELETE_IN_PROGRESS REVIEW_IN_PROGRESS \
+    --query "StackSummaries[?starts_with(StackName, '$PROJECT-')].StackName" --output text | tr -s '[:space:]' ' ')
+  [ -z "${left// /}" ] || FAILED_STACKS="$FAILED_STACKS $r:$left"
+done
+if [ -n "${FAILED_STACKS// /}" ]; then
+  echo "cleanup: FAILED -- stacks remain:$FAILED_STACKS" >&2
+  exit 1
+fi
 echo "cleanup: done"
