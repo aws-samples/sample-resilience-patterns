@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Multi-cycle proof for drs-mr-demo: run N legs alternating ACTIVATE us-west-2 / ACTIVATE
+# Multi-cycle proof for drs-ec2: run N legs alternating ACTIVATE us-west-2 / ACTIVATE
 # us-east-2 through the ARC plan, and after EVERY fail-back assert the resting-state invariant:
 #   * exactly one FAILOVER source server tagged drsdemo:role=app in the secondary, CONTINUOUS,
 #     protecting the SAME primary EC2 id as before the cycle;

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end DRS setup for drs-mr-demo, driven entirely from here (no host SSH):
+# End-to-end DRS setup for drs-ec2, driven entirely from here (no host SSH):
 #   1. Initialize DRS in the SECONDARY region (us-west-2) + create a replication template
 #      pinned to the real staging subnet.
 #   2. Wait for the app EC2 (primary region) to exist and register with SSM.
@@ -131,7 +131,7 @@ if [[ -z "${SKIP_INSTALL:-}" ]]; then
     "./aws-replication-installer-init --region ${SECONDARY} --no-prompt; rc=\$?; echo INSTALLER_EXIT=\$rc; exit \$rc")
   CMDID=$(aws ssm send-command --region "$PRIMARY" --instance-ids "$IID" \
     --document-name "AWS-RunShellScript" \
-    --comment "drs-mr-demo DRS agent install" \
+    --comment "drs-ec2 DRS agent install" \
     --parameters "{\"commands\":$CMDS,\"executionTimeout\":[\"1200\"]}" \
     --timeout-seconds 1200 --query 'Command.CommandId' --output text)
   echo "send-command id: $CMDID"

@@ -1,0 +1,43 @@
+# Third-party components
+
+This pattern is licensed MIT-0 (see ../LICENSE). It does not vendor third-party source; the
+components below are fetched at build, deploy or instance-boot time from their public
+registries under the licenses listed.
+
+## Build / deploy (npm, `package.json`)
+
+| Component | License | Use |
+|-----------|---------|-----|
+| aws-cdk-lib, aws-cdk, constructs | Apache-2.0 | CDK app and construct |
+| cdk-nag | Apache-2.0 | Security rule checks at synth |
+| projen, jest, ts-jest, typescript, @types/* | Apache-2.0 / MIT | Project scaffolding and tests |
+
+## Lambda step functions (`lambda/`)
+
+| Component | License | Use |
+|-----------|---------|-----|
+| boto3 / botocore | Apache-2.0 | Provided by the Lambda Python 3.12 runtime; not packaged |
+| pytest, ruff | MIT | Development only |
+
+## Demo application (installed on the EC2 at boot by `pip3`, see `lib/app-primary-stack.ts`)
+
+| Component | License | Use |
+|-----------|---------|-----|
+| Flask | BSD-3-Clause | HTTP server for the demo app and its `/ui` console |
+| psycopg2-binary | LGPL-3.0 with OpenSSL exception (linking exception) | PostgreSQL client for the Aurora heartbeat table |
+| boto3 / botocore | Apache-2.0 | SSM parameter, IMDS-region and DRS/ARC status reads |
+| postgresql15 (client tools) | PostgreSQL License | Installed via `dnf` for operator convenience |
+
+## Terraform module (`terraform/`)
+
+| Component | License | Use |
+|-----------|---------|-----|
+| hashicorp/aws provider | MPL-2.0 (>= 6.0) | `aws_lambda_*`, `aws_iam_*`, `aws_arcregionswitch_plan` |
+| hashicorp/archive provider | MPL-2.0 | Builds the Lambda layer zip from `lambda/drs_region_switch/` |
+
+## Documentation tooling (not deployed)
+
+| Component | License | Use |
+|-----------|---------|-----|
+| diagrams (mingrammer) | MIT | `scripts/gen-*-diagram.py` regenerate `docs/*.png` |
+| Graphviz | EPL-1.0 | Renderer used by `diagrams` |

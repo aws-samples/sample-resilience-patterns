@@ -1,0 +1,38 @@
+%% drs-ec2 — stateful EC2 fail-back (ARC activate us-east-2). Read left → right: data and
+%% traffic come home from the secondary to the primary. Red = ARC plan steps ①–⑥; green = data.
+flowchart LR
+    dns["Route 53 private zone<br/>app.drsdemo.internal<br/>failover record pair"]
+    arc(["ARC Region Switch plan<br/>fail-back workflow (6 steps)"])
+
+    subgraph WEST["us-west-2 (secondary) — serving since failover"]
+        albW["ALB"]
+        ec2W["recovered EC2<br/>(carrying local state)"]
+        stageW["DRS staging<br/>(original source server, reused)"]
+        aurW[("Aurora Global<br/>writer → reader")]
+        albW --> ec2W -->|reads / writes| aurW
+    end
+
+    subgraph EAST["us-east-2 (primary) — receiving fail-back"]
+        albE["ALB"]
+        fbSrc["FAILBACK source server<br/>(new; disks copied home)"]
+        ec2FB["failed-back EC2<br/>(launched from ②)"]
+        aurE[("Aurora Global<br/>reader → writer")]
+        albE -.-> ec2FB -.-> aurE
+    end
+
+    dns -->|hc B| albW
+    dns -.->|hc A| albE
+
+    ec2W ==>|"① reversed block replication<br/>(full copy, then RESCAN)"| fbSrc
+    aurW ==>|"④ Aurora Global switchover-back"| aurE
+    ec2FB -. "⑥ re-protect (RESCAN)" .-> stageW
+
+    arc -->|①| ec2W
+    arc -->|②| fbSrc
+    arc -->|③| albE
+    arc -->|④| aurE
+    arc -->|⑤| dns
+    arc -->|⑥| ec2FB
+
+    linkStyle 6,7,8 stroke:#2e7d32,stroke-width:2px;
+    linkStyle 9,10,11,12,13,14 stroke:#b00020,stroke-width:2px;

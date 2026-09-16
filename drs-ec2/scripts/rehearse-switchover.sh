@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Automated SWITCHOVER rehearsal for drs-mr-demo. Proves the full ARC Region Switch flow,
+# Automated SWITCHOVER rehearsal for drs-ec2. Proves the full ARC Region Switch flow,
 # then fails back so the demo returns to its resting state (primary = us-east-2).
 #
 # Steps:

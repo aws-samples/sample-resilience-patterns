@@ -216,7 +216,7 @@ export class DrsRegionSwitchPlanSteps extends Construct {
   }
 }
 
-/** The orchestration role policy proven live (drs-mr-demo, 2026-09-10..14). */
+/** The orchestration role policy proven live through repeated fail-over/fail-back cycles, both modes. */
 function orchestrationPolicy(scope: Construct, cfg: DrsRegionSwitchConfig): iam.Policy {
   const stack = Stack.of(scope);
   const partition = stack.partition;

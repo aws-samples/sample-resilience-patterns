@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-drs-mr-demo minimal app.
+drs-ec2 minimal app.
 
 Endpoints:
   GET /        -> INSERT a heartbeat row + SELECT it back; return JSON with the serving

@@ -17,6 +17,7 @@ These samples show how to build resilient, multi-region, and fault-tolerant syst
 |-----------|-------------|
 | [`s3mrap-crr/`](s3mrap-crr/) | S3 Multi-Region Access Points with bidirectional Cross-Region Replication, ARC-based failover, CloudWatch observability, and replication latency load testing |
 | [`aurora/`](aurora/) | Aurora Global Database + Aurora DSQL multi-region resilience with ARC Region Switch failover, CloudWatch Synthetics, RPO monitoring, post-failover reconciliation, FIS chaos testing, and load generation |
+| [`drs-ec2/`](drs-ec2/) | EC2 disaster recovery with AWS Elastic Disaster Recovery orchestrated by ARC Region Switch: reusable CDK construct + Terraform module for the DRS plan steps, Aurora Global, Route 53 failover, cycle-safe fail-over/fail-back rehearsals incl. stateful fail-back onto the original instance |
 
 ## Technology
 

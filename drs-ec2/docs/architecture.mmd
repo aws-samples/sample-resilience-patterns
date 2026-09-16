@@ -1,0 +1,36 @@
+%% drs-ec2 architecture — renders inline in GitHub markdown.
+%% Solid = steady state; dashed = only active after an ARC failover; red = ARC plan steps.
+flowchart LR
+    dns["Route 53 private zone<br/>app.drsdemo.internal<br/>failover record pair"]
+    arc(["ARC Region Switch plan<br/>--mode graceful | ungraceful"])
+
+    subgraph EAST["us-east-2 (primary)"]
+        albE["ALB"]
+        ec2E["EC2 (Flask)<br/>+ DRS agent"]
+        aurE[("Aurora Global<br/>writer")]
+        albE -->|active at rest| ec2E
+        ec2E -->|reads / writes| aurE
+    end
+
+    subgraph WEST["us-west-2 (secondary)"]
+        albW["ALB<br/>(target group empty at rest)"]
+        ec2W["recovered EC2<br/>(created at failover)"]
+        aurW[("Aurora Global<br/>reader → writer")]
+        stage["DRS staging"]
+        albW -.->|filled at failover| ec2W
+        ec2W -.-> aurW
+    end
+
+    dns -->|PRIMARY / hc A| albE
+    dns -.->|SECONDARY / hc B| albW
+
+    aurE ===|Aurora Global replication| aurW
+    ec2E ===|DRS continuous block replication| stage
+
+    arc -->|Aurora switch| aurW
+    arc -->|DRS recover EC2| ec2W
+    arc -->|register target| albW
+    arc -->|DNS flip| dns
+
+    linkStyle 8,9,10,11 stroke:#b00020,stroke-width:2px;
+    linkStyle 6,7 stroke:#2e7d32,stroke-width:2px;
