@@ -52,7 +52,7 @@ const project = new awscdk.AwsCdkTypeScriptApp({
   // ---- convergent skeleton (BYTE-IDENTICAL to the GitHub tree's block) -------
   defaultReleaseBranch: 'main',
   projenrcTs: true,
-  cdkVersion: '2.248.0',
+  cdkVersion: '2.268.0',
   cdkVersionPinning: true,
   constructsVersion: '10.5.0',
   typescriptVersion: '~5.6.3',
