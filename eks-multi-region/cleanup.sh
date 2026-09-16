@@ -63,6 +63,7 @@ wait_deleted() {
           "$PROJECT-region-"*)
             echo "  retry  $region $stack (DELETE_FAILED -> drain what the cluster left in the VPC, then plain re-delete)"
             drain_cluster_externals "$region"
+            sweep_retained "$region" "$stack"
             ;;
           *)
             echo "  retry  $region $stack (DELETE_FAILED -> plain re-delete after 90s; transient 409s clear)"
@@ -192,6 +193,31 @@ lbc_tagged() {
     aws elbv2 describe-tags --region "$region" --resource-arns $batch \
       --query "TagDescriptions[?Tags[?Key=='elbv2.k8s.aws/cluster' && Value=='$cluster']].ResourceArn" --output text
   done | tr -s '[:space:]' ' '
+}
+
+# Network resources a PREVIOUS teardown retained. A `delete-stack --retain-resources`
+# (the pre-drain retry path, e2e run 9) marks whatever it could not delete
+# DELETE_SKIPPED: the resource stays live, the stack still lists it, and
+# CloudFormation never tries to delete it again -- so the VPC keeps "dependencies"
+# forever and every later re-delete fails on the same VPC. The stack record is the
+# authoritative list of what was skipped; delete those resources directly (subnets
+# and route tables first, the VPC last, since CloudFormation still owns the VPC and
+# deletes it once the skipped children are gone). Idempotent: an already-gone
+# resource is a no-op.
+sweep_retained() {
+  local region="$1" stack="$2" line rtype pid
+  aws cloudformation describe-stack-resources --region "$region" --stack-name "$stack" \
+    --query "StackResources[?ResourceStatus=='DELETE_SKIPPED' && (ResourceType=='AWS::EC2::Subnet' || ResourceType=='AWS::EC2::SecurityGroup' || ResourceType=='AWS::EC2::RouteTable' || ResourceType=='AWS::EC2::VPCEndpoint')].[ResourceType,PhysicalResourceId]" \
+    --output text 2>/dev/null | while read -r rtype pid; do
+    [ -n "$pid" ] || continue
+    echo "  sweep  $region $rtype $pid (retained by an earlier teardown) -> delete"
+    case "$rtype" in
+      AWS::EC2::Subnet)        aws ec2 delete-subnet --region "$region" --subnet-id "$pid" 2>/dev/null || echo "  WARN   $region $pid still in use" >&2 ;;
+      AWS::EC2::SecurityGroup) aws ec2 delete-security-group --region "$region" --group-id "$pid" 2>/dev/null || echo "  WARN   $region $pid still in use" >&2 ;;
+      AWS::EC2::RouteTable)    aws ec2 delete-route-table --region "$region" --route-table-id "$pid" 2>/dev/null || echo "  WARN   $region $pid still in use" >&2 ;;
+      AWS::EC2::VPCEndpoint)   aws ec2 delete-vpc-endpoints --region "$region" --vpc-endpoint-ids "$pid" >/dev/null 2>&1 || echo "  WARN   $region $pid still in use" >&2 ;;
+    esac
+  done
 }
 
 # A retained EKS cluster is not a leak you can live with: the next deploy creates a

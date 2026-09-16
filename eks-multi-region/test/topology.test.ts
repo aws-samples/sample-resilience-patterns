@@ -6809,9 +6809,11 @@ describe('cleanup.sh drains what the cluster\'s controllers left in the VPC (e2e
     expect(conditionKeys('DrainLoadBalancerControllerResourcesTheClusterLeftBehind')).toEqual(['elbv2.k8s.aws/cluster']);
     expect(conditionKeys('DrainLoadBalancerControllerSecurityGroups')).toEqual(['elbv2.k8s.aws/cluster']);
     expect(conditionKeys('DrainEksClusterSecurityGroup')).toEqual(['aws:eks:cluster-name']);
+    // The retained-resource sweep acts only on what CloudFormation itself tagged as the region stack's.
+    expect(conditionKeys('SweepNetworkResourcesAnEarlierTeardownRetained')).toEqual(['aws:cloudformation:stack-name']);
     // Every delete the drain performs is tag-conditioned, never a bare grant.
     for (const sid of ['DrainKarpenterNodesTheClusterLeftBehind', 'DrainLoadBalancerControllerResourcesTheClusterLeftBehind',
-      'DrainLoadBalancerControllerSecurityGroups', 'DrainEksClusterSecurityGroup']) {
+      'DrainLoadBalancerControllerSecurityGroups', 'DrainEksClusterSecurityGroup', 'SweepNetworkResourcesAnEarlierTeardownRetained']) {
       const s = (policy.Statement as Stmt[]).find((x) => x.Sid === sid)!;
       expect(Object.keys(s.Condition ?? {}).length).toBeGreaterThan(0);
     }
@@ -6841,6 +6843,8 @@ describe('cleanup.sh drains what the cluster\'s controllers left in the VPC (e2e
     const calls = path.join(dir, 'calls.log');
     const state = path.join(dir, 'state'); // "pinned" until the drain removed everything
     fs.writeFileSync(state, 'pinned');
+    const subnets = path.join(dir, 'subnets'); // exists while run 9's retained subnets are still live
+    fs.writeFileSync(subnets, 'subnet-a subnet-b');
     fs.writeFileSync(
       path.join(dir, 'aws'),
       [
@@ -6856,10 +6860,15 @@ describe('cleanup.sh drains what the cluster\'s controllers left in the VPC (e2e
         '  "cloudformation delete-stack")',
         '    echo "delete-stack $args" >> "$CALLS"',
         '    [[ "$args" == *--retain-resources* ]] && { echo "RETAIN_ATTEMPTED" >> "$CALLS"; }',
-        '    if [ "$(cat "$STATE")" = "drained" ]; then rm -f "$STATE"; fi; exit 0;;',
+        // the VPC frees only once the drain cleared AND the retained subnets were swept
+        '    if [ "$(cat "$STATE")" = "drained" ] && [ ! -f "$SUBNETS" ]; then rm -f "$STATE"; fi; exit 0;;',
         '  "cloudformation wait")',
         '    [ -f "$STATE" ] && exit 255 || exit 0;;',
-        '  "cloudformation describe-stack-resources") echo -e "NetworkVpc\\tvpc-1\\thas dependencies"; exit 0;;',
+        '  "cloudformation describe-stack-resources")',
+        // The retained subnets a prior --retain-resources left behind (run 9), plus the failed VPC.
+        '    if [[ "$args" == *DELETE_SKIPPED* ]]; then [ -f "$SUBNETS" ] && printf "AWS::EC2::Subnet\\tsubnet-a\\nAWS::EC2::Subnet\\tsubnet-b\\n"; exit 0; fi',
+        '    echo -e "NetworkVpc\\tvpc-1\\thas dependencies"; exit 0;;',
+        '  "ec2 delete-subnet") echo "delete-subnet $args" >> "$CALLS"; rm -f "$SUBNETS"; exit 0;;',
         '  "cloudformation list-stack-resources") echo ""; exit 0;;',
         '  "cloudformation list-stacks")',
         '    [ -f "$STATE" ] && [[ "$args" == *us-east-2* ]] && echo "eks-mr-demo-region-us-east-2"; exit 0;;',
@@ -6894,6 +6903,7 @@ describe('cleanup.sh drains what the cluster\'s controllers left in the VPC (e2e
           PATH: `${dir}:${process.env.PATH}`,
           CALLS: calls,
           STATE: state,
+          SUBNETS: subnets,
           DRAIN_CLEARS: opts.drainClears ? '1' : '0',
           ASSETS_BUCKET_PREFIX: 'eks-multi-region-test',
         },
@@ -6912,6 +6922,9 @@ describe('cleanup.sh drains what the cluster\'s controllers left in the VPC (e2e
     expect(r.calls.some((c) => c.startsWith('terminate') && c.includes('i-karp1'))).toBe(true);
     expect(r.calls.filter((c) => c.startsWith('delete-load-balancer'))).toHaveLength(1);
     expect(r.calls.filter((c) => c.startsWith('delete-target-group'))).toHaveLength(1);
+    // run 9's --retain-resources left the subnets DELETE_SKIPPED: swept before the re-delete
+    expect(r.calls.filter((c) => c.startsWith('delete-subnet'))).toHaveLength(2);
+    expect(r.out).toContain('retained by an earlier teardown');
     // only the cluster-tagged ARNs, never the unrelated app's
     expect(r.calls.some((c) => c.includes('other-app'))).toBe(false);
     expect(r.calls.filter((c) => c.startsWith('delete-sg')).length).toBeGreaterThanOrEqual(4);
