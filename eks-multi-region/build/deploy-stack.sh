@@ -109,6 +109,14 @@ else
       aws cloudformation wait stack-delete-complete --region "$AWS_REGION" --stack-name "$STACK_NAME"
       CS_TYPE=CREATE
       ;;
+    # A half-deleted stack cannot be updated, and its live resources are whatever a
+    # failed teardown left behind -- deploying onto that is never right. Name the
+    # fix (cleanup.sh drains what the cluster's controllers left in the VPC) instead
+    # of surfacing CloudFormation's "can not be updated" from CreateChangeSet.
+    DELETE_FAILED|DELETE_IN_PROGRESS)
+      echo "Stack $STACK_NAME is $INITIAL_STATUS; run cleanup.sh to finish the teardown before deploying" >&2
+      exit 1
+      ;;
     *)                  CS_TYPE=UPDATE ;;
   esac
 fi

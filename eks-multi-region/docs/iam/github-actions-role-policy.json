@@ -109,9 +109,12 @@
         "ec2:DescribeRouteTables",
         "ec2:DescribeNetworkInterfaces",
         "ec2:DescribeAvailabilityZones",
+        "ec2:DescribeSecurityGroups",
         "ec2:CreateTags",
         "ec2:DeleteTags",
         "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:DescribeTargetGroups",
+        "elasticloadbalancing:DescribeTags",
         "ssm:DescribeInstanceInformation",
         "arc-region-switch:GetPlan",
         "arc-region-switch:GetPlanExecution",
@@ -143,6 +146,46 @@
       "Resource": "arn:aws:iam::ACCOUNT_ID:role/eks-mr-demo-arc-execution",
       "Condition": {
         "StringEquals": { "iam:PassedToService": "arc-region-switch.amazonaws.com" }
+      }
+    },
+    {
+      "Sid": "DrainKarpenterNodesTheClusterLeftBehind",
+      "Effect": "Allow",
+      "Action": "ec2:TerminateInstances",
+      "Resource": "arn:aws:ec2:*:ACCOUNT_ID:instance/*",
+      "Condition": {
+        "Null": { "aws:ResourceTag/karpenter.sh/nodepool": "false" },
+        "StringLike": { "aws:ResourceTag/aws:eks:cluster-name": "eks-mr-demo-*" }
+      }
+    },
+    {
+      "Sid": "DrainLoadBalancerControllerResourcesTheClusterLeftBehind",
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:DeleteLoadBalancer",
+        "elasticloadbalancing:DeleteTargetGroup"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringLike": { "aws:ResourceTag/elbv2.k8s.aws/cluster": "eks-mr-demo-*" }
+      }
+    },
+    {
+      "Sid": "DrainLoadBalancerControllerSecurityGroups",
+      "Effect": "Allow",
+      "Action": "ec2:DeleteSecurityGroup",
+      "Resource": "arn:aws:ec2:*:ACCOUNT_ID:security-group/*",
+      "Condition": {
+        "StringLike": { "aws:ResourceTag/elbv2.k8s.aws/cluster": "eks-mr-demo-*" }
+      }
+    },
+    {
+      "Sid": "DrainEksClusterSecurityGroup",
+      "Effect": "Allow",
+      "Action": "ec2:DeleteSecurityGroup",
+      "Resource": "arn:aws:ec2:*:ACCOUNT_ID:security-group/*",
+      "Condition": {
+        "StringLike": { "aws:ResourceTag/aws:eks:cluster-name": "eks-mr-demo-*" }
       }
     },
     {

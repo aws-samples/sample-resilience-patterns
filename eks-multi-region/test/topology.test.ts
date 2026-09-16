@@ -408,6 +408,7 @@ describe('GitHub role policy covers every API the rail calls under the runner ro
     'ec2 wait vpc-peering-connection-exists': ['ec2:DescribeVpcPeeringConnections'],
     'eks wait cluster-deleted': ['eks:DescribeCluster'],
     'eks wait nodegroup-deleted': ['eks:DescribeNodegroup'],
+    'ec2 wait instance-terminated': ['ec2:DescribeInstances'],
     'cloudformation wait stack-delete-complete': ['cloudformation:DescribeStacks'],
     'cloudformation wait stack-create-complete': ['cloudformation:DescribeStacks'],
     'cloudformation wait stack-update-complete': ['cloudformation:DescribeStacks'],
@@ -6766,5 +6767,165 @@ describe('FIS service-linked role step (deploy phase 0)', () => {
     const r = run('other');
     expect(r.code).toBe(1);
     expect(r.out).toContain('Throttling');
+  });
+});
+
+describe('cleanup.sh drains what the cluster\'s controllers left in the VPC (e2e run 9)', () => {
+  // Run 9 (2026-09-15) deployed all 12 stacks, and its pre-flight teardown of the
+  // previous run then left BOTH region stacks DELETE_FAILED on "The vpc has
+  // dependencies": a Karpenter-launched m7g.large per region still running, and the
+  // Load Balancer Controller's two NLBs + target groups + security groups per region.
+  // No stack owns those, and once CloudFormation deleted the cluster nothing was left
+  // to reconcile them away. The old retry path then RETAINED the VPC (an orphan for
+  // good), crashed on an unbound variable, and the step's `|| true` let the rail try to
+  // UPDATE a DELETE_FAILED stack. This would have failed every cleanup-on-success too.
+  const root = path.join(__dirname, '..');
+  const cleanup = fs.readFileSync(path.join(root, 'cleanup.sh'), 'utf8');
+  const policy = JSON.parse(fs.readFileSync(path.join(root, 'docs', 'iam', 'github-actions-role-policy.json'), 'utf8'));
+
+  test('the drain selects by the tag keys the controllers write, and the runner policy conditions on the SAME keys', () => {
+    // The controllers' own tags are the only durable handle on these resources (names
+    // are hashed). If the drain filters on one key and the deploy role's delete grant
+    // conditions on another, the script finds the resource and AccessDenied follows.
+    const filterKeys = new Set<string>();
+    for (const m of cleanup.matchAll(/Name=tag:([^,"\s]+),Values=/g)) filterKeys.add(m[1]);
+    for (const m of cleanup.matchAll(/Name=tag-key,Values=([^"\s]+)/g)) filterKeys.add(m[1]);
+    // describe-tags filter in lbc_tagged
+    for (const m of cleanup.matchAll(/Key=='([^']+)'/g)) filterKeys.add(m[1]);
+    expect(filterKeys).toEqual(new Set([
+      'karpenter.sh/nodepool',
+      'kubernetes.io/cluster/$cluster',
+      'elbv2.k8s.aws/cluster',
+      'aws:eks:cluster-name',
+    ]));
+
+    type Stmt = { Sid: string; Effect: string; Action: string | string[]; Condition?: Record<string, Record<string, string>> };
+    const conditionKeys = (sid: string): string[] => {
+      const s = (policy.Statement as Stmt[]).find((x) => x.Sid === sid)!;
+      expect(s).toBeDefined();
+      return Object.values(s.Condition!).flatMap((c) => Object.keys(c)).map((k) => k.replace(/^aws:ResourceTag\//, ''));
+    };
+    expect(conditionKeys('DrainKarpenterNodesTheClusterLeftBehind')).toEqual(expect.arrayContaining(['karpenter.sh/nodepool', 'aws:eks:cluster-name']));
+    expect(conditionKeys('DrainLoadBalancerControllerResourcesTheClusterLeftBehind')).toEqual(['elbv2.k8s.aws/cluster']);
+    expect(conditionKeys('DrainLoadBalancerControllerSecurityGroups')).toEqual(['elbv2.k8s.aws/cluster']);
+    expect(conditionKeys('DrainEksClusterSecurityGroup')).toEqual(['aws:eks:cluster-name']);
+    // Every delete the drain performs is tag-conditioned, never a bare grant.
+    for (const sid of ['DrainKarpenterNodesTheClusterLeftBehind', 'DrainLoadBalancerControllerResourcesTheClusterLeftBehind',
+      'DrainLoadBalancerControllerSecurityGroups', 'DrainEksClusterSecurityGroup']) {
+      const s = (policy.Statement as Stmt[]).find((x) => x.Sid === sid)!;
+      expect(Object.keys(s.Condition ?? {}).length).toBeGreaterThan(0);
+    }
+  });
+
+  test('region stacks are never retained; the pre-flight step no longer tolerates a failed cleanup', () => {
+    // --retain-resources on a region stack orphans the VPC with the stack record gone.
+    const retainSites = cleanup.split('\n').filter((l) => !l.trim().startsWith('#') && l.includes('--retain-resources')).length;
+    expect(retainSites).toBe(1);
+    expect(cleanup).toMatch(/"\$PROJECT-region-"\*\)\s*\n\s*echo "  FAIL/);
+    // The generated workflow: cleanup's exit code must reach the job.
+    const wf = fs.readFileSync(path.join(root, '..', '.github', 'workflows', 'eks-multi-region-e2e.yml'), 'utf8');
+    const pre = wf.split('\n').find((l) => l.includes('./cleanup.sh') && !l.includes('Cleanup on success'))!;
+    expect(pre).toBeDefined();
+    expect(pre).not.toContain('|| true');
+    // `local a="$1" b="...$a"` reads $a BEFORE local assigns it (set -u abort, run 9).
+    const code = cleanup.split('\n').filter((l) => !l.trim().startsWith('#'));
+    expect(code.some((l) => /local region="\$1" name=/.test(l))).toBe(false);
+  });
+
+  // Run the REAL script against a fake `aws` that replays run 9's account state: one
+  // DELETE_FAILED region stack whose VPC is pinned by a Karpenter node, two LBC NLBs,
+  // two target groups and four security groups (three LBC, one EKS). Every other
+  // stack is absent. The fake records every mutating call.
+  function runCleanup(opts: { drainClears: boolean }): { code: number; out: string; calls: string[] } {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drain-'));
+    const calls = path.join(dir, 'calls.log');
+    const state = path.join(dir, 'state'); // "pinned" until the drain removed everything
+    fs.writeFileSync(state, 'pinned');
+    fs.writeFileSync(
+      path.join(dir, 'aws'),
+      [
+        '#!/bin/bash',
+        'args="$*"',
+        'svc="$1"; op="$2"',
+        'case "$svc $op" in',
+        // The region stack exists (in us-east-2 only) until the drain has cleared and a re-delete ran.
+        '  "cloudformation describe-stacks")',
+        '    [[ "$args" == *region-us-east-2* ]] || exit 254',
+        '    [ -f "$STATE" ] || exit 254',
+        '    echo DELETE_FAILED; exit 0;;',
+        '  "cloudformation delete-stack")',
+        '    echo "delete-stack $args" >> "$CALLS"',
+        '    [[ "$args" == *--retain-resources* ]] && { echo "RETAIN_ATTEMPTED" >> "$CALLS"; }',
+        '    if [ "$(cat "$STATE")" = "drained" ]; then rm -f "$STATE"; fi; exit 0;;',
+        '  "cloudformation wait")',
+        '    [ -f "$STATE" ] && exit 255 || exit 0;;',
+        '  "cloudformation describe-stack-resources") echo -e "NetworkVpc\\tvpc-1\\thas dependencies"; exit 0;;',
+        '  "cloudformation list-stack-resources") echo ""; exit 0;;',
+        '  "cloudformation list-stacks")',
+        '    [ -f "$STATE" ] && [[ "$args" == *us-east-2* ]] && echo "eks-mr-demo-region-us-east-2"; exit 0;;',
+        '  "eks describe-cluster") exit 254;;', // cluster is gone: the drain may act
+        '  "ec2 describe-instances")',
+        '    [ "$(cat "$STATE" 2>/dev/null)" = "pinned" ] && echo "i-karp1"; exit 0;;',
+        '  "ec2 terminate-instances") echo "terminate $args" >> "$CALLS"; exit 0;;',
+        '  "ec2 wait") exit 0;;',
+        '  "elbv2 describe-load-balancers") echo "arn:lb/k8s-demo arn:lb/other-app"; exit 0;;',
+        '  "elbv2 describe-target-groups") echo "arn:tg/k8s-demo arn:tg/other-app"; exit 0;;',
+        '  "elbv2 describe-tags")', // only the k8s-* ARNs carry the cluster tag
+        '    for a in $args; do [[ "$a" == arn:*k8s-demo* ]] && echo "$a"; done; exit 0;;',
+        '  "elbv2 delete-load-balancer"|"elbv2 delete-target-group") echo "$op $args" >> "$CALLS"; exit 0;;',
+        '  "ec2 describe-network-interfaces") echo ""; exit 0;;',
+        '  "ec2 describe-security-groups")',
+        '    if [ "$(cat "$STATE" 2>/dev/null)" = "pinned" ]; then [[ "$args" == *elbv2* ]] && echo "sg-lbc1 sg-lbc2 sg-lbc3" || echo "sg-eks"; fi; exit 0;;',
+        '  "ec2 delete-security-group") echo "delete-sg $args" >> "$CALLS";',
+        // the last SG delete ends the "pinned" state: either the VPC is now free
+        // (drained) or something else still holds it (stuck) -- the drain has done its job either way
+        '    if [[ "$args" == *sg-eks* ]]; then [ "$DRAIN_CLEARS" = 1 ] && echo drained > "$STATE" || echo stuck > "$STATE"; fi; exit 0;;',
+        '  "ecr describe-repositories") exit 0;;',
+        '  "s3api head-bucket") exit 254;;',
+        '  *) echo "unexpected aws call: $args" >&2; exit 254;;',
+        'esac',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    try {
+      const out = execSync(`bash ${path.join(root, 'cleanup.sh')} 2>&1`, {
+        env: {
+          ...process.env,
+          PATH: `${dir}:${process.env.PATH}`,
+          CALLS: calls,
+          STATE: state,
+          DRAIN_CLEARS: opts.drainClears ? '1' : '0',
+          ASSETS_BUCKET_PREFIX: 'eks-multi-region-test',
+        },
+      }).toString();
+      return { code: 0, out, calls: fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8').trim().split('\n') : [] };
+    } catch (e: any) {
+      return { code: e.status, out: String(e.stdout ?? ''), calls: fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8').trim().split('\n') : [] };
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test('a DELETE_FAILED region stack gets its controller leftovers drained, then a plain re-delete, and cleanup exits 0', () => {
+    const r = runCleanup({ drainClears: true });
+    expect(r.out).toContain('drain what the cluster left in the VPC');
+    expect(r.calls.some((c) => c.startsWith('terminate') && c.includes('i-karp1'))).toBe(true);
+    expect(r.calls.filter((c) => c.startsWith('delete-load-balancer'))).toHaveLength(1);
+    expect(r.calls.filter((c) => c.startsWith('delete-target-group'))).toHaveLength(1);
+    // only the cluster-tagged ARNs, never the unrelated app's
+    expect(r.calls.some((c) => c.includes('other-app'))).toBe(false);
+    expect(r.calls.filter((c) => c.startsWith('delete-sg')).length).toBeGreaterThanOrEqual(4);
+    expect(r.calls).not.toContain('RETAIN_ATTEMPTED');
+    expect(r.calls.filter((c) => c.startsWith('delete-stack'))).toHaveLength(2); // first + plain re-delete
+    expect(r.out).toContain('cleanup: done');
+    expect(r.code).toBe(0);
+  });
+
+  test('when the drain does not free the VPC, cleanup reports the stack and exits NON-zero (no retain)', () => {
+    const r = runCleanup({ drainClears: false });
+    expect(r.calls).not.toContain('RETAIN_ATTEMPTED');
+    expect(r.out).toContain('FAIL   us-east-2 eks-mr-demo-region-us-east-2 still DELETE_FAILED');
+    expect(r.out).toContain('cleanup: FAILED -- stacks remain');
+    expect(r.code).toBe(1);
   });
 });
