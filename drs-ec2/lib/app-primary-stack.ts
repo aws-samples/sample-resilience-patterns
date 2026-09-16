@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
@@ -123,7 +124,13 @@ systemctl daemon-reload
 systemctl enable --now drsapp.service
 `;
 
-    this.instance = new ec2.CfnInstance(this, 'AppInstance', {
+    // A UserData change on AWS::EC2::Instance is an IN-PLACE update (stop/start, same id), and
+    // cloud-init runs UserData only on the first boot -- so an edited boot script would never
+    // execute on an existing instance (seen live 2026-09-16). Hashing the script into the logical
+    // id makes CloudFormation replace the instance instead; this is what the L2 Instance's
+    // userDataCausesReplacement does. drs-setup.sh retires the old instance's DRS source server.
+    const userDataHash = crypto.createHash('sha256').update(userData).digest('hex').slice(0, 8);
+    this.instance = new ec2.CfnInstance(this, `AppInstance${userDataHash}`, {
       imageId: ami.getImage(this).imageId,
       instanceType: 't2.small',
       iamInstanceProfile: `${project}-app-instance-profile`, // EC2 wants the NAME, not the ARN
