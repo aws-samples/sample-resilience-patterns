@@ -45,7 +45,12 @@ export class DatabasePrimaryStack extends cdk.Stack {
         secretStringTemplate: JSON.stringify({ username: dbUsername }),
         generateStringKey: 'password',
         passwordLength: 24,
-        excludeCharacters: '"@/\\ ',
+        // RDS forbids / @ " and space. The rest are for the delivery path: the app instance
+        // writes the password into a systemd unit as `Environment=DB_PASSWORD=<value>` from a
+        // shell heredoc, where % is a systemd specifier, ' and \ are systemd quoting, and $ and `
+        // are expanded by the shell. A % in a generated password produced a DB login failure in
+        // the original demo (one redeploy in ~four).
+        excludeCharacters: '"@/\\ %\'$`;',
       },
     });
 
