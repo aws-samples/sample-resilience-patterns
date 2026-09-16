@@ -82,8 +82,13 @@ export class AppPrimaryStack extends cdk.Stack {
     const bucket = props.appCodeBucket ?? 'appcode-bucket-placeholder';
     const userData = `#!/bin/bash
 set -euxo pipefail
-dnf install -y python3-pip postgresql15
-pip3 install flask pg8000 boto3
+dnf install -y postgresql15
+# The app's Python deps go in their own venv. On AL2023 the AWS CLI is a system Python package
+# whose python-dateutil (2.8.1 RPM) is older than what pg8000 requires; a bare 'pip3 install'
+# upgrades it out from under the CLI and every later 'aws' call in this script dies with
+# "No module named 'dateutil'" (seen live 2026-09-16). Never pip into the system interpreter.
+python3 -m venv /opt/app/venv
+/opt/app/venv/bin/pip install --quiet flask pg8000 boto3
 
 REGION="${this.region}"
 PROJECT="${project}"
@@ -92,7 +97,6 @@ SECRET_JSON=$(aws secretsmanager get-secret-value --region "$REGION" --secret-id
 DB_USER=$(echo "$SECRET_JSON" | python3 -c 'import sys,json;print(json.load(sys.stdin)["username"])')
 DB_PASS=$(echo "$SECRET_JSON" | python3 -c 'import sys,json;print(json.load(sys.stdin)["password"])')
 
-mkdir -p /opt/app
 aws s3 cp "s3://${bucket}/app/app.py"  /opt/app/app.py  --region "$REGION"
 aws s3 cp "s3://${bucket}/app/ui.html" /opt/app/ui.html --region "$REGION"
 
@@ -110,7 +114,7 @@ Environment=PRIMARY_REGION=${this.region}
 Environment=SECONDARY_REGION=${secondaryRegion}
 Environment=DB_USER=$DB_USER
 Environment=DB_PASSWORD=$DB_PASS
-ExecStart=/usr/bin/python3 /opt/app/app.py
+ExecStart=/opt/app/venv/bin/python /opt/app/app.py
 Restart=always
 [Install]
 WantedBy=multi-user.target

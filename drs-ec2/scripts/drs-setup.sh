@@ -107,6 +107,19 @@ for i in $(seq 1 30); do
 done
 echo "SSM ping: ${PING:-unknown}"
 
+# A CloudFormation instance REPLACEMENT (UserData or AMI change) leaves the old instance's source
+# server behind, still tagged ${PROJECT}:role=app. The plan's Lambdas select the source server by
+# that tag and must never see two candidates, so retire any forward-replication server that does
+# not belong to the current app instance before (re)installing the agent.
+for STALE in $(aws drs describe-source-servers --region "$SECONDARY" \
+    --query "items[?replicationDirection!='FAILBACK' && sourceProperties.identificationHints.awsInstanceID!='$IID' && tags.\"${PROJECT}:role\"=='app'].sourceServerID" \
+    --output text 2>/dev/null); do
+  [[ -z "$STALE" || "$STALE" == "None" ]] && continue
+  echo "== [2b] retiring stale source server $STALE (its instance is not $IID) =="
+  aws drs disconnect-source-server --region "$SECONDARY" --source-server-id "$STALE" >/dev/null 2>&1 || true
+  aws drs delete-source-server --region "$SECONDARY" --source-server-id "$STALE" >/dev/null
+done
+
 # Idempotency: if THIS instance already has a source server that is replicating, skip the
 # install (re-running the installer on a protected host re-registers and forces a full resync).
 EXISTING=$(aws drs describe-source-servers --region "$SECONDARY" \
