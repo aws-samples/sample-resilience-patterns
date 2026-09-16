@@ -81,7 +81,7 @@ waits for `CONTINUOUS` replication) and the app-code S3 bucket.
 
 - An AWS account with CDK bootstrapped in us-east-2, us-west-2 and us-east-1
 - AWS CLI v2 configured (`PROFILE=<name>`, `AWS_PROFILE`, or the default identity)
-- Node.js 20+, Python 3.12+ (for the Lambda tests), `make`, `jq`
+- Node.js 20+, Python 3.12+ (for the Lambda tests), `make`; the AWS CLI Session Manager plugin for `make tunnel`
 - Optional: `ACCOUNT=<12 digits>` makes every `make` target refuse any other account
 
 Regions are configurable (`PRIMARY_REGION`, `SECONDARY_REGION`, `OBSERVER_REGION`); the defaults are
