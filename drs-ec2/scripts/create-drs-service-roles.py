@@ -8,6 +8,12 @@ plus the source-identity trust conditions from the AWS re:Post agent-install
 troubleshooting article for the two drs.amazonaws.com-trust roles.
 
 Idempotent: skips roles/profiles that already exist.
+
+Usage: create-drs-service-roles.py <account-id> [aws-profile]
+The profile matters: boto3's default credential chain is NOT the identity the calling
+shell passed to `aws --profile`, so without it this script inspects (and creates roles
+in) whatever account the default chain resolves to and then reports success. The script
+therefore refuses to run when the resolved account is not the one it was told.
 """
 import json
 import sys
@@ -17,9 +23,17 @@ from botocore.exceptions import ClientError
 
 ACCOUNT = sys.argv[1] if len(sys.argv) > 1 else None
 if not ACCOUNT:
-    sys.exit("usage: create_drs_service_roles.py <account-id>")
+    sys.exit("usage: create-drs-service-roles.py <account-id> [aws-profile]")
+PROFILE = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] not in ("", "-") else None
 
-iam = boto3.client("iam")
+session = boto3.Session(profile_name=PROFILE)
+resolved = session.client("sts").get_caller_identity()["Account"]
+if resolved != ACCOUNT:
+    sys.exit(
+        f"refusing: credentials{' for profile ' + PROFILE if PROFILE else ' (default chain)'} "
+        f"resolve to account {resolved}, but the roles are wanted in {ACCOUNT}"
+    )
+iam = session.client("iam")
 
 EC2_TRUST = {
     "Version": "2012-10-17",

@@ -22,11 +22,12 @@ aws() { command aws --no-cli-pager ${PROFILE:+--profile "$PROFILE"} "$@"; }  # n
 init_drs_region() {
   local R="$1" STAGING_SUBNET="$2"
   echo "== [1] DRS initialize-service in $R =="
-  # initialize-service needs the six AWSElasticDisasterRecovery*Role service roles. In this
-  # account the four INSTANCE PROFILES existed but the ROLES did not (residue of an earlier
-  # init), and initialize-service fails with "Failed to attach the following IAM roles to
-  # their instance profiles". create-drs-service-roles.py is idempotent; run it first.
-  python3 "$(dirname "$0")/create-drs-service-roles.py" "$(aws sts get-caller-identity --query Account --output text)"
+  # initialize-service needs the six AWSElasticDisasterRecovery*Role service roles (with instance
+  # profiles for the four EC2-trust ones) and fails with "Failed to attach the following IAM roles to
+  # their instance profiles" when any is missing. create-drs-service-roles.py is idempotent; run it
+  # first, WITH the profile -- boto3's default chain is not the shell's `aws --profile` identity.
+  python3 "$(dirname "$0")/create-drs-service-roles.py" \
+    "$(aws sts get-caller-identity --query Account --output text)" "${PROFILE:--}"
   if ! OUT=$(aws drs initialize-service --region "$R" 2>&1); then
     if aws drs describe-replication-configuration-templates --region "$R" >/dev/null 2>&1; then
       echo "(already initialized)"
