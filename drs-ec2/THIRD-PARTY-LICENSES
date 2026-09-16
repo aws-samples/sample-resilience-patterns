@@ -24,7 +24,7 @@ registries under the licenses listed.
 | Component | License | Use |
 |-----------|---------|-----|
 | Flask | BSD-3-Clause | HTTP server for the demo app and its `/ui` console |
-| psycopg2-binary | LGPL-3.0 with OpenSSL exception (linking exception) | PostgreSQL client for the Aurora heartbeat table |
+| pg8000 | BSD-3-Clause | Pure-Python PostgreSQL client for the Aurora heartbeat table |
 | boto3 / botocore | Apache-2.0 | SSM parameter, IMDS-region and DRS/ARC status reads |
 | postgresql15 (client tools) | PostgreSQL License | Installed via `dnf` for operator convenience |
 

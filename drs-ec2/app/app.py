@@ -26,9 +26,9 @@ import urllib.request
 from flask import Flask, jsonify
 
 try:
-    import psycopg2
+    import pg8000.dbapi as pgdb  # pure-Python, BSD-licensed PostgreSQL driver (DB-API 2, paramstyle "format")
 except ImportError:  # pragma: no cover - installed via userdata pip
-    psycopg2 = None
+    pgdb = None
 
 try:
     import boto3
@@ -124,13 +124,13 @@ INSTANCE_ID = _instance_id()
 
 
 def _connect():
-    return psycopg2.connect(
+    return pgdb.connect(
         host=_db_endpoint(),
-        dbname=DB_NAME,
+        database=DB_NAME,
         user=DB_USER,
         password=DB_PASSWORD,
         port=DB_PORT,
-        connect_timeout=5,
+        timeout=5,
     )
 
 
@@ -177,13 +177,14 @@ def index():
         "instance_id": INSTANCE_ID,
         "db_writer_endpoint": _db_endpoint(),
     }
-    if psycopg2 is None:
-        result["db"] = "psycopg2 not installed"
+    if pgdb is None:
+        result["db"] = "pg8000 not installed"
         return jsonify(result), 200
     try:
         conn = _connect()
         conn.autocommit = True
-        with conn.cursor() as cur:
+        cur = conn.cursor()  # pg8000 cursors are not context managers
+        try:
             _ensure_table(cur)
             _maybe_prune(cur)
             cur.execute(
@@ -193,7 +194,9 @@ def index():
             last_id = cur.fetchone()[0]
             cur.execute("SELECT count(*) FROM heartbeat")
             total = cur.fetchone()[0]
-        conn.close()
+        finally:
+            cur.close()
+            conn.close()
         result["last_write_id"] = last_id
         result["total_rows"] = total
         result["db"] = "ok"

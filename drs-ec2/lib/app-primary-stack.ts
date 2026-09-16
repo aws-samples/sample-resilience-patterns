@@ -83,7 +83,7 @@ export class AppPrimaryStack extends cdk.Stack {
     const userData = `#!/bin/bash
 set -euxo pipefail
 dnf install -y python3-pip postgresql15
-pip3 install flask psycopg2-binary boto3
+pip3 install flask pg8000 boto3
 
 REGION="${this.region}"
 PROJECT="${project}"
