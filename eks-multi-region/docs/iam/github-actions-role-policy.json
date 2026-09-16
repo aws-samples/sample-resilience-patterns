@@ -189,6 +189,25 @@
       }
     },
     {
+      "Sid": "SweepNetworkResourcesAnEarlierTeardownRetained",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DeleteSubnet",
+        "ec2:DeleteRouteTable",
+        "ec2:DeleteSecurityGroup",
+        "ec2:DeleteVpcEndpoints"
+      ],
+      "Resource": [
+        "arn:aws:ec2:*:ACCOUNT_ID:subnet/*",
+        "arn:aws:ec2:*:ACCOUNT_ID:route-table/*",
+        "arn:aws:ec2:*:ACCOUNT_ID:security-group/*",
+        "arn:aws:ec2:*:ACCOUNT_ID:vpc-endpoint/*"
+      ],
+      "Condition": {
+        "StringLike": { "aws:ResourceTag/aws:cloudformation:stack-name": "eks-mr-demo-region-*" }
+      }
+    },
+    {
       "Sid": "InstallerBuildLogsOnFailure",
       "Effect": "Allow",
       "Action": "logs:GetLogEvents",
