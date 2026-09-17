@@ -5,8 +5,6 @@ on:
   push:
     paths:
       - s3mrap-crr/**
-    branches-ignore:
-      - main
   workflow_dispatch: {}
 jobs:
   build:
