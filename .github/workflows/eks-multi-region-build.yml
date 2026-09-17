@@ -5,8 +5,6 @@ on:
   push:
     paths:
       - eks-multi-region/**
-    branches-ignore:
-      - main
   workflow_dispatch: {}
 jobs:
   build:
