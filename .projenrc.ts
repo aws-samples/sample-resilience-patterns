@@ -585,9 +585,15 @@ const patterns: Pattern[] = [
         // installed it in a before_script that was not carried into this workflow.
         name: 'Install crane',
         run: [
+          // Version AND checksum pinned. The sha256 is the arm64 line of the release's
+          // checksums.txt; a tarball that does not match it is never extracted, so a
+          // compromised or swapped release asset fails the step instead of landing a
+          // binary that holds the runner's ECR credentials.
           'CRANE_VERSION=v0.20.2',
-          'curl -fsSL "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_arm64.tar.gz" \\',
-          '  | sudo tar -xz -C /usr/local/bin crane',
+          'CRANE_SHA256=aff0db48825124c9331ea310057214bd4e92c01aa2e414d539e9659841d9422a',
+          'curl -fsSL -o /tmp/crane.tgz "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_arm64.tar.gz"',
+          'echo "${CRANE_SHA256}  /tmp/crane.tgz" | sha256sum -c -',
+          'sudo tar -xz -C /usr/local/bin -f /tmp/crane.tgz crane',
           'crane version',
         ].join('\n'),
       },
@@ -831,8 +837,15 @@ autoApproveWf.addJobs({
     steps: [
       {
         name: 'Approve PR',
-        env: { GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}' },
-        run: 'gh pr review --approve "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}"',
+        // Context values enter through env, never inline in `run:` -- the GitHub Actions
+        // hardening rule for pull_request_target workflows, even for values as tame as a
+        // PR number.
+        env: {
+          GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}',
+          PR_NUMBER: '${{ github.event.pull_request.number }}',
+          REPO: '${{ github.repository }}',
+        },
+        run: 'gh pr review --approve "$PR_NUMBER" --repo "$REPO"',
       },
     ],
   },
@@ -865,8 +878,12 @@ autoMergeWf.addJobs({
     steps: [
       {
         name: 'Enable auto-merge',
-        env: { GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}' },
-        run: 'gh pr merge --auto --squash "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}"',
+        env: {
+          GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}',
+          PR_NUMBER: '${{ github.event.pull_request.number }}',
+          REPO: '${{ github.repository }}',
+        },
+        run: 'gh pr merge --auto --squash "$PR_NUMBER" --repo "$REPO"',
       },
     ],
   },
@@ -913,11 +930,11 @@ retryAutoMergeWf.addJobs({
     steps: [
       {
         name: 'Re-enable auto-merge on Dependabot PRs',
-        env: { GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}' },
+        env: { GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}', REPO: '${{ github.repository }}' },
         run: [
-          'for pr in $(gh pr list --repo "${{ github.repository }}" --author "app/dependabot" --json number,autoMergeRequest --jq \'.[] | select(.autoMergeRequest == null) | .number\'); do',
+          'for pr in $(gh pr list --repo "$REPO" --author "app/dependabot" --json number,autoMergeRequest --jq \'.[] | select(.autoMergeRequest == null) | .number\'); do',
           '  echo "Re-enabling auto-merge on PR #$pr"',
-          '  gh pr merge --auto --squash "$pr" --repo "${{ github.repository }}" || true',
+          '  gh pr merge --auto --squash "$pr" --repo "$REPO" || true',
           'done',
         ].join('\n'),
       },

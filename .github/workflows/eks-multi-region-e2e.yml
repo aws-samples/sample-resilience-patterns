@@ -45,8 +45,10 @@ jobs:
       - name: Install crane
         run: |-
           CRANE_VERSION=v0.20.2
-          curl -fsSL "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_arm64.tar.gz" \
-            | sudo tar -xz -C /usr/local/bin crane
+          CRANE_SHA256=aff0db48825124c9331ea310057214bd4e92c01aa2e414d539e9659841d9422a
+          curl -fsSL -o /tmp/crane.tgz "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_arm64.tar.gz"
+          echo "${CRANE_SHA256}  /tmp/crane.tgz" | sha256sum -c -
+          sudo tar -xz -C /usr/local/bin -f /tmp/crane.tgz crane
           crane version
       - name: Mirror pinned third-party images into this account (no NAT in the node subnets)
         run: make mirror

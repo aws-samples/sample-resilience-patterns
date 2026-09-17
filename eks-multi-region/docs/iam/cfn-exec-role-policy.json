@@ -27,7 +27,7 @@
       "Resource": "*"
     },
     {
-      "Sid": "IamForIrsaAndServiceRoles",
+      "Sid": "IamRolesPoliciesAndProfilesTheStacksCreate",
       "Effect": "Allow",
       "Action": [
         "iam:CreateRole",
@@ -54,14 +54,35 @@
         "iam:DeleteInstanceProfile",
         "iam:GetInstanceProfile",
         "iam:AddRoleToInstanceProfile",
-        "iam:RemoveRoleFromInstanceProfile",
+        "iam:RemoveRoleFromInstanceProfile"
+      ],
+      "Resource": [
+        "arn:aws:iam::ACCOUNT_ID:role/eks-mr-demo-*",
+        "arn:aws:iam::ACCOUNT_ID:policy/eks-mr-demo-*",
+        "arn:aws:iam::ACCOUNT_ID:instance-profile/eks-mr-demo-*"
+      ]
+    },
+    {
+      "Sid": "IamOidcProviderForIrsa",
+      "Effect": "Allow",
+      "Action": [
         "iam:CreateOpenIDConnectProvider",
         "iam:DeleteOpenIDConnectProvider",
         "iam:GetOpenIDConnectProvider",
-        "iam:TagOpenIDConnectProvider",
-        "iam:CreateServiceLinkedRole",
-        "iam:ListRoles"
+        "iam:TagOpenIDConnectProvider"
       ],
+      "Resource": "arn:aws:iam::ACCOUNT_ID:oidc-provider/oidc.eks.*.amazonaws.com/id/*"
+    },
+    {
+      "Sid": "IamServiceLinkedRolesAndListing",
+      "Effect": "Allow",
+      "Action": "iam:CreateServiceLinkedRole",
+      "Resource": "arn:aws:iam::ACCOUNT_ID:role/aws-service-role/*"
+    },
+    {
+      "Sid": "IamListRolesHasNoResourceType",
+      "Effect": "Allow",
+      "Action": "iam:ListRoles",
       "Resource": "*"
     },
     {

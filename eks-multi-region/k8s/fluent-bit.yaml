@@ -59,7 +59,7 @@
 #
 # ── THE DAEMONSET PRIVILEGE PROBLEM ────────────────────────────────────────────────
 #
-# AWS guidance (Aristotle 509 / AWS-446, "Assign least privilege Role Based Access Control
+# AWS EKS security guidance ("Assign least privilege Role Based Access Control
 # to Kubernetes users and service accounts") is explicit:
 #
 #   "Avoid granting DaemonSets excessive cluster-wide Kubernetes permissions. As
@@ -284,12 +284,14 @@ spec:
           securityContext:
             # Root is required to traverse /var/log/containers, whose entries are
             # root-owned symlinks. Nothing beyond that: no privilege escalation, no
-            # capabilities, read-only root filesystem.
+            # capabilities, read-only root filesystem, default seccomp profile.
             runAsUser: 0
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
           volumeMounts:
             - name: config
               mountPath: /fluent-bit/etc/fluent-bit.conf

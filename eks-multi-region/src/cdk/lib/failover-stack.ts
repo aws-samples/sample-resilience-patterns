@@ -141,8 +141,8 @@ export class FailoverStack extends cdk.Stack {
           // The list below is the privilege-escalation set from the recommendation
           // engine's "Use IAM Roles and Scoped Down Policies" / "Prevent Privilege
           // Escalation" guidance -- permission mutation, credential mutation, and
-          // PassRole. Naming actions instead of a wildcard is also what AWS guidance SAX-08
-          // Outcome 1 asks for ("prefer resource-level and specific actions"). A failover
+          // PassRole. Naming actions instead of a wildcard is also what AWS least-privilege
+          // guidance asks for ("prefer resource-level and specific actions"). A failover
           // role that can edit IAM can grant itself anything, and that is still denied.
           actions: [
             'iam:Add*',

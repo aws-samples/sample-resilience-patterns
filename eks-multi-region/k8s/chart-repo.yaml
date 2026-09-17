@@ -45,8 +45,19 @@ spec:
         runAsUser: 101
         runAsGroup: 101
         fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      # Serves static chart files from a volume; never touches the Kubernetes API.
+      automountServiceAccountToken: false
       containers:
         - name: nginx
+          # Read-only root is safe because the only paths nginx writes -- /var/cache/nginx
+          # and /var/run -- are emptyDir mounts below (added for exactly this reason).
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           # From the private ECR mirror, at the ARM64 CHILD digest. The mirror copies only
           # linux/arm64, so the multi-platform index digest is ABSENT from our ECR and a pod
           # pinned to one fails with "manifest unknown" -- which reads as a mirror that never
