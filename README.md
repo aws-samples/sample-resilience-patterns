@@ -4,6 +4,7 @@
 ![s3mrap-crr e2e](https://github.com/aws-samples/sample-resilience-patterns/actions/workflows/s3mrap-crr-e2e.yml/badge.svg)
 ![aurora build](https://github.com/aws-samples/sample-resilience-patterns/actions/workflows/aurora-build.yml/badge.svg)
 ![aurora e2e](https://github.com/aws-samples/sample-resilience-patterns/actions/workflows/aurora-e2e.yml/badge.svg)
+![drs-ec2 build](https://github.com/aws-samples/sample-resilience-patterns/actions/workflows/drs-ec2-build.yml/badge.svg)
 
 A collection of sample implementations demonstrating resilient architectures for common AWS services and patterns. Each subdirectory is a standalone, fully deployable reference implementation.
 
