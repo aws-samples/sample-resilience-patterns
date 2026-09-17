@@ -684,12 +684,13 @@ for (const p of patterns) {
 
   // ----------- Build workflow ---------------------------------------------
   const buildWf = new github.GithubWorkflow(root.github!, `${p.outdir}-build`);
+  // Runs on every branch, main included: the README badge reports the
+  // workflow's latest run on the default branch, so a build that never runs
+  // on main leaves the badge pinned to the last manual dispatch there.
   buildWf.on({
     push: { paths: [`${p.outdir}/**`] },
     workflowDispatch: {},
   });
-  // projen's PushOptions doesn't expose `branches-ignore`, so inject directly.
-  buildWf.file?.addOverride('on.push.branches-ignore', ['main']);
   // Preserve the original GitHub Actions display name (matters for branch
   // protection required-check names: 'aurora: build / build').
   buildWf.file?.addOverride('name', `${p.outdir}: build`);
