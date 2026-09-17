@@ -7001,19 +7001,29 @@ describe('cleanup.sh drains what the cluster\'s controllers left in the VPC (e2e
   // DELETE_FAILED region stack whose VPC is pinned by a Karpenter node, two LBC NLBs,
   // two target groups and four security groups (three LBC, one EKS). Every other
   // stack is absent. The fake records every mutating call.
-  function runCleanup(opts: { drainClears: boolean }): { code: number; out: string; calls: string[] } {
+  function runCleanup(opts: { drainClears: boolean; cleanAccount?: boolean }): { code: number; out: string; calls: string[] } {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drain-'));
     const calls = path.join(dir, 'calls.log');
     const state = path.join(dir, 'state'); // "pinned" until the drain removed everything
-    fs.writeFileSync(state, 'pinned');
     const subnets = path.join(dir, 'subnets'); // exists while run 9's retained subnets are still live
-    fs.writeFileSync(subnets, 'subnet-a subnet-b');
+    if (!opts.cleanAccount) {
+      fs.writeFileSync(state, 'pinned');
+      fs.writeFileSync(subnets, 'subnet-a subnet-b');
+    }
     fs.writeFileSync(
       path.join(dir, 'aws'),
       [
         '#!/bin/bash',
         'args="$*"',
         'svc="$1"; op="$2"',
+        // CLEAN=1: the account holds nothing of ours. Every describe answers the way the
+        // real CLI does for an absent resource: stacks/clusters/buckets are a 254
+        // ValidationError, list-style queries are empty. Nothing may be mutated.
+        'if [ "$CLEAN" = 1 ]; then case "$svc $op" in',
+        '  "cloudformation describe-stacks"|"cloudformation list-stack-resources"|"eks describe-cluster"|"s3api head-bucket") exit 254;;',
+        '  "cloudformation list-stacks"|"ec2 describe-"*|"elbv2 describe-"*|"ecr describe-repositories") exit 0;;',
+        '  *) echo "unexpected aws call on a clean account: $args" >&2; exit 254;;',
+        'esac; fi',
         'case "$svc $op" in',
         // The region stack exists (in us-east-2 only) until the drain has cleared and a re-delete ran.
         '  "cloudformation describe-stacks")',
@@ -7032,7 +7042,13 @@ describe('cleanup.sh drains what the cluster\'s controllers left in the VPC (e2e
         '    if [[ "$args" == *DELETE_SKIPPED* ]]; then [ -f "$SUBNETS" ] && printf "AWS::EC2::Subnet\\tsubnet-a\\nAWS::EC2::Subnet\\tsubnet-b\\n"; exit 0; fi',
         '    echo -e "NetworkVpc\\tvpc-1\\thas dependencies"; exit 0;;',
         '  "ec2 delete-subnet") echo "delete-subnet $args" >> "$CALLS"; rm -f "$SUBNETS"; exit 0;;',
-        '  "cloudformation list-stack-resources") echo ""; exit 0;;',
+        // Mirrors the real CLI: an absent stack is a ValidationError (exit 254), NOT an empty
+        // list. The fixture used to say `exit 0` here, so this harness could not see the
+        // clean-account abort that killed the pre-flight on e51c90c (bug class 6: a fixture
+        // claiming to mirror a real payload must actually mirror it).
+        '  "cloudformation list-stack-resources")',
+        '    [[ "$args" == *region-us-east-2* ]] && [ -f "$STATE" ] && { echo ""; exit 0; }',
+        '    echo "An error occurred (ValidationError): Stack does not exist" >&2; exit 254;;',
         '  "cloudformation list-stacks")',
         '    [ -f "$STATE" ] && [[ "$args" == *us-east-2* ]] && echo "eks-mr-demo-region-us-east-2"; exit 0;;',
         '  "eks describe-cluster") exit 254;;', // cluster is gone: the drain may act
@@ -7068,6 +7084,7 @@ describe('cleanup.sh drains what the cluster\'s controllers left in the VPC (e2e
           STATE: state,
           SUBNETS: subnets,
           DRAIN_CLEARS: opts.drainClears ? '1' : '0',
+          CLEAN: opts.cleanAccount ? '1' : '0',
           ASSETS_BUCKET_PREFIX: 'eks-multi-region-test',
         },
       }).toString();
@@ -7078,6 +7095,18 @@ describe('cleanup.sh drains what the cluster\'s controllers left in the VPC (e2e
       fs.rmSync(dir, { recursive: true, force: true });
     }
   }
+
+  test('a CLEAN account (every stack absent) runs to "cleanup: done", mutates nothing, exits 0', () => {
+    // The e2e on e51c90c died here with exit 254 and no message: the ownership probe piped
+    // the real CLI's "Stack does not exist" (exit 254) into wc under set -e + pipefail.
+    // Every earlier run happened to have a region stack present at this point.
+    const r = runCleanup({ drainClears: true, cleanAccount: true });
+    expect(r.out).toContain('skip   us-east-2 eks-mr-demo-region-us-east-2 (absent)');
+    expect(r.out).toContain('skip   us-west-2 eks-mr-demo-region-us-west-2 (absent)');
+    expect(r.out).toContain('cleanup: done');
+    expect(r.calls).toEqual([]);
+    expect(r.code).toBe(0);
+  });
 
   test('a DELETE_FAILED region stack gets its controller leftovers drained, then a plain re-delete, and cleanup exits 0', () => {
     const r = runCleanup({ drainClears: true });

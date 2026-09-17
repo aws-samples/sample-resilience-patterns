@@ -269,10 +269,15 @@ delete_wave "$PRIMARY:$PROJECT-peering"
 # fail on them again. A cluster the stack still owns is left to CloudFormation.
 # The CLI applies --query PER PAGE (bug class 25), so count client-side with wc,
 # never with length(@): a two-page stack yields "0\n0" and an exact compare fails.
+# An ABSENT stack owns nothing: the CLI exits 254 ("Stack ... does not exist") and,
+# under set -e + pipefail, that status would abort the whole script at this
+# assignment -- which is how a pre-flight on a CLEAN account died (e2e run on
+# e51c90c; every earlier run had a region stack present here). Absent -> 0 -> the
+# idempotent sweep below is a no-op.
 for r in "$PRIMARY" "$SECONDARY"; do
-  owned=$(aws cloudformation list-stack-resources --region "$r" --stack-name "$PROJECT-region-$r" \
+  owned=$({ aws cloudformation list-stack-resources --region "$r" --stack-name "$PROJECT-region-$r" \
     --query "StackResourceSummaries[?ResourceType=='AWS::EKS::Cluster' && ResourceStatus!='DELETE_SKIPPED'].LogicalResourceId" \
-    --output text 2>/dev/null | wc -w)
+    --output text 2>/dev/null || true; } | wc -w)
   [ "$owned" -eq 0 ] || continue
   sweep_eks "$r" || echo "  WARN   orphaned EKS cluster $PROJECT-$r in $r could not be deleted (deployer needs eks:DeleteCluster); delete it manually" >&2
 done
