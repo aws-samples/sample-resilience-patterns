@@ -133,6 +133,12 @@ spec:
         runAsNonRoot: true
         runAsUser: 10001
         fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      # The app talks to Aurora, Secrets Manager and SSM -- never to the Kubernetes API --
+      # so it gets no service-account token to leak. (The replica-reporter CronJob below
+      # DOES read the API and keeps its token.)
+      automountServiceAccountToken: false
       # EXPLICIT, not the 30s default it happens to equal. Under `target-type: ip` the POD is
       # the load-balancer target, so its shutdown is now part of the traffic path rather than
       # an internal detail -- it must be a stated number that the preStop sleep below fits
@@ -142,6 +148,16 @@ spec:
         - name: orders-api
           image: ${APP_IMAGE_URI}
           imagePullPolicy: IfNotPresent
+          # Container-level hardening (EKS pod-security guidance). The process needs no
+          # capability at all (it binds 8080, above the privileged range), never escalates,
+          # and writes nothing to disk -- pg8000 and boto3 keep everything in memory -- so
+          # the root filesystem is read-only. A bytecode-cache write attempt under a
+          # read-only root is a silent no-op in CPython, not an error.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           # preStop sleep, and the sleep is the whole mechanism.
           #
           # Under `target-type: ip` the pod IS the target. On termination Kubernetes removes
@@ -552,10 +568,23 @@ spec:
         spec:
           serviceAccountName: replica-reporter
           restartPolicy: Never
+          # Same image and UID as the app (USER 10001 in the Dockerfile). This pod DOES read
+          # the Kubernetes API -- that is its whole job -- so its service-account token stays
+          # mounted; everything else is closed: no capabilities, no escalation, read-only root.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            seccompProfile:
+              type: RuntimeDefault
           containers:
             - name: report
               image: ${APP_IMAGE_URI}
               command: ["python3", "/scripts/report.py"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
               env:
                 - name: AWS_REGION
                   value: "${APP_REGION}"

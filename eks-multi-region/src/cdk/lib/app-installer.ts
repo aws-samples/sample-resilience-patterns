@@ -118,7 +118,7 @@ export class AppInstaller extends Construct {
               // Its `caBundle` is BLANKED in the vendored manifest on purpose — the chart
               // bakes a real TLS private key into a Secret, and committing that would put
               // live key material in git history (the no-secrets-in-version-control rule lists private keys
-              // in version control as its first common pitfall; SAX-05 Outcome 2 requires
+              // in version control as its first common pitfall; secrets-management guidance requires
               // secrets live in Secrets Manager or KMS).
               //
               // So the CA and serving cert are generated HERE, in-cluster, and the caBundle

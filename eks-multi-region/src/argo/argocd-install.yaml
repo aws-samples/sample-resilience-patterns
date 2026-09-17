@@ -32144,7 +32144,7 @@ spec:
             secretKeyRef:
               key: auth
               name: argocd-redis
-        image: ${MIRROR_REGISTRY}/redis:8.2.3-alpine@sha256:2fe148588d93987cea3533873195ec2450f5dbf420c78606aaacad7b78bb5489
+        image: ${MIRROR_REGISTRY}/valkey:9.0.6-alpine@sha256:835ee0f9aca385f81c349696b5e7030ac9c4d15dbccfcee24299ca5c01c174b3
         imagePullPolicy: Always
         name: redis
         ports:

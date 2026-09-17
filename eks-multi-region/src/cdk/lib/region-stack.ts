@@ -13,7 +13,7 @@ import { AuroraMember } from './aurora-member';
 import { FluentBitIam } from './fluentbit-iam';
 import { KarpenterIam } from './karpenter-iam';
 import { LbcIam } from './lbc-iam';
-import { APP_RECORD_NAME, AZ_COUNT, KUBERNETES_VERSION, PRIMARY_REGION, REGIONS } from '../regions';
+import { APP_RECORD_NAME, AZ_COUNT, EKS_CONTROL_PLANE_LOG_TYPES, KUBERNETES_VERSION, PRIMARY_REGION, REGIONS } from '../regions';
 import { AuroraObservability } from './aurora-observability';
 import { APP_NAMESPACE } from '../k8s';
 import { AllowedCidrSecurityGroup } from './constructs/auth';
@@ -378,6 +378,17 @@ export class RegionStack extends cdk.Stack {
         // door except the property itself — changing it later REPLACES the cluster, which
         // is why it is being set now, while nothing is deployed.
         bootstrapClusterCreatorAdminPermissions: false,
+      },
+      // Control-plane logs to CloudWatch Logs (/aws/eks/<cluster>/cluster). All five types:
+      // the audit log is what answers "who touched the cluster during the failover", and
+      // the authenticator log is where an access-entry mistake shows up. EKS hardening
+      // guidance lists this alongside the private endpoint as a baseline control, and the
+      // log group is created by EKS itself (no retention set -- add one for a long-lived
+      // deployment). CloudFormation applies a Logging change with no interruption.
+      logging: {
+        clusterLogging: {
+          enabledTypes: EKS_CONTROL_PLANE_LOG_TYPES.map((type) => ({ type })),
+        },
       },
     });
 
@@ -1067,7 +1078,7 @@ export class RegionStack extends cdk.Stack {
     // script so the account and region come from the deploying stack instead of being
     // string-built at deploy time.
     // The mirror PREFIX, for manifests that repoint several images at once (Argo CD's
-    // install references argocd, redis and dex). KarpenterImageRepo below is the same idea
+    // install references argocd, valkey and dex). KarpenterImageRepo below is the same idea
     // at finer granularity -- a full repo path including the image name. Both exist because
     // Karpenter's manifest was rendered before this prefix did; the prefix is the better
     // pattern for anything referencing more than one image.

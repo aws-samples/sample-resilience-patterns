@@ -23,8 +23,8 @@
 #   LBC_CLUSTER_NAME  LBC_REGION  LBC_VPC_ID  LBC_IMAGE_REPO  LBC_CONTROLLER_ROLE_ARN
 #
 # NO KEY MATERIAL IS COMMITTED. The chart's self-signed Secret was STRIPPED and every
-# caBundle blanked (ARCC SAX-02 Outcome 3: private keys must not live in version
-# control; SAX-05 Outcome 2: secrets belong in Secrets Manager/KMS). The installer
+# caBundle blanked (the no-secrets-in-version-control rule: private keys must not live in version
+# control; secrets-management guidance: secrets belong in Secrets Manager/KMS). The installer
 # generates the CA + serving cert in-cluster, creates the aws-load-balancer-tls Secret
 # and injects the caBundle.
 #

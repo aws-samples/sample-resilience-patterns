@@ -8,7 +8,7 @@ directly (`build/deploy-stack.sh`, because `aws cloudformation deploy` cannot ta
 | Role | Assumed by | Holds |
 |---|---|---|
 | `github-actions-eks-multi-region` | GitHub Actions via OIDC | ONLY what the workflow's own shell steps call: change-sets, the assets buckets, ECR (mirror + app images), CodeBuild (the in-VPC installer), read-only EKS/EC2/SSM/ARC for verification, the observer-peering accepter step -- plus `iam:PassRole` on exactly one role, below |
-| `eks-multi-region-cfn-exec` | CloudFormation (`--role-arn` on every change-set) | the resource permissions the 12 templates need, derived from the resource types they declare |
+| `eks-multi-region-cfn-exec` | CloudFormation (`--role-arn` on every change-set) | the resource permissions the 12 templates need, derived from the resource types they declare. Its IAM authority (create/modify roles, policies, instance profiles, PassRole) is bounded to names prefixed `eks-mr-demo-` -- every stack name starts with that prefix, so every CloudFormation-generated IAM name does too. Renaming the project means renaming this prefix in the policy. |
 
 The GitHub role can create no infrastructure by itself; CloudFormation does that with the
 execution role. `build/deploy-stack.sh` passes the execution role whenever `ROLE_ARN` is

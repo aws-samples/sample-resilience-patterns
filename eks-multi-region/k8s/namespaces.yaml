@@ -27,6 +27,14 @@ metadata:
     # Not decoration: the app runs as a non-root user with a read-only-ish pod spec, and the
     # restricted baseline is what makes that a documented posture rather than an accident.
     pod-security.kubernetes.io/enforce: baseline
+    # Every workload in this namespace is written to the RESTRICTED profile (non-root,
+    # seccomp RuntimeDefault, all capabilities dropped, no privilege escalation). Enforcing
+    # `restricted` outright would reject any pod that drifts SILENTLY -- a DaemonSet or Job
+    # with 0 desired pods and no error anywhere but an event (docs/lessons.md #26). So the
+    # profile is audited and warned instead: `kubectl apply` prints the violation and the
+    # audit log records it, while the pod still runs.
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
     # POD READINESS GATE opt-in. The AWS Load Balancer Controller's `mpod.elbv2.k8s.aws`
     # webhook injects a readiness gate into pods ONLY in namespaces carrying this label -- read
     # verbatim from that webhook's own namespaceSelector in src/lbc/lbc.yaml, not from docs.

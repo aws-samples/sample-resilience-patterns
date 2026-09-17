@@ -368,3 +368,32 @@ the wrong reason until checked that way. And verify claims against the **live ac
 than inferring them from a green pipeline: the worst defects found so far were only findable that
 way.
 
+
+### Known security deviations (open, deliberate, documented)
+
+Found by the pre-publication review against AWS EKS hardening, least-privilege and
+secrets-management guidance. Each is a conscious trade for a teardown-able sample, named here
+so a production derivative closes it rather than inherits it silently.
+
+- **The app authenticates to Aurora as the master user (`dbadmin`).** Least-privilege guidance
+  for databases wants a dedicated application role with schema-only privileges. The shape:
+  the schema job (already the one place that runs DDL) creates `orders_app`, grants it the
+  table and the `sp_*` functions, and stores its password in a SECOND Secrets Manager secret;
+  the app reads that one. The secondary region inherits database users by replication but
+  not secrets, so the second secret must exist in both regions (a replicated secret is the
+  simplest). Not done here because it needs a live round trip to prove the writer-failover
+  story still holds under the new role.
+- **IMDSv2 hop limit is 2 on both node types.** The hardening bar is 1; 2 is what lets a
+  pod on the pod network reach IMDS, and the pods hold no identity of their own (no IRSA /
+  Pod Identity for the app -- see `region-stack.ts`). Closing it means giving `orders-api`
+  an EKS Pod Identity association and dropping the node role's Secrets Manager / SSM grants,
+  after which both launch templates can go to 1. Pinned at 2 by tests until then, so the
+  change is deliberate when it comes.
+- **Operator access ALBs listen on HTTP.** In-VPC only, reached through an SSM tunnel, but
+  the bastion-to-ALB and ALB-to-Argo hops are cleartext. Fix: an ACM certificate parameter
+  on the access stacks, an HTTPS listener with a TLS 1.2+ policy, and Argo without
+  `server.insecure`.
+- **No Kubernetes NetworkPolicy.** Requires enabling network policy in the VPC CNI add-on
+  and a default-deny plus allow rules per namespace; untested on this cluster.
+- **CloudWatch log groups use the service default key, not a CMK**, and the operator ALBs
+  have no access logs. Both are one property each once a per-region key exists.

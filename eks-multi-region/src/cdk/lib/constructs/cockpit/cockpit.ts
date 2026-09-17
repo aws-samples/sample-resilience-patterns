@@ -18,7 +18,7 @@ import { Construct } from 'constructs';
  *
  * The write role is capped by `CockpitRoleBoundary`, which denies the privilege-escalation
  * set and allows `iam:PassRole` ONLY to fis.amazonaws.com — the single edge FIS requires.
- * Step 5 remains: the AppSec/threat-model note on that PassRole edge, and replacing
+ * Step 5 remains: the security-review/threat-model note on that PassRole edge, and replacing
  * runtime ARN discovery with threaded CfnParameters.
  *
  * ARN DISCOVERY IS AT RUNTIME (not CfnParameter-threaded): the handler resolves the ARC

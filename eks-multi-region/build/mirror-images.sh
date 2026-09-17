@@ -17,7 +17,8 @@
 # WHAT "MIRRORED" HAS TO MEAN HERE. Pods in the isolated subnets can only pull
 # from private ECR over the step-3a interface endpoints. public.ecr.aws is a
 # separate internet-facing service and is NOT reachable through them, so Argo
-# CD's own redis reference has to be mirrored too — see the note in images.json.
+# CD's own cache reference has to be mirrored too (served by valkey -- see the
+# note in images.json).
 #
 # INTEGRITY. Every image is pulled by DIGEST (tags upstream are mutable) and the
 # pushed result is read back from ECR to confirm the expected digest arrived. A
@@ -36,7 +37,7 @@
 #   MIRROR_MANIFEST    Defaults to src/mirror/images.json.
 #   MIRROR_FULL_INDEX  "true" copies the whole multi-platform index and verifies
 #                      the INDEX digest. Costs ~4.8x the transfer and pulls in the
-#                      attestation manifests that redis, dex and nginx carry.
+#                      attestation manifests that dex and nginx carry.
 #   MIRROR_PLATFORM    Defaults to linux/arm64, matching the node group. Any other
 #                      value still copies, but strict digest verification is
 #                      SKIPPED because only the arm64 child digest is pinned.
@@ -263,11 +264,11 @@ while IFS="$(printf '\t')" read -r NAME UPSTREAM TAG DIGEST ARM64_DIGEST REPO; d
     # Pull by DIGEST, push under the readable tag. The tag is a convenience for
     # humans reading `kubectl describe`; the digest is what was reviewed.
     #
-    # ATTESTATION MANIFESTS. The redis, dex and nginx OCI indexes each carry
-    # attestation entries (platform architecture "unknown") alongside the real
-    # platforms — 8, 5 and 8 of them respectively. Flattening to one platform, the
-    # default, never touches them. MIRROR_FULL_INDEX=true does, and if ECR rejects
-    # them the copy fails LOUDLY here in CI rather than at demo time.
+    # ATTESTATION MANIFESTS. The dex and nginx OCI indexes each carry attestation
+    # entries (platform architecture "unknown") alongside the real platforms — 5
+    # and 8 of them respectively; valkey's index carries none. Flattening to one
+    # platform, the default, never touches them. MIRROR_FULL_INDEX=true does, and
+    # if ECR rejects them the copy fails LOUDLY here in CI rather than at demo time.
     #
     # BOUNDED RETRY. Every upstream here (public.ecr.aws, quay.io, ghcr.io,
     # registry.k8s.io) rate-limits anonymous pulls, and a CI runner shares its egress

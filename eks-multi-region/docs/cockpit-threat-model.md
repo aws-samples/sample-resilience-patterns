@@ -14,7 +14,7 @@ privilege-escalation guidance states the obligation directly:
 
 `iam:PassRole` is such an operation. What follows is that enumeration.
 
-Guidance consulted: AWS guidance **SAX-08 Outcome 1** (IAM Authorization and Least Privilege
+Guidance consulted: AWS IAM least-privilege guidance (IAM Authorization and Least Privilege
 Defaults), AWS guidance **Prevent Privilege Escalation**, and the recommendation engine's
 **Use IAM Roles and Scoped Down Policies** (BEST_PRACTICE).
 

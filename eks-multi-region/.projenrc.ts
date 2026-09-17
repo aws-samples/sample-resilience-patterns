@@ -95,18 +95,15 @@ const project = new awscdk.AwsCdkTypeScriptApp({
   // ---- CI seam ----------------------------------------------------------------
   github: false, // THE SEAM — no .github/, no release, no depsUpgrade
 
-  // ---- gitignore (gotcha 9; .agents/ via array, OQ5; +python dirs) -----------
+  // ---- gitignore (gotcha 9; +python dirs) ----------------------------------------
   gitignore: [
-    // .kiro/ dev-loop tooling (steering + skills, M3.5) is COMMITTED into the demo
-    // (matches the predecessor project: only .kiro/specs is ignored). .agents/ and idea/ are local-only.
-    '.agents/', '.kiro/specs/', 'idea/',
+    // Local-only agent/editor scratch that must never be committed to the public sample.
+    '.agents/', 'idea/',
     // temporary/ holds scratch: probe harnesses, mutation-test scaffolding, upstream
     // manifests pulled down for vendoring. It was UNTRACKED but not IGNORED, so it
     // showed up in every `git status` and one careless `git add .` would have committed
     // it. See temporary-files steering: scratch belongs here and nowhere else.
     'temporary/',
-    // gl-push per-builder config (assignee id etc.) — local-only, never committed.
-    '.kiro/skills/gl-push/config.sh',
     '.DS_Store', '**/.DS_Store', 'tsconfig.tsbuildinfo',
     'coverage/', 'test-reports/',
     'cdk.out*/', 'dist/', 'assets/', 'tmp/', '/lib/', '*.d.ts', 'node_modules/',
@@ -118,6 +115,10 @@ const project = new awscdk.AwsCdkTypeScriptApp({
 project.tasks.addEnvironment('PROJECT_NAME', project.name);
 // licensed:false makes projen write "license": "UNLICENSED"; the repo's root LICENSE is MIT-0.
 project.package.addField('license', 'MIT-0');
+// A SAMPLE, not a package: the sample-code policy forbids publishing it to a registry, and
+// `private: true` makes `npm publish` / `yarn npm publish` refuse outright. projen still
+// emits a `publishConfig` block for every NodeProject; `private` overrides it.
+project.package.addField('private', true);
 
 // CONVERGENT (emit in BOTH provider trees): make `cdk synth` resolve the
 // explicit `.js` extension imports the vendored M1 construct barrels use
