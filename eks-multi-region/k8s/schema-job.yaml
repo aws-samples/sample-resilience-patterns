@@ -30,11 +30,20 @@ spec:
         runAsNonRoot: true
         runAsUser: 10001
         fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      # Talks to Secrets Manager and Aurora only; no Kubernetes API, so no token.
+      automountServiceAccountToken: false
       containers:
         - name: schema
           image: ${APP_IMAGE_URI}
           imagePullPolicy: IfNotPresent
           command: ["python", "schema.py"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           env:
             - name: AWS_REGION
               value: "${APP_REGION}"

@@ -7,11 +7,12 @@
     "only pull from private ECR, reached over the ECR interface endpoints and the S3",
     "gateway endpoint created in step 3a.",
     "",
-    "public.ecr.aws IS NOT A SHORTCUT. Argo CD's own manifest pulls redis from",
+    "public.ecr.aws IS NOT A SHORTCUT. Argo CD's own manifest pulls its cache (redis) from",
     "public.ecr.aws, which looks like it might already work from a private subnet. It",
     "does not: the ECR interface endpoints (api.ecr / dkr.ecr) serve PRIVATE ECR only.",
-    "ECR Public is a separate, internet-facing service. Redis must be mirrored like",
-    "everything else.",
+    "ECR Public is a separate, internet-facing service. The cache image must be mirrored",
+    "like everything else -- and it is mirrored as VALKEY, not Redis: see that entry's",
+    "note for the license reason and the compatibility evidence.",
     "",
     "PINNED BY DIGEST, NOT BY TAG. Tags upstream are mutable, so a tag-only mirror is",
     "neither reproducible nor verifiable. TWO digests are pinned per image:",
@@ -27,9 +28,9 @@
     "1500 MB per region (3000 MB across both), against 309 MB per region (619 MB) for",
     "linux/arm64 alone -- 4.8x the data. The surplus is amd64, 386, ppc64le, s390x,",
     "arm/v6, arm/v7 and riscv64, none of which this node group can run. Flattening also",
-    "sidesteps the attestation manifests that redis, dex and nginx each carry (8, 5 and",
-    "8 entries with architecture \"unknown\"), which are a known source of ECR push",
-    "friction.",
+    "sidesteps the attestation manifests that dex and nginx each carry (5 and 8 entries",
+    "with architecture \"unknown\"; the valkey index carries none), which are a known",
+    "source of ECR push friction.",
     "",
     "EVERY DIGEST BELOW WAS RESOLVED FROM THE LIVE REGISTRY on 2026-08-25 and every",
     "image was confirmed to publish linux/arm64 -- the node group is",
@@ -39,7 +40,7 @@
     "",
     "THE IMAGE LIST IS DERIVED, NOT GUESSED. It comes from the upstream install",
     "manifests for the pinned versions:",
-    "  argo-cd      manifests/install.yaml at v3.4.7   -> argocd, redis, dex",
+    "  argo-cd      manifests/install.yaml at v3.4.7   -> argocd, redis (served by valkey), dex",
     "  metrics-server components.yaml at v0.9.0        -> metrics-server",
     "One argocd image backs FIVE workloads (server, repo-server,",
     "application-controller, applicationset-controller, notifications-controller), so",
@@ -61,14 +62,14 @@
       "note": "Backs argocd-server, repo-server, application-controller, applicationset-controller and notifications-controller. v3.4.7 chosen over v3.5.1: last patch of the previous minor, so it carries seven patches of field exposure rather than one. An Argo defect on stage would look like the very conflict this demo disproves."
     },
     {
-      "name": "redis",
-      "upstream": "public.ecr.aws/docker/library/redis",
-      "tag": "8.2.3-alpine",
-      "digest": "sha256:08ad0b1d280850169a790dba1393ff7a90aef951fc19632cf4d3ce4f78e679ba",
-      "arm64Digest": "sha256:2fe148588d93987cea3533873195ec2450f5dbf420c78606aaacad7b78bb5489",
+      "name": "valkey",
+      "upstream": "public.ecr.aws/valkey/valkey",
+      "tag": "9.0.6-alpine",
+      "digest": "sha256:03b0430961fd824180fe21d0728238e5711cba8a7afcfd7b01a8451a754e2a1a",
+      "arm64Digest": "sha256:835ee0f9aca385f81c349696b5e7030ac9c4d15dbccfcee24299ca5c01c174b3",
       "arm64": true,
       "neededBy": "10b",
-      "note": "Version comes from argo-cd v3.4.7's install.yaml, not chosen by us -- Argo's repo-server and application-controller depend on this cache. Digest was COMPUTED as sha256 of the manifest bytes because ECR Public does not return a docker-content-digest header; the method was validated against three registries that do return it, all matching."
+      "note": "Serves the cache that argo-cd v3.4.7's install.yaml names as redis:8.2.3-alpine. Redis 8 is licensed RSALv2 / SSPLv1 / AGPLv3, none of them a permissive license; Valkey is the Linux Foundation fork of the BSD-3-Clause Redis 7.2 codebase and speaks the same protocol, and Argo CD uses the cache only through standard commands (its repo-server and application-controller hold no Redis-8-only features). src/argo/render.sh repoints the manifest's redis reference at this entry; the image ships redis-server/redis-cli compatibility names and the same uid 999 the Deployment runs as. 9.0.6 chosen over 9.1.x for the same reason as argocd: last patch of the previous minor. Digest COMPUTED as sha256 of the manifest bytes (ECR Public returns no docker-content-digest header) and cross-checked 2026-09-17 against Docker Hub's header for the same tag -- identical."
     },
     {
       "name": "dex",
@@ -98,7 +99,7 @@
       "arm64Digest": "sha256:7dd09a6c4f8cab9a2d2cb98fb39790f220e8bc2ea106b2cebde64b90405e0be8",
       "arm64": true,
       "neededBy": "10c",
-      "note": "Serves the packaged Helm chart plus index.yaml in-cluster. Argo CD accepts git, http Helm and OCI sources; ECR-as-OCI was rejected because its auth token expires after 12 hours (see plan step 10). Digest computed the same way as redis."
+      "note": "Serves the packaged Helm chart plus index.yaml in-cluster. Argo CD accepts git, http Helm and OCI sources; ECR-as-OCI was rejected because its auth token expires after 12 hours (see plan step 10). Digest computed the same way as valkey."
     },
     {
       "name": "karpenter-controller",

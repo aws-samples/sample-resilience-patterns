@@ -78,6 +78,19 @@ export const AZ_COUNT = 3;
 export const KUBERNETES_VERSION = '1.35';
 
 /**
+ * Control-plane log types enabled on every cluster. ALL FIVE: `audit` is the record of who
+ * changed what during a failover, `authenticator` is where an access-entry mistake surfaces.
+ * Consumed by region-stack.ts and pinned by a test so the set cannot shrink quietly.
+ */
+export const EKS_CONTROL_PLANE_LOG_TYPES = [
+  'api',
+  'audit',
+  'authenticator',
+  'controllerManager',
+  'scheduler',
+] as const;
+
+/**
  * Stack suffix for a region. The deploy task factory derives its stack names as
  * `$PROJECT_NAME-region-${r.name}`, so this MUST stay `region-<name>` — a shorter
  * form (`use2`) would package under one name and deploy under another.

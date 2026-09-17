@@ -68,7 +68,7 @@ export interface FluentBitIamProps {
  * another mirrored image, to replace a mechanism the repo already uses correctly twice
  * (KarpenterIam, LbcIam). Staying on IRSA and implementing the mandated mitigation instead
  * -- trust scoped to the exact service account -- is the deliberate trade. Recorded here
- * rather than left silent, the way the SAX-01 TLS floor deviation is.
+ * rather than left silent, the way the operator-access TLS deviation is.
  */
 export class FluentBitIam extends Construct {
   /** Role the shipper assumes via IRSA. The ServiceAccount is annotated with this ARN. */

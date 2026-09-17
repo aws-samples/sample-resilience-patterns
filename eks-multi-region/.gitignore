@@ -36,10 +36,8 @@ jspm_packages/
 .yarn-integrity
 .cache
 .agents/
-.kiro/specs/
 idea/
 temporary/
-.kiro/skills/gl-push/config.sh
 .DS_Store
 **/.DS_Store
 tsconfig.tsbuildinfo

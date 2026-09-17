@@ -42,6 +42,7 @@ import {
   OBSERVER_SUFFIX,
   DNS_SUFFIX,
   GLOBAL_DATA_SUFFIX,
+  EKS_CONTROL_PLANE_LOG_TYPES,
   KUBERNETES_VERSION,
   LOADGEN_SUFFIX,
   PEERING_SUFFIX,
@@ -526,6 +527,61 @@ describe('GitHub role policy covers every API the rail calls under the runner ro
   });
 });
 
+describe('CloudFormation execution role document holds the least-privilege floor', () => {
+  // The cfn-exec role is deliberately broad on the resource services (it creates the whole
+  // rail), but IAM is where breadth turns into escalation: iam:PutRolePolicy /
+  // AttachRolePolicy / UpdateAssumeRolePolicy / CreatePolicyVersion on Resource "*" let the
+  // role rewrite ANY role in the account, not just the ones the stacks create. The
+  // public-sample review found exactly that statement. These pins keep every IAM mutation
+  // bounded to the sample's own name prefix, which the PassRole statement already relied
+  // on and a green e2e proved every stack-created role satisfies.
+  type Stmt = { Sid?: string; Effect: string; Action: string | string[]; NotAction?: unknown; Resource: string | string[]; Condition?: unknown };
+  const root = path.join(__dirname, '..');
+  const policy = JSON.parse(fs.readFileSync(path.join(root, 'docs', 'iam', 'cfn-exec-role-policy.json'), 'utf8'));
+  const statements = policy.Statement as Stmt[];
+  const actionsOf = (s: Stmt) => ([] as string[]).concat(s.Action);
+  const resourcesOf = (s: Stmt) => ([] as string[]).concat(s.Resource);
+
+  it('grants no IAM mutation on Resource "*" -- only iam:ListRoles, which has no resource type', () => {
+    const iamOnStar = statements
+      .filter((s) => s.Effect === 'Allow' && resourcesOf(s).includes('*'))
+      .flatMap((s) => actionsOf(s).filter((a) => a.startsWith('iam:')));
+    expect(iamOnStar).toEqual(['iam:ListRoles']);
+  });
+
+  it('bounds every IAM role/policy/instance-profile action to the eks-mr-demo- prefix', () => {
+    const mutating = statements.filter((s) => s.Effect === 'Allow'
+      && actionsOf(s).some((a) => /^iam:(Create|Delete|Update|Put|Attach|Detach|Add|Remove|Tag|Untag)(Role|Policy|InstanceProfile)/.test(a)));
+    expect(mutating.length).toBeGreaterThan(0);
+    for (const s of mutating) {
+      for (const r of resourcesOf(s)) {
+        expect({ sid: s.Sid, resource: r }).toEqual({
+          sid: s.Sid,
+          resource: expect.stringMatching(/^arn:aws:iam::ACCOUNT_ID:(role|policy|instance-profile)\/eks-mr-demo-\*$/),
+        });
+      }
+    }
+  });
+
+  it('uses no NotAction, and every PassRole names a role prefix and a consuming service', () => {
+    expect(statements.filter((s) => s.NotAction !== undefined)).toEqual([]);
+    const pass = statements.filter((s) => s.Effect === 'Allow' && actionsOf(s).includes('iam:PassRole'));
+    expect(pass.length).toBeGreaterThan(0);
+    for (const s of pass) {
+      expect(resourcesOf(s)).toEqual(['arn:aws:iam::ACCOUNT_ID:role/eks-mr-demo-*']);
+      expect((s.Condition as { StringEquals?: { 'iam:PassedToService'?: unknown } })?.StringEquals?.['iam:PassedToService']).toBeDefined();
+    }
+  });
+
+  it('keeps service-linked-role creation on the aws-service-role path', () => {
+    const slr = statements.filter((s) => s.Effect === 'Allow' && actionsOf(s).includes('iam:CreateServiceLinkedRole'));
+    expect(slr.length).toBeGreaterThan(0);
+    for (const s of slr) {
+      expect(resourcesOf(s)).toEqual(['arn:aws:iam::ACCOUNT_ID:role/aws-service-role/*']);
+    }
+  });
+});
+
 describe('operator entry points mirror the deploy rail (Makefile, cleanup.sh, verify-stacks.sh)', () => {
   // The rail in .projen/tasks.json is the single source of truth for WHICH stacks exist
   // and WHERE. cleanup.sh and verify-stacks.sh each carry their own region:stack list --
@@ -685,6 +741,21 @@ describe('EKS (step 2)', () => {
         mode: cluster.Properties?.AccessConfig?.AuthenticationMode,
       }).toEqual({ stackName, mode: 'API_AND_CONFIG_MAP' });
     }
+  });
+
+  it('enables ALL FIVE control-plane log types on every cluster', () => {
+    // EKS hardening guidance lists control-plane logging next to the private endpoint as
+    // a baseline control, and the CFN default is NO logging at all. Pinned as the full
+    // set (not a count) so dropping `audit` while adding nothing reads as what it is.
+    const expected = [...EKS_CONTROL_PLANE_LOG_TYPES].sort();
+    for (const [stackName, template] of regionStacks()) {
+      const cluster = Object.values(template.findResources('AWS::EKS::Cluster'))[0];
+      const enabled = ((cluster.Properties?.Logging?.ClusterLogging?.EnabledTypes ?? []) as { Type: string }[])
+        .map((t) => t.Type)
+        .sort();
+      expect({ stackName, enabled }).toEqual({ stackName, enabled: expected });
+    }
+    expect(expected).toEqual(['api', 'audit', 'authenticator', 'controllerManager', 'scheduler']);
   });
 
   it('does NOT grant the CI deploy role a standing cluster-admin entry', () => {
@@ -4434,6 +4505,11 @@ describe('third-party image mirror (step 10a)', () => {
     // components.yaml references metrics-server, and 10c's chart repo needs nginx.
     // A missing entry means a pod in an isolated subnet with nothing to pull.
     //
+    // The redis reference is SERVED BY VALKEY (BSD-3-Clause; Redis 8 is RSALv2 / SSPLv1 /
+    // AGPLv3), so the lockfile carries a valkey entry and no redis entry -- render.sh
+    // repoints Argo's redis reference at it. A redis entry reappearing here would mean the
+    // license substitution was undone.
+    //
     // Grouped by the step that consumes each image so adding one is a deliberate edit
     // rather than a list that quietly grows. Karpenter's own docs require its image be
     // copied into private ECR for a private cluster.
@@ -4443,7 +4519,7 @@ describe('third-party image mirror (step 10a)', () => {
     }
     for (const names of Object.values(byStep)) names.sort();
     expect(byStep).toEqual({
-      '10b': ['argocd', 'dex', 'metrics-server', 'redis'],
+      '10b': ['argocd', 'dex', 'metrics-server', 'valkey'],
       '10c': ['nginx'],
       '11': ['karpenter-controller'],
       // The AWS Load Balancer Controller runs IN-CLUSTER, unlike the in-tree service
@@ -4495,8 +4571,8 @@ describe('third-party image mirror (step 10a)', () => {
   test('nothing is mirrored FROM private ECR, and public.ecr.aws is treated as upstream', () => {
     // public.ecr.aws looks like it might already be reachable, but the step-3a
     // interface endpoints serve PRIVATE ECR only — ECR Public is a separate
-    // internet-facing service. So Argo's own redis reference is an upstream to be
-    // mirrored, not a source pods can use directly.
+    // internet-facing service. So the cache Argo's manifest pulls from there is an
+    // upstream to be mirrored (as valkey), not a source pods can use directly.
     for (const img of mirrorManifest.images) {
       expect(img.upstream).not.toMatch(/\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/);
     }
@@ -5339,12 +5415,18 @@ describe('vendored Argo CD and metrics-server (step 10b)', () => {
     // absent from our ECR and the pod fails with "manifest unknown". Tied to images.json so a
     // mirror bump that forgets to re-render fails the build.
     for (const [text, name] of [
-      [argo, 'argocd'], [argo, 'redis'], [argo, 'dex'], [ms, 'metrics-server'],
+      [argo, 'argocd'], [argo, 'valkey'], [argo, 'dex'], [ms, 'metrics-server'],
     ] as Array<[string, string]>) {
       const e = img(name);
       expect(text).toContain(`\${MIRROR_REGISTRY}/${name}:${e.tag}@${e.arm64Digest}`);
       expect(text).not.toContain(e.digest); // never the index digest
     }
+    // The argocd-redis Deployment must pull the VALKEY mirror, and nothing may still point at
+    // a redis mirror repo: a `${MIRROR_REGISTRY}/redis:` reference would name an image the
+    // mirror no longer pushes (ImagePullBackOff that reads as a mirror that never ran) and would
+    // reintroduce the Redis 8 license question the substitution exists to remove.
+    expect(argo).not.toMatch(/\$\{MIRROR_REGISTRY\}\/redis[:@]/);
+    expect(argo.match(/^\s+image: \$\{MIRROR_REGISTRY\}\/valkey:/gm)).toHaveLength(1);
   });
 
   test('metrics-server is installed — the HPA is inert without it', () => {
@@ -6157,7 +6239,7 @@ describe('AWS Load Balancer Controller install (single-AZ / zonal-shift feature)
 
   test('NO vendored manifest commits private key material', () => {
     // the no-secrets-in-version-control rule lists "Storing certificates and private keys in version control
-    // systems" as its FIRST common pitfall; SAX-05 Outcome 2 requires secrets live in Secrets
+    // systems" as its FIRST common pitfall; secrets-management guidance requires secrets live in Secrets
     // Manager or KMS and "never hardcode in source code".
     //
     // This is not hypothetical here. The LBC chart's `genSelfSignedCert` bakes a REAL 2240-byte
@@ -6554,6 +6636,87 @@ describe('Service migration to ip targets (D6 — Argo is the other writer)', ()
     // And after the LBC pass, so the webhook exists to inject the class on recreate.
     const lbcAt = installer.indexOf('LBC_MANIFEST_S3_URI');
     expect({ lbcBeforeDelete: lbcAt < deleteAt }).toEqual({ lbcBeforeDelete: true });
+  });
+});
+
+describe('pod security posture across every workload manifest', () => {
+  // EKS pod-security guidance, applied uniformly: every container drops ALL capabilities,
+  // forbids privilege escalation, runs on the runtime's default seccomp profile and has a
+  // read-only root filesystem; pods that never call the Kubernetes API mount no
+  // service-account token. Counted per WORKLOAD DOCUMENT against its `image:` lines (one per
+  // container) so a new sidecar cannot arrive without the posture -- a single missing field
+  // would otherwise be invisible until a `restricted` admission profile rejected the pod.
+  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const workloadDocs = (file: string) => read('k8s', file)
+    .split(/^---\s*$/m)
+    .filter((doc) => /^kind: (Deployment|DaemonSet|StatefulSet|Job|CronJob)\s*$/m.test(doc))
+    .map((doc) => ({ file, kind: doc.match(/^kind: (\w+)/m)![1], name: doc.match(/^  name: (\S+)/m)![1], doc }));
+  const count = (doc: string, re: RegExp) => (doc.match(re) ?? []).length;
+  const files = ['app.yaml', 'schema-job.yaml', 'chart-repo.yaml', 'fluent-bit.yaml'];
+  const all = files.flatMap(workloadDocs);
+
+  test('the manifest set under test is the full one', () => {
+    // Every file in k8s/ that carries a pod template must be listed above, or a new
+    // workload escapes the posture check by default.
+    const withPods = fs.readdirSync(path.join(__dirname, '..', 'k8s'))
+      .filter((f) => f.endsWith('.yaml') && workloadDocs(f).length > 0)
+      .sort();
+    expect(withPods).toEqual([...files].sort());
+    expect(all.map((w) => `${w.kind}/${w.name}`).sort()).toEqual([
+      'CronJob/replica-reporter',
+      'DaemonSet/fluent-bit',
+      'Deployment/chart-repo',
+      'Deployment/orders-api',
+      'Job/orders-schema-${SCHEMA_JOB_SUFFIX}',
+    ]);
+  });
+
+  test('every container drops ALL capabilities, cannot escalate, and has a read-only root', () => {
+    // Every regex is anchored to a real YAML key (indent + key at line start) so a COMMENT
+    // that merely mentions the field cannot satisfy the count -- fluent-bit's does.
+    for (const w of all) {
+      const containers = count(w.doc, /^\s+image: /gm);
+      expect({ workload: `${w.kind}/${w.name}`, containers }).toEqual({ workload: `${w.kind}/${w.name}`, containers: 1 });
+      expect({ workload: `${w.kind}/${w.name}`, dropAll: count(w.doc, /^\s+drop:\s*\[\s*"?ALL"?\s*\]\s*$|^\s+drop:\s*\n\s+- ALL\s*$/gm) })
+        .toEqual({ workload: `${w.kind}/${w.name}`, dropAll: containers });
+      expect({ workload: `${w.kind}/${w.name}`, noEscalation: count(w.doc, /^\s+allowPrivilegeEscalation: false\s*$/gm) })
+        .toEqual({ workload: `${w.kind}/${w.name}`, noEscalation: containers });
+      expect({ workload: `${w.kind}/${w.name}`, readOnlyRoot: count(w.doc, /^\s+readOnlyRootFilesystem: true\s*$/gm) })
+        .toEqual({ workload: `${w.kind}/${w.name}`, readOnlyRoot: containers });
+      expect(w.doc).not.toMatch(/^\s+privileged: true\s*$/m);
+    }
+  });
+
+  test('every pod runs on the runtime default seccomp profile', () => {
+    for (const w of all) {
+      expect({ workload: `${w.kind}/${w.name}`, seccomp: /seccompProfile:\s*\n\s+type: RuntimeDefault/.test(w.doc) })
+        .toEqual({ workload: `${w.kind}/${w.name}`, seccomp: true });
+    }
+  });
+
+  test('non-root everywhere except the log shipper, which is the documented hostPath exception', () => {
+    for (const w of all.filter((x) => x.name !== 'fluent-bit')) {
+      expect({ workload: `${w.kind}/${w.name}`, nonRoot: /runAsNonRoot: true/.test(w.doc) })
+        .toEqual({ workload: `${w.kind}/${w.name}`, nonRoot: true });
+    }
+  });
+
+  test('only the replica-reporter (which reads the Kubernetes API) keeps a service-account token', () => {
+    const needsApi = new Set(['CronJob/replica-reporter', 'DaemonSet/fluent-bit']);
+    for (const w of all) {
+      const key = `${w.kind}/${w.name}`;
+      const disabled = /^\s+automountServiceAccountToken: false\s*$/m.test(w.doc);
+      expect({ workload: key, tokenDisabled: disabled }).toEqual({ workload: key, tokenDisabled: !needsApi.has(key) });
+    }
+  });
+
+  test('the demo namespace enforces baseline and audits+warns on restricted', () => {
+    // Enforcing `restricted` outright would reject a drifting pod SILENTLY (docs/lessons.md
+    // #26); warn+audit makes the drift visible at apply time while the pod still runs.
+    const demo = read('k8s', 'namespaces.yaml').split(/^---\s*$/m).find((d) => /^  name: demo\s*$/m.test(d))!;
+    expect(demo).toMatch(/pod-security\.kubernetes\.io\/enforce: baseline/);
+    expect(demo).toMatch(/pod-security\.kubernetes\.io\/warn: restricted/);
+    expect(demo).toMatch(/pod-security\.kubernetes\.io\/audit: restricted/);
   });
 });
 
