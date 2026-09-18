@@ -5,8 +5,6 @@ on:
   push:
     paths:
       - aurora/**
-    branches-ignore:
-      - main
   workflow_dispatch: {}
 jobs:
   build:
