@@ -46,10 +46,10 @@ export class DatabasePrimaryStack extends cdk.Stack {
         generateStringKey: 'password',
         passwordLength: 24,
         // RDS forbids / @ " and space. The rest are for the delivery path: the app instance
-        // writes the password into a systemd unit as `Environment=DB_PASSWORD=<value>` from a
-        // shell heredoc, where % is a systemd specifier, ' and \ are systemd quoting, and $ and `
-        // are expanded by the shell. A % in a generated password produced a DB login failure in
-        // the original demo (one redeploy in ~four).
+        // writes the password as `DB_PASSWORD=<value>` into a systemd EnvironmentFile from a
+        // shell pipeline, where % is a systemd specifier, ' and \ are systemd quoting, ; starts
+        // a comment line, and $ and ` are expanded by the shell. A % in a generated password
+        // produced a DB login failure in the original demo (one redeploy in ~four).
         excludeCharacters: '"@/\\ %\'$`;',
       },
     });

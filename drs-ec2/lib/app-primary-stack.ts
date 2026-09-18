@@ -94,12 +94,17 @@ python3 -m venv /opt/app/venv
 REGION="${this.region}"
 PROJECT="${project}"
 DB_ENDPOINT=$(aws ssm get-parameter --region "$REGION" --name "/$PROJECT/db-writer-endpoint" --query Parameter.Value --output text)
-SECRET_JSON=$(aws secretsmanager get-secret-value --region "$REGION" --secret-id "$PROJECT/aurora/master" --query SecretString --output text)
-DB_USER=$(echo "$SECRET_JSON" | python3 -c 'import sys,json;print(json.load(sys.stdin)["username"])')
-DB_PASS=$(echo "$SECRET_JSON" | python3 -c 'import sys,json;print(json.load(sys.stdin)["password"])')
 
 aws s3 cp "s3://${bucket}/app/app.py"  /opt/app/app.py  --region "$REGION"
 aws s3 cp "s3://${bucket}/app/ui.html" /opt/app/ui.html --region "$REGION"
+
+# Database credentials never touch the shell trace or a world-readable file: xtrace is off while
+# the secret is in flight (set -x would echo it into cloud-init-output.log and the EC2 console
+# output), and the values go straight into a root-only environment file that the unit loads.
+set +x
+(umask 077; aws secretsmanager get-secret-value --region "$REGION" --secret-id "$PROJECT/aurora/master" --query SecretString --output text \
+  | python3 -c 'import sys,json; s=json.load(sys.stdin); print("DB_USER=" + s["username"]); print("DB_PASSWORD=" + s["password"])' > /etc/drsapp.env)
+set -x
 
 cat > /etc/systemd/system/drsapp.service <<EOF
 [Unit]
@@ -113,8 +118,7 @@ Environment=DB_NAME=${project}
 Environment=PROJECT=${project}
 Environment=PRIMARY_REGION=${this.region}
 Environment=SECONDARY_REGION=${secondaryRegion}
-Environment=DB_USER=$DB_USER
-Environment=DB_PASSWORD=$DB_PASS
+EnvironmentFile=/etc/drsapp.env
 ExecStart=/opt/app/venv/bin/python /opt/app/app.py
 Restart=always
 [Install]
