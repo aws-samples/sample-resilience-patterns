@@ -2,7 +2,6 @@ import * as path from 'path';
 import * as cdk from 'aws-cdk-lib';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
-import * as elbv2Targets from 'aws-cdk-lib/aws-elasticloadbalancingv2-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { Construct } from 'constructs';
@@ -93,6 +92,48 @@ export interface CockpitProps {
    * Threaded as explicit pairs, never two positional lists (bug class 19).
    */
   readonly azNameIdPairs: string;
+}
+
+/**
+ * The cockpit Lambda registered behind the access door with an invoke permission that names
+ * its OWN target group.
+ *
+ * CDK's stock `LambdaTarget` grants `elasticloadbalancing.amazonaws.com` with neither
+ * `SourceArn` nor `SourceAccount` (checkov CKV_AWS_364): any target group in ANY account that
+ * registers this function may invoke it -- including a public ALB someone stands up in this
+ * account to reach the cockpit around the observer path. The permission cannot name the
+ * exact target-group ARN: it has to exist BEFORE the group registers the function (the ALB
+ * guide orders add-permission before register-targets, and CloudFormation registers inline
+ * with the group's own CREATE), and the ARN carries a random suffix the group does not have
+ * until then. So the group gets a FIXED name and the permission an `ArnLike` on
+ * `targetgroup/<name>/*` plus `SourceAccount` -- the two condition keys the ALB guide's own
+ * add-permission example uses. Wildcards are legal here: Lambda compares `SourceArn` with
+ * `ArnLike`.
+ */
+class ScopedLambdaTarget implements elbv2.IApplicationLoadBalancerTarget {
+  private readonly fn: lambda.Function;
+  private readonly targetGroupArnPattern: string;
+
+  constructor(fn: lambda.Function, targetGroupArnPattern: string) {
+    this.fn = fn;
+    this.targetGroupArnPattern = targetGroupArnPattern;
+  }
+
+  public attachToApplicationTargetGroup(
+    targetGroup: elbv2.IApplicationTargetGroup,
+  ): elbv2.LoadBalancerTargetProps {
+    const permissionId = 'ElbInvoke';
+    this.fn.addPermission(permissionId, {
+      principal: new iam.ServicePrincipal('elasticloadbalancing.amazonaws.com'),
+      action: 'lambda:InvokeFunction',
+      sourceArn: this.targetGroupArnPattern,
+      sourceAccount: cdk.Stack.of(targetGroup).account,
+    });
+    // Registration runs inside the group's CREATE, so the group must wait for the permission
+    // -- the same ordering `LambdaTarget` enforces with `applyBefore`.
+    targetGroup.node.addDependency(this.fn.node.findChild(permissionId));
+    return { targetType: elbv2.TargetType.LAMBDA, targetJson: { id: this.fn.functionArn } };
+  }
 }
 
 export class Cockpit extends Construct {
@@ -410,9 +451,21 @@ export class Cockpit extends Construct {
     });
 
     // --- ALB Lambda target + /cockpit* listener rule ------------------------------
+    // FIXED name so the invoke permission can name the group (see ScopedLambdaTarget).
+    // Target-group names are unique per region per account and capped at 32 characters;
+    // CDK validates the length at synth. The cockpit exists in ONE stack per account (the
+    // standby access door), so the name cannot collide with another instance of itself.
+    const targetGroupName = `${props.appId}-cockpit`;
+    const targetGroupArnPattern = cdk.Stack.of(this).formatArn({
+      service: 'elasticloadbalancing',
+      resource: 'targetgroup',
+      resourceName: `${targetGroupName}/*`,
+      arnFormat: cdk.ArnFormat.SLASH_RESOURCE_NAME,
+    });
     const targetGroup = new elbv2.ApplicationTargetGroup(this, 'Targets', {
+      targetGroupName,
       targetType: elbv2.TargetType.LAMBDA,
-      targets: [new elbv2Targets.LambdaTarget(fn)], // auto-adds the elb invoke permission
+      targets: [new ScopedLambdaTarget(fn, targetGroupArnPattern)],
       // No port/protocol/vpc for a LAMBDA target group — CDK synth errors if supplied.
     });
 

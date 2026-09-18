@@ -124,6 +124,20 @@ export class ObserverStack extends cdk.Stack {
           description: 'observer VPC to SSM endpoints',
         },
       ],
+      // Interface endpoints only ANSWER, and security groups are stateful, so replies to the
+      // admitted inbound flows need no egress rule. Without an explicit list CloudFormation
+      // applies its allow-all default (cfn_nag F1000). This unroutable ICMP rule is the exact
+      // shape CDK emits for `allowAllOutbound: false` -- the same rule the region stacks'
+      // endpoint SGs carry -- so "no egress" is stated in the template rather than implied.
+      securityGroupEgress: [
+        {
+          ipProtocol: 'icmp',
+          fromPort: 252,
+          toPort: 86,
+          cidrIp: '255.255.255.255/32',
+          description: 'Disallow all traffic',
+        },
+      ],
       tags: [{ key: 'Name', value: `${props.appId}-observer-vpce-sg` }],
     });
 
