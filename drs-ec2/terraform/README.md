@@ -1,10 +1,6 @@
-# drs-region-switch (Terraform module)
+# AWS DRS custom actions for ARC Region Switch
 
-DRS orchestration steps for an [ARC Region Switch](https://docs.aws.amazon.com/r53recovery/latest/dg/region-switch.html)
-plan: fail a DRS-replicated EC2 tier over to the secondary region and -- for stateful instances --
-back **onto the original instance**, ending every cycle at the same resting state. The Terraform
-flavour of the CDK construct in [`../lib/constructs`](../lib/constructs); same Python handlers,
-same seven steps.
+Use this Terraform module to add AWS Elastic Disaster Recovery (AWS DRS) custom actions to an Amazon Application Recovery Controller (ARC) Region Switch plan. It fails a DRS-replicated Amazon EC2 tier over to a secondary AWS Region and, for stateful instances, fails back into the original instance. The module packages the same Python handlers as [`../lib/constructs`](../lib/constructs).
 
 ```hcl
 module "drs" {
@@ -29,55 +25,44 @@ resource "aws_iam_role_policy" "plan_drs_steps" {
 }
 ```
 
-Then in `aws_arcregionswitch_plan`, add the steps with a `dynamic "step"` block over
-`module.drs.activate_secondary_steps` (ACTIVATE secondary) and `module.drs.activate_primary_steps`
-(ACTIVATE primary, with your Aurora / DNS steps inserted at index `module.drs.activate_primary_split`).
-A complete plan is in [`examples/plan`](examples/plan/main.tf).
+In `aws_arcregionswitch_plan`, add a `dynamic "step"` block over `module.drs.activate_secondary_steps` for ACTIVATE secondary and `module.drs.activate_primary_steps` for ACTIVATE primary. Insert Aurora and DNS steps at `module.drs.activate_primary_split`. See [`examples/plan`](examples/plan/main.tf) for a complete plan.
 
-## What it creates
+## Resources
 
-| Resource | Where | Count |
+| Resource | Scope | Count |
 |---|---|---|
-| `aws_lambda_layer_version` -- the `drs_region_switch` package | each region | 2 |
-| `aws_lambda_function` -- one per step, `handler = drs_region_switch.<module>.handler`, one-line stub package | each region | 14 |
-| `aws_cloudwatch_log_group` -- 1-day retention by default | each region | 14 |
-| `aws_iam_role` -- orchestration role (DRS, ViaAWSService EC2 set, tag-scoped `StopInstances` for launch-into, PassRole, ELB, SSM) | global | 1 |
+| `aws_lambda_layer_version`, the `drs_region_switch` package | each AWS Region | 2 |
+| `aws_lambda_function`, one per step, `handler = drs_region_switch.<module>.handler`, one-line stub package | each AWS Region | 14 |
+| `aws_cloudwatch_log_group`, 1-day retention by default | each AWS Region | 14 |
+| `aws_iam_role`, orchestration role for AWS DRS, the `ViaAWSService` EC2 set, tag-scoped `StopInstances` for launch-into, `PassRole`, Elastic Load Balancing, and Systems Manager | global | 1 |
 
-Functions are deployed to **both** plan regions, as ARC's custom-action guidance asks; each emitted
-step references the function in its `region_to_run` region.
+Functions run in both plan AWS Regions. Each emitted step references its function through `region_to_run`.
 
-## The seven steps
+## Steps
 
-| Step | Workflow | Runs in | What it does |
+| Step | Workflow | Runs in | Action |
 |---|---|---|---|
-| `drs-recover-ec2` | activate secondary | activating | `StartRecovery` of the tagged source server; waits for RUNNING |
-| `register-target` | activate secondary | activating | repoints the app's DB SSM parameter; registers the recovered EC2 in the secondary target group |
-| `drs-reverse-replicate` | activate primary | deactivating | reverse replication of the recovery instance back to the primary (stateful only) |
-| `drs-failback-launch` | activate primary | deactivating | launch for failback -- into the original instance when configured (stops it first) |
-| `register-failback-target` | activate primary | deactivating | registers / verifies the failed-back EC2 in the primary target group |
+| `drs-recover-ec2` | activate secondary | activating | `StartRecovery` for the tagged source server and wait for RUNNING |
+| `register-target` | activate secondary | activating | Update the app DB Systems Manager parameter and register the recovered Amazon EC2 instance in the secondary target group |
+| `drs-reverse-replicate` | activate primary | deactivating | Reverse replication from the recovery instance to the primary, stateful only |
+| `drs-failback-launch` | activate primary | deactivating | Launch fail-back into the original instance when configured, after stopping it |
+| `register-failback-target` | activate primary | deactivating | Register and verify the failed-back Amazon EC2 instance in the primary target group |
 | *(your Aurora switchover-back and DNS flip-back go here)* | | | |
-| `drs-reprotect` | activate primary | deactivating | re-points the forward source server at the failed-back EC2; waits for RESCAN |
-| `drs-retire` | activate primary | deactivating | terminates the recovery instance, deletes FAILBACK state, empties the secondary target group |
+| `drs-reprotect` | activate primary | deactivating | Repoint the forward source server at the failed-back Amazon EC2 instance and wait for RESCAN |
+| `drs-retire` | activate primary | deactivating | Terminate the recovery instance, delete `FAILBACK` state, and empty the secondary target group |
 
 Stateful-only steps return `SKIPPED` in seconds when `stateful_ec2 = false`.
 
 ## Layer-only use
 
-Prefer to define your own functions (naming, VPC config, tagging)? Use `module.drs.layer_arns`
-and `module.drs.handlers`: create one `aws_lambda_function` per step with `layers = [layer_arn]`,
-`handler = module.drs.handlers["<step>"]`, a stub package, the environment from the table in
-`main.tf`, and a role with the statements in `iam.tf`.
+To define your own functions, use `module.drs.layer_arns` and `module.drs.handlers`. Create one `aws_lambda_function` per step with `layers = [layer_arn]`, `handler = module.drs.handlers["<step>"]`, a stub package, the environment from the table in `main.tf`, and a role that uses the statements in `iam.tf`.
 
-## Prerequisites the module cannot create
+## Prerequisites
 
-- AWS Elastic Disaster Recovery initialised in both regions (replication template with a staging
-  subnet in the secondary; the primary's launch configuration template with
-  `launchIntoSourceInstance` enabled for stateful fail-back).
-- The protected EC2 running the DRS agent, its source server tagged `<project>:role = app`
-  (or your `source_server_tag`), replication `CONTINUOUS`.
-- For launch-into-source: the EC2 boots BIOS (Linux), carries `AWSDRS = AllowLaunchingIntoThisInstance`,
-  and its instance profile includes `AWSElasticDisasterRecoveryRecoveryInstancePolicy`.
+- Initialize AWS DRS in both AWS Regions. Configure a replication template with a staging subnet in the secondary, and configure the primary launch configuration template with `launchIntoSourceInstance` for stateful fail-back.
+- Run the AWS DRS agent on the protected Amazon EC2 instance. Tag its source server with `<project>:role = app` or `source_server_tag`, and confirm replication is `CONTINUOUS`.
+- For launch-into-source, use a Linux BIOS boot configuration, `AWSDRS = AllowLaunchingIntoThisInstance`, and an instance profile with `AWSElasticDisasterRecoveryRecoveryInstancePolicy`.
 
 ## Requirements
 
-Terraform >= 1.5, `hashicorp/aws` >= 6.0 (`aws_arcregionswitch_plan`), `hashicorp/archive` >= 2.4.
+Terraform >= 1.5, `hashicorp/aws` >= 6.0 (`aws_arcregionswitch_plan`), and `hashicorp/archive` >= 2.4.
