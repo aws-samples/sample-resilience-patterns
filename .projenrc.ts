@@ -92,6 +92,8 @@ interface Pattern {
   typescriptVersion?: string;
   /** Optional dependency overrides appended after SHARED_CDK_CONFIG.deps (e.g. pin cdk-nag major). */
   deps?: string[];
+  /** Optional extra .gitignore patterns for the subproject (e.g. Python byte-code for patterns with Lambda code). */
+  gitignore?: string[];
 }
 
 // Common CDK app config — shared across all patterns.
@@ -481,6 +483,7 @@ const patterns: Pattern[] = [
     cdkVersion: '2.215.0',
     typescriptVersion: '~5.9.3',
     deps: ['cdk-nag@^2.37.55'], // same major as the other patterns; 3.x moved NagSuppressions
+    gitignore: ['__pycache__/', '*.pyc'], // app/ and lambda/ are Python; byte-code must never be committed
     e2eRoleArn: `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-drs-ec2`,
     awsRegion: 'us-east-2',
     e2eTimeoutMinutes: 300,
@@ -556,6 +559,7 @@ for (const p of patterns) {
   // licensed:false makes projen set "license": "UNLICENSED" in package.json.
   // Override to "MIT" so package.json matches the repo's root LICENSE.
   subproject.package.addField('license', 'MIT');
+  if (p.gitignore) subproject.gitignore.addPatterns(...p.gitignore);
 
   // ----------- Build workflow ---------------------------------------------
   const buildWf = new github.GithubWorkflow(root.github!, `${p.outdir}-build`);

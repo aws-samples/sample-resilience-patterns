@@ -46,3 +46,5 @@ junit.xml
 /cdk.out/
 .cdk.staging/
 .parcel-cache/
+__pycache__/
+*.pyc
