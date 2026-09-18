@@ -84,6 +84,7 @@ export class ObserverStack extends cdk.Stack {
     const bastion = new ec2.CfnInstance(this, 'Bastion', {
       imageId: ec2.MachineImage.latestAmazonLinux2023().getImage(this).imageId,
       instanceType: 't3.nano', subnetId: subnet.ref, iamInstanceProfile: profile.ref, securityGroupIds: [bastionSg.ref],
+      metadataOptions: { httpTokens: 'required', httpEndpoint: 'enabled' }, // IMDSv2 only; SSM Agent needs nothing else
       tags: [{ key: 'Name', value: name('bastion') }, { key: `${project}:role`, value: 'observer-bastion' }],
     });
 

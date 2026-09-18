@@ -143,6 +143,9 @@ systemctl enable --now drsapp.service
       subnetId: props.subnetIds[0],
       securityGroupIds: [this.appSecurityGroup.ref],
       tags: [{ key: 'AWSDRS', value: 'AllowLaunchingIntoThisInstance' }, { key: 'Name', value: `${project}-app` }],
+      // IMDSv2 only: the app, the AWS CLI in the boot script, cloud-init, the SSM Agent and the DRS
+      // replication agent all use session tokens, so nothing on the box needs IMDSv1.
+      metadataOptions: { httpTokens: 'required', httpEndpoint: 'enabled' },
       userData: cdk.Fn.base64(userData),
     });
 
