@@ -226,8 +226,22 @@ function orchestrationPolicy(scope: Construct, cfg: DrsRegionSwitchConfig): iam.
 
   return new iam.Policy(scope, 'OrchestrationPolicy', {
     statements: [
-      // DRS: start/monitor recovery, reverse replication, launch configuration, retire.
-      new iam.PolicyStatement({ sid: 'Drs', actions: ['drs:*'], resources: ['*'] }),
+      // DRS: exactly the APIs the seven steps call (lambda/drs_region_switch). Read side first, then the
+      // recovery / reverse-replication / retire mutations. Resource must stay '*': source servers,
+      // recovery instances and jobs are created by DRS at run time and carry no predictable ARN.
+      // test/drs-actions-contract.test.ts derives this list from the Lambda code and fails on drift.
+      new iam.PolicyStatement({
+        sid: 'Drs',
+        actions: [
+          'drs:DescribeSourceServers', 'drs:DescribeRecoveryInstances', 'drs:DescribeJobs',
+          'drs:DescribeJobLogItems', 'drs:GetLaunchConfiguration',
+          'drs:UpdateLaunchConfiguration', 'drs:StartRecovery', 'drs:ReverseReplication',
+          'drs:StopFailback', 'drs:StopReplication', 'drs:TerminateRecoveryInstances',
+          'drs:DisconnectSourceServer', 'drs:DeleteSourceServer', 'drs:DeleteRecoveryInstance',
+          'drs:TagResource', 'drs:UntagResource',
+        ],
+        resources: ['*'],
+      }),
       // Read-only EC2/KMS/IAM that DRS and the steps use as the caller.
       new iam.PolicyStatement({
         sid: 'Ec2Describe',

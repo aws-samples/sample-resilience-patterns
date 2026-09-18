@@ -18,10 +18,18 @@ data "aws_iam_policy_document" "assume" {
 }
 
 data "aws_iam_policy_document" "orchestration" {
-  # DRS: start/monitor recovery, reverse replication, launch configuration, retire.
+  # DRS: exactly the APIs the seven steps call (lambda/drs_region_switch). Resource stays "*":
+  # source servers, recovery instances and jobs are created by DRS at run time.
   statement {
-    sid       = "Drs"
-    actions   = ["drs:*"]
+    sid = "Drs"
+    actions = [
+      "drs:DescribeSourceServers", "drs:DescribeRecoveryInstances", "drs:DescribeJobs",
+      "drs:DescribeJobLogItems", "drs:GetLaunchConfiguration",
+      "drs:UpdateLaunchConfiguration", "drs:StartRecovery", "drs:ReverseReplication",
+      "drs:StopFailback", "drs:StopReplication", "drs:TerminateRecoveryInstances",
+      "drs:DisconnectSourceServer", "drs:DeleteSourceServer", "drs:DeleteRecoveryInstance",
+      "drs:TagResource", "drs:UntagResource",
+    ]
     resources = ["*"]
   }
   # Read-only EC2/KMS/IAM that DRS and the steps use as the caller.
