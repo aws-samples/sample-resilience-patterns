@@ -20,8 +20,12 @@ fail() { echo "FAIL: $*"; exit 1; }
 
 PLAN=$(outp "$PRIMARY" "${PROJECT}-plan" SwitchoverPlanArn)
 SEC_TG=$(outp "$SECONDARY" "${PROJECT}-alb-secondary" SecondaryTargetGroupArn)
-STATEFUL=$(aws cloudformation describe-stacks --region "$SECONDARY" --stack-name "${PROJECT}-drs-steps-secondary" \
-  --query "Stacks[0].Parameters[?ParameterKey=='StatefulEc2'].ParameterValue" --output text)
+# Stateful mode is whatever the deployed step functions actually run with (STATEFUL_EC2 is baked
+# into their environment by the construct); read it from one of them rather than from a stack
+# parameter, so the harness cannot silently fall back to the stateless checks.
+STATEFUL=$(aws lambda get-function-configuration --region "$SECONDARY" --function-name "${PROJECT}-drs-reverse-replicate" \
+  --query 'Environment.Variables.STATEFUL_EC2' --output text)
+[[ "$STATEFUL" == true || "$STATEFUL" == false ]] || fail "cannot determine stateful mode (STATEFUL_EC2='$STATEFUL' on ${PROJECT}-drs-reverse-replicate)"
 PRIMARY_EC2=$(outp "$PRIMARY" "${PROJECT}-app-primary" AppInstanceId)
 echo "plan=$PLAN stateful=$STATEFUL primary_ec2=$PRIMARY_EC2 legs=$LEGS mode=$MODE"
 
