@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Multi-cycle proof for drs-ec2: run N legs alternating ACTIVATE us-west-2 / ACTIVATE
-# us-east-2 through the ARC plan, and after EVERY fail-back assert the resting-state invariant:
+# Multi-leg rehearsal for drs-ec2: run N legs alternating ACTIVATE us-west-2 / ACTIVATE us-east-2
+# through the ARC Region switch plan. After EVERY fail-back, assert the resting-state invariant:
 #   * exactly one FAILOVER source server tagged drsdemo:role=app in the secondary, CONTINUOUS,
 #     protecting the SAME primary EC2 id as before the cycle;
 #   * no recovery instances in either region; no FAILBACK source servers;
 #   * secondary target group empty; Aurora writer + ARC health checks back on the primary.
-# In stateful mode (STATEFUL_EC2=true) a marker file is written to the SERVING EC2's disk via SSM
-# before each leg and asserted present on the other side afterwards -- i.e. state really rides
-# the DRS replication both ways.
+# In stateful mode (STATEFUL_EC2=true) the script writes a marker file to the serving EC2's disk
+# via SSM before each leg and asserts it is present on the other side afterwards. That verifies
+# the disk contents travel with the DRS replication in both directions.
 #
-# Usage: rehearse-cycle.sh <aws-profile> [legs=4] [graceful|ungraceful]
+# Usage: rehearse-cycle.sh [aws-profile|-] [legs=4] [graceful|ungraceful]   (- or empty = default credential chain)
 set -euo pipefail
 PROFILE="${1:-}"; [[ "$PROFILE" == "-" ]] && PROFILE=""   # usage: rehearse-cycle.sh [aws-profile|-] [legs] [graceful|ungraceful]
 LEGS="${2:-4}"; MODE="${3:-graceful}"

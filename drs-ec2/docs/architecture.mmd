@@ -1,12 +1,14 @@
-%% drs-ec2 architecture — renders inline in GitHub markdown.
-%% Solid = steady state; dashed = only active after an ARC failover; red = ARC plan steps.
+%% drs-ec2 architecture: Amazon EC2 disaster recovery with AWS Elastic Disaster Recovery (DRS), Amazon Aurora
+%% Global Database, Amazon Route 53 failover records and an Amazon Application Recovery Controller (ARC)
+%% Region switch plan. Renders inline in GitHub markdown.
+%% Solid = steady state; dashed = active only after an ARC failover; red = ARC plan steps; green = replication.
 flowchart LR
     dns["Route 53 private zone<br/>app.drsdemo.internal<br/>failover record pair"]
-    arc(["ARC Region Switch plan<br/>--mode graceful | ungraceful"])
+    arc(["ARC Region switch plan<br/>graceful | ungraceful"])
 
     subgraph EAST["us-east-2 (primary)"]
         albE["ALB"]
-        ec2E["EC2 (Flask)<br/>+ DRS agent"]
+        ec2E["EC2 application<br/>+ DRS agent"]
         aurE[("Aurora Global<br/>writer")]
         albE -->|active at rest| ec2E
         ec2E -->|reads / writes| aurE

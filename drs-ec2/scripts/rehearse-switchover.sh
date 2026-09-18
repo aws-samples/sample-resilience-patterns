@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Automated SWITCHOVER rehearsal for drs-ec2. Proves the full ARC Region Switch flow,
-# then fails back so the demo returns to its resting state (primary = us-east-2).
+# Switchover rehearsal for drs-ec2: activate the secondary Region through the ARC Region switch
+# plan, verify the application there, then activate the primary again so the demo returns to its
+# resting state (primary = us-east-2).
 #
 # Steps:
 #   0. Preconditions: switchover plan exists; DRS replication is CONTINUOUS.
@@ -12,7 +13,7 @@
 #      'deactivate'; they carry one activate workflow per region). Poll to terminal.
 #   5. Re-verify primary serving again. Leave environment at rest.
 #
-# Usage: rehearse-switchover.sh <aws-profile>
+# Usage: rehearse-switchover.sh [aws-profile|-] [graceful|ungraceful]   (- or empty = default credential chain)
 set -euo pipefail
 PROFILE="${1:-}"; [[ "$PROFILE" == "-" ]] && PROFILE=""   # usage: rehearse-switchover.sh [aws-profile|-] [graceful|ungraceful]
 MODE="${2:-graceful}"   # ungraceful -> Aurora failover (allow data loss) on the ACTIVATE leg

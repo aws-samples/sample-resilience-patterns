@@ -1,12 +1,12 @@
-# drs-ec2 -- DRS-replicated EC2 + Aurora Global + ARC Region Switch, three regions.
-# One command from an empty account to a protected, dashboarded, failover-ready demo:
+# drs-ec2 -- Amazon EC2 disaster recovery with AWS Elastic Disaster Recovery (AWS DRS), Amazon Aurora
+# Global Database and an Amazon Application Recovery Controller (ARC) Region switch plan, three regions.
 #
-#   make deploy            # all stacks (3 regions), app code, DRS agent + template, wait for CONTINUOUS (~60 min)
+#   make deploy            # all stacks (3 regions), app code, DRS agent + launch template, wait for CONTINUOUS (~60 min)
 #   make status            # resting-state check (writer, ARC health checks + evaluation, DRS, targets)
 #   make rehearse          # one graceful round trip (MODE=ungraceful for a forced Aurora failover out)
 #   make rehearse-cycle    # LEGS=N alternating legs; resting-state invariant asserted after each fail-back
 #   make tunnel            # http://localhost:8080/ui through the observer bastion (SSM port-forward)
-#   make clean             # everything, all three regions, unattended (./cleanup.sh)
+#   make clean             # delete all stacks and DRS resources in all three regions, unattended (./cleanup.sh)
 #
 # Credentials: PROFILE=<name>, else $AWS_PROFILE, else the CLI's default identity. Every target
 # prints the account it is about to act on; set ACCOUNT=<12 digits> to refuse any other account.
@@ -105,11 +105,11 @@ synth: ## Synthesize every stack with placeholder context (CI build)
 	@npx cdk synth --all -c accountId=000000000000 --quiet && ls cdk.out/*.template.json | xargs -n1 basename
 
 # ---------------------------------------------------------------------------------------------
-# deploy -- the proven order, one target per step so each can read the previous step's outputs
+# deploy -- deployment order, one target per step so each can read the previous step's outputs
 # ---------------------------------------------------------------------------------------------
-deploy: check-account stacks app-code drs-setup status ## Everything: stacks (3 regions), app code, DRS setup, resting-state check
+deploy: check-account stacks app-code drs-setup status ## Deploy all 11 stacks (3 regions), upload app code, set up DRS, run the resting-state check (~60 min)
 
-stacks: net-1 net-2 iam db-primary db-secondary app-primary alb-secondary drs-steps plan observer net-3 app-final ## All stacks in dependency order (~50 min first time)
+stacks: net-1 net-2 iam db-primary db-secondary app-primary alb-secondary drs-steps plan observer net-3 app-final ## Deploy the 11 stacks in dependency order (~50 min from an empty account)
 	@echo "observer bastion: $(call so,$(OBSERVER_REGION),observer,BastionInstanceId) in $(OBSERVER_REGION) -- make tunnel"
 
 net-1:  ## 1. both VPCs
@@ -156,7 +156,7 @@ accept-peering:  # internal: REGION= PCX_ID=
 app-code: check-account ## Upload app/app.py + app/ui.html; refresh a running instance in place (no replacement)
 	@scripts/app-code.sh $(PROFILE_ARG) $(APP_BUCKET)
 
-drs-setup: check-account ## DRS init both regions, template reconcile, agent install via SSM, launch template, tag, wait CONTINUOUS
+drs-setup: check-account ## Initialize DRS in both regions, configure templates, install the agent via SSM, tag the source server, wait for CONTINUOUS (~12 min)
 	@scripts/drs-setup.sh $(PROFILE_ARG)
 
 status: check-account ## Resting-state check
@@ -175,5 +175,5 @@ rehearse-cycle: check-account ## N alternating legs (LEGS=4); invariant asserted
 tunnel: check-account ## SSM port-forward: http://localhost:$(LOCAL_PORT)/ui via the observer bastion
 	@scripts/tunnel.sh $(PROFILE_ARG) $(LOCAL_PORT)
 
-clean: check-account ## Tear down everything in all three regions (unattended, ~30 min)
+clean: check-account ## Delete all stacks, DRS resources and the app-code bucket in all three regions (unattended, ~30 min)
 	@./cleanup.sh $(PROFILE_ARG)

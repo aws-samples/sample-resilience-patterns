@@ -32,13 +32,13 @@ DASH = {"style": "dashed", "color": "gray40", "fontcolor": "gray30"}
 CLUSTER = {"labelloc": "b", "labeljust": "c", "fontsize": "14", "margin": "24"}
 
 with Diagram(
-    "drs-ec2 — stateful EC2 fail-back (ARC activate us-east-2), read left → right\n"
-    "① reverse-replicate recovered EC2 to primary   ② launch for failback   ③ register target\n"
-    "④ Aurora switch back   ⑤ DNS flip back   ⑥ re-protect: replicate failed-back EC2 to secondary",
+    "drs-ec2 — stateful Amazon EC2 fail-back with AWS Elastic Disaster Recovery (DRS): ARC Region switch activates us-east-2\n"
+    "① reverse-replicate recovered EC2 to primary   ② launch fail-back into the original instance   ③ register target\n"
+    "④ Aurora Global Database switchover back   ⑤ DNS flip back   ⑥ re-protect: replicate failed-back EC2 to secondary",
     filename=OUT, outformat="png", show=False, direction="TB", graph_attr=graph_attr,
 ):
     dns = Route53("Route 53 private zone\napp.drsdemo.internal\nfailover record pair")
-    arc = Route53HostedZone("ARC Region Switch plan\nfail-back workflow (6 steps)")
+    arc = Route53HostedZone("ARC Region switch plan\nfail-back workflow (6 steps)")
 
     # ---- primary column: being rebuilt from the secondary's data ----
     with Cluster("us-east-2 (primary) — receiving fail-back", graph_attr=CLUSTER):

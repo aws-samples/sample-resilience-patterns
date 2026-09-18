@@ -34,14 +34,14 @@ DASH = {"style": "dashed", "color": "gray40", "fontcolor": "gray30"}
 CLUSTER = {"labelloc": "b", "labeljust": "c", "fontsize": "14", "margin": "24"}
 
 with Diagram(
-    "drs-ec2 — DRS + ARC Region Switch\n"
-    "ARC plan steps (red):  ① Aurora Global switch   ② DRS recover EC2   ③ register target   ④ DNS flip",
+    "drs-ec2 — Amazon EC2 disaster recovery with AWS Elastic Disaster Recovery (DRS) and Amazon Application Recovery Controller (ARC) Region switch\n"
+    "ARC plan steps (red):  ① Aurora Global Database switchover   ② DRS recover EC2   ③ register target   ④ DNS flip",
     filename=OUT, outformat="png", show=False, direction="TB", graph_attr=graph_attr,
 ):
-    # ---- observer: a third region standing in for the customer's user ----
+    # ---- observer: a third region standing in for the application's user ----
     OBS = dict(CLUSTER, labelloc="t")
     with Cluster("us-east-1 (observer) — no public IP, SSM only", graph_attr=OBS):
-        user = User("presenter\nlocalhost:8080/ui")
+        user = User("user\nlocalhost:8080/ui")
         bastion = SystemsManager("bastion t3.nano\nresolves the failover record")
         user >> Edge(label="SSM port-forward", constraint="false") >> bastion
 
@@ -49,12 +49,12 @@ with Diagram(
     dns = Route53("Route 53 private zone\napp.drsdemo.internal\nfailover record pair")
     # This diagrams release has no dedicated Application Recovery Controller icon; ARC Region
     # Switch drives Route 53 health-check state, so the Route 53 ARC family icon is the fit.
-    arc = Route53HostedZone("ARC Region Switch plan\n(--mode graceful | ungraceful)")
+    arc = Route53HostedZone("ARC Region switch plan\n(graceful | ungraceful)")
 
     # ---- primary column ----
     with Cluster("us-east-2 (primary) — serving at rest", graph_attr=CLUSTER):
         alb_e = ELB("internal ALB")
-        ec2_e = EC2("EC2 (Flask)\n+ DRS agent")
+        ec2_e = EC2("EC2 application\n+ DRS agent")
         aur_e = AuroraInstance("Aurora Global\nwriter")
         alb_e >> ec2_e >> Edge(xlabel="reads / writes") >> aur_e
 

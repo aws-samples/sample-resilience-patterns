@@ -7,8 +7,7 @@
 #      the DRS endpoint in the secondary region.
 #   4. Wait for a DRS source server to appear and begin replication.
 #
-# Usage: drs-setup.sh <aws-profile>   (assumes systemd-run wrapping is done by caller env,
-#        i.e. AWS_PROFILE/PATH already exported, OR run via the same systemd-run unit form).
+# Usage: drs-setup.sh [aws-profile|-]   (- or empty = default credential chain)
 set -euo pipefail
 PROFILE="${1:-}"; [[ "$PROFILE" == "-" ]] && PROFILE=""   # usage: drs-setup.sh [aws-profile|-]; empty/- = default credential chain
 PRIMARY="${PRIMARY_REGION:-us-east-2}"; SECONDARY="${SECONDARY_REGION:-us-west-2}"; PROJECT="${PROJECT:-drsdemo}"

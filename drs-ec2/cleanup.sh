@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
-# drs-ec2 teardown -- everything, all three regions, unattended, PARALLEL where the dependency
-# graph allows. Hard edges (CloudFormation exports / DRS ENIs) are the only serialization:
-#   * app-primary and db-primary import from net-primary; app-primary imports db-primary's writer endpoint
-#   * db-secondary and alb-secondary import from net-secondary; db-secondary must leave the
-#     global cluster before db-primary can go
-#   * DRS recovery instances sit in app-primary's / alb-secondary's security groups -> DRS unwind first
-#   * iam after app-primary (instance profile); networks last
-# Waves (each wave's members run concurrently):
-#   1. [DRS unwind -> app-primary || alb-secondary] || db-secondary || plan || drs-steps-{primary,secondary} || observer || app-code bucket
+# drs-ec2 cleanup: delete all stacks, DRS resources and the app-code bucket in all three regions,
+# unattended (~30 min). Safe to re-run after a failure.
+#
+# Deletion order. Members of a wave run concurrently; the serialization points are CloudFormation
+# exports (app-primary and db-primary import from net-primary; db-secondary and alb-secondary from
+# net-secondary; app-primary imports db-primary's writer endpoint), the global cluster (db-secondary
+# leaves before db-primary), DRS recovery instances in app-primary's / alb-secondary's security
+# groups (DRS unwinds first), and the instance profile (iam after app-primary; networks last).
+#   1. DRS unwind -> app-primary || alb-secondary; db-secondary; plan; drs-steps-{primary,secondary}; observer; app-code bucket
 #   2. db-primary || iam
 #   3. DRS-created security groups swept, then net-primary || net-secondary; runtime SSM residue
-# Critical path ~ max(DRS+04, 03b) + 03a + nets  (~30 min)  vs ~60 min fully serial.
-# Usage: teardown.sh <aws-profile>
+# Usage: cleanup.sh [aws-profile|-]   (- or empty = default credential chain)
 set -euo pipefail
-PROFILE="${1:-}"; [[ "$PROFILE" == "-" ]] && PROFILE=""   # usage: teardown.sh [aws-profile|-]; empty/- = default credential chain
+PROFILE="${1:-}"; [[ "$PROFILE" == "-" ]] && PROFILE=""   # usage: cleanup.sh [aws-profile|-]; empty/- = default credential chain
 PRIMARY="${PRIMARY_REGION:-us-east-2}"; SECONDARY="${SECONDARY_REGION:-us-west-2}"; OBSERVER="${OBSERVER_REGION:-us-east-1}"; PROJECT="${PROJECT:-drsdemo}"
 aws() { command aws --no-cli-pager ${PROFILE:+--profile "$PROFILE"} "$@"; }  # never page; profile optional
 ACCT=$(aws sts get-caller-identity --query Account --output text)

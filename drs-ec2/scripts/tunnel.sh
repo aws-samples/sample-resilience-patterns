@@ -7,8 +7,7 @@
 # Usage: tunnel.sh [aws-profile|-] [local-port] [host] [remote-port]   (- or empty = default credential chain)
 #   tunnel.sh my-admin-profile                          # http://localhost:8080 -> app.drsdemo.internal:80
 #   tunnel.sh - 8081 <primary-alb-dns>                  # default creds; pin a specific ALB instead of the record
-# Needs: aws cli + session-manager-plugin on the machine running the browser. Run this on the
-# laptop (or ssh -L 8080:localhost:8080 to wherever you run it).
+# Needs: aws cli + session-manager-plugin on the machine that runs the browser.
 set -euo pipefail
 PROFILE="${1:-}"; [[ "$PROFILE" == "-" ]] && PROFILE=""
 LPORT="${2:-8080}"; HOST="${3:-app.drsdemo.internal}"; RPORT="${4:-80}"
