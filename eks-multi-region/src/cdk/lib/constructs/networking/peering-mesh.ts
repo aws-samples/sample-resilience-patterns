@@ -109,26 +109,62 @@ export class PeeringMesh extends Construct {
       memorySize: 256,
     });
 
-    // Same action set as peering-stack.ts:61-73, on `*`: cross-region peering +
-    // route + tag actions. The peer VPCs / route tables live in other regions and
-    // their ARNs are unknown at synth, so `*` is required. cdk-nag flags this as
-    // AwsSolutions-IAM5; a demo that runs cdk-nag should add a documented
-    // suppression with this justification.
-    fn.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: [
-          'ec2:CreateVpcPeeringConnection',
-          'ec2:AcceptVpcPeeringConnection',
-          'ec2:DeleteVpcPeeringConnection',
-          'ec2:DescribeVpcPeeringConnections',
-          'ec2:CreateRoute',
-          'ec2:DeleteRoute',
-          'ec2:DescribeRouteTables',
-          'ec2:CreateTags',
-        ],
-        resources: ['*'],
-      }),
-    );
+    // Least privilege for a cross-region configurator. Every peer's region and VPC id are
+    // known here (as CfnParameter tokens, resolved at deploy time), so the mutating actions
+    // are bound to THOSE VPCs, to peering connections in THOSE regions, and to route tables
+    // IN those VPCs. Only Describe stays on `*`: DescribeVpcPeeringConnections has no
+    // resource-level support. The statement shapes are the ones the VPC peering IAM guide
+    // documents -- the `vpc` resource of Create is the requester and of Accept the accepter;
+    // AccepterVpc/RequesterVpc are condition keys of the peering-connection resource ONLY,
+    // so they sit on their own statement (on a `vpc` resource they would be absent from the
+    // request context and deny everything); CreateRoute takes `route-table/*` narrowed by
+    // `ec2:Vpc`, the guide's own example for scoping route edits to one VPC. Route-table ids
+    // arrive as a CommaDelimitedList token whose length synth cannot know, which is why they
+    // are matched by owning VPC rather than enumerated. The Lambda never calls DeleteRoute
+    // or DescribeRouteTables, so neither is granted.
+    const stack = cdk.Stack.of(this);
+    const ec2Arn = (region: string, resource: string, resourceName: string): string =>
+      stack.formatArn({
+        service: 'ec2', region, resource, resourceName, arnFormat: cdk.ArnFormat.SLASH_RESOURCE_NAME,
+      });
+    const vpcArns = props.peers.map((p) => ec2Arn(p.region, 'vpc', p.vpcId));
+    const peeringArns = props.peers.map((p) => ec2Arn(p.region, 'vpc-peering-connection', '*'));
+    const routeTableArns = props.peers.map((p) => ec2Arn(p.region, 'route-table', '*'));
+
+    fn.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'DescribePeerings',
+      actions: ['ec2:DescribeVpcPeeringConnections'],
+      resources: ['*'],
+    }));
+    fn.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'PeerMeshVpcs',
+      actions: ['ec2:CreateVpcPeeringConnection', 'ec2:AcceptVpcPeeringConnection'],
+      resources: vpcArns,
+    }));
+    fn.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'ManageMeshPeeringConnections',
+      actions: [
+        'ec2:CreateVpcPeeringConnection',
+        'ec2:AcceptVpcPeeringConnection',
+        'ec2:DeleteVpcPeeringConnection',
+      ],
+      resources: peeringArns,
+      // Both ends of every peering this role may touch must be mesh VPCs.
+      conditions: { ArnEquals: { 'ec2:AccepterVpc': vpcArns, 'ec2:RequesterVpc': vpcArns } },
+    }));
+    fn.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'TagMeshPeeringConnections',
+      // Covers the TagSpecifications on create (requester region) and the explicit
+      // create_tags after accept (accepter region).
+      actions: ['ec2:CreateTags'],
+      resources: peeringArns,
+    }));
+    fn.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'RouteMeshVpcs',
+      actions: ['ec2:CreateRoute'],
+      resources: routeTableArns,
+      conditions: { StringEquals: { 'ec2:Vpc': vpcArns } },
+    }));
 
     const tag = props.managedTag ?? DEFAULT_MANAGED_TAG;
 

@@ -88,6 +88,33 @@ describe('cockpit step 1 — read-only status (west + enabled only)', () => {
     });
   });
 
+  /**
+   * checkov CKV_AWS_364. CDK's stock LambdaTarget grants elasticloadbalancing.amazonaws.com
+   * with neither SourceArn nor SourceAccount, so a target group in ANY account could invoke
+   * the cockpit. The permission must name the group -- and because it has to exist before
+   * the group registers the function, it names the group by its FIXED name plus a wildcard
+   * for the random suffix, and the group waits on it (registration runs inside its CREATE).
+   */
+  test('ELB invoke permission is bound to the cockpit target group and this account', () => {
+    const resources = t.toJSON().Resources as Record<string, any>;
+    const permissions = Object.entries(resources).filter(
+      ([, r]) => r.Type === 'AWS::Lambda::Permission'
+        && r.Properties.Principal === 'elasticloadbalancing.amazonaws.com',
+    );
+    expect(permissions).toHaveLength(1);
+    const [permissionId, permission] = permissions[0];
+    expect(JSON.stringify(permission.Properties.SourceArn)).toContain(':targetgroup/eks-mr-demo-cockpit/*');
+    expect(permission.Properties.SourceAccount).toBeDefined();
+
+    const groups = Object.entries(t.findResources('AWS::ElasticLoadBalancingV2::TargetGroup', {
+      Properties: { TargetType: 'lambda' },
+    })) as Array<[string, any]>;
+    expect(groups).toHaveLength(1);
+    const [, group] = groups[0];
+    expect(group.Properties.Name).toBe('eks-mr-demo-cockpit');
+    expect(group.DependsOn ?? []).toContain(permissionId);
+  });
+
   test('IAM carries the Steps 2-4 write set, each scoped (no wildcard mutations)', () => {
     const doc = JSON.stringify(t.findResources('AWS::IAM::Policy'));
     // The read set survives.

@@ -138,6 +138,9 @@ export class OperatorAccessStack extends cdk.Stack {
       // The 60s default would drop them every minute and the tree would stop moving;
       // this is why the ALB can show replicas going 2 -> 4 live.
       idleTimeout: cdk.Duration.seconds(3600),
+      // Reject requests whose header names are not valid HTTP tokens instead of forwarding
+      // them to argocd-server / the cockpit (checkov CKV_AWS_131; request-smuggling class).
+      dropInvalidHeaderFields: true,
     });
 
     // AZ_COUNT targets, matching the number of subnets the Kubernetes NLB was created in.
