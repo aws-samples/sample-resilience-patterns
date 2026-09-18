@@ -2,12 +2,12 @@
 # Tear down everything eks-multi-region created. Idempotent: safe to run against a partial
 # deploy, a failed deploy, or an account where nothing exists.
 #
-# Order is the deploy rail's dependency graph reversed. Two orderings are load-bearing:
+# Order is the deploy sequence's dependency graph reversed. Two orderings are load-bearing:
 #   * the Aurora GLOBAL cluster (globaldata, primary) cannot delete while it still has a
 #     secondary member (secondarydb, standby), so secondarydb goes first and we WAIT;
 #   * the region stacks (EKS + VPC) go last, because every other stack references their
 #     outputs and an EKS cluster with dependents still attached fails to delete.
-# The stack names MIRROR the deploy rail in .projen/tasks.json; test/topology.test.ts pins
+# The stack names MIRROR the deploy tasks in .projen/tasks.json; test/topology.test.ts pins
 # the two lists against each other.
 #
 # Env: ASSETS_BUCKET_PREFIX (required), PROJECT_NAME (default eks-mr-demo), regions.
@@ -221,7 +221,7 @@ sweep_retained() {
 }
 
 # A retained EKS cluster is not a leak you can live with: the next deploy creates a
-# cluster with the SAME name and EKS refuses. Delete any cluster the rail would
+# cluster with the SAME name and EKS refuses. Delete any cluster the deploy would
 # name, whether or not a stack still owns it (idempotent: absent -> no-op).
 sweep_eks() {
   # Two statements on purpose: bash expands every word of a `local` line BEFORE the
@@ -247,12 +247,14 @@ delete_wave() {  # begin every entry, then wait for all -- one wave in parallel
 }
 
 # ---- 1. leaf stacks: operator access, ARC plan, DNS, load gen, standby access ------------
+# The load generator lives in the OBSERVER VPC, so it must go in this wave, before the
+# observer stack below deletes the VPC its task ENIs sit in.
 delete_wave \
   "$PRIMARY:$PROJECT-access-$PRIMARY" \
   "$SECONDARY:$PROJECT-access-$SECONDARY" \
   "$PRIMARY:$PROJECT-failover" \
   "$PRIMARY:$PROJECT-dns" \
-  "$PRIMARY:$PROJECT-loadgen" \
+  "$OBSERVER:$PROJECT-loadgen" \
   "$SECONDARY:$PROJECT-standbyaccess"
 
 # ---- 2. observer VPC (its peerings to the workload VPCs go with it) ----------------------

@@ -1,9 +1,9 @@
 # eks-multi-region -- operator + CI entry points.
 #
-# The deploy rail itself lives in projen tasks (.projen/tasks.json, generated from
+# The deploy steps themselves live in projen tasks (.projen/tasks.json, generated from
 # .projenrc.ts + projenrc/tasks/). This Makefile is a thin, discoverable front on those
 # tasks so `make deploy` works the way it does in the sibling samples. It adds NOTHING the
-# rail does not already do; every target below shells out to `yarn <task>` or a script in
+# tasks do not already do; every target below shells out to `yarn <task>` or a script in
 # build/.
 #
 # Required environment (no defaults are baked in -- see .projenrc.ts):
@@ -15,7 +15,7 @@
 # Typical first deploy, from a machine with internet access and ECR push rights:
 #   make buckets      # once per account: the two assets buckets
 #   make mirror       # once per account: pinned third-party images -> your private ECR
-#   make deploy       # the rail: ~90 minutes, 12 stacks across 3 regions
+#   make deploy       # ~90 minutes: 12 stacks across 3 regions, in dependency order
 #   make verify       # every stack in a *_COMPLETE state
 #   build/tunnel.sh <aws-profile>            # Argo UI + cockpit via the observer bastion
 #   make clean        # tear everything down (cleanup.sh)
@@ -77,10 +77,10 @@ buckets: check-env ## Create the per-region assets buckets, observer region incl
 mirror: check-env ## Mirror the pinned third-party images (src/mirror/images.json) into YOUR private ECR
 	MIRROR_REGIONS="$(REGIONS)" yarn deploy:mirror
 
-deploy: check-env build ## Run the full deploy rail (12 stacks, 3 regions, ~90 min)
+deploy: check-env build ## Deploy all 12 stacks across 3 regions in dependency order (~90 min)
 	yarn deploy
 
-verify: check-env ## Every stack the rail deploys must be in a *_COMPLETE state
+verify: check-env ## Every stack `make deploy` creates must be in a *_COMPLETE state
 	bash build/verify-stacks.sh
 
 tunnel: ## Port-forward to a region's internal ALB via the observer bastion: make tunnel PROFILE=<p> [PORT=8080] [TARGET=us-east-2]

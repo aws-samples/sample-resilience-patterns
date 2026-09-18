@@ -21,7 +21,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { OperatorAccessStack } from '../src/cdk/lib/operator-access-stack';
 import { RegionStack } from '../src/cdk/lib/region-stack';
-import { REGIONS } from '../src/cdk/regions';
+import { OBSERVER_REGION, REGIONS } from '../src/cdk/regions';
 import { makeSynthesizer } from '../src/cdk/synthesizer';
 
 const APP_ID = 'eks-mr-demo';
@@ -732,6 +732,79 @@ describe('cockpit replicas tile — reporter metric read', () => {
     expect(UI).toContain('rep.regions');
     expect(UI).not.toContain('JSON.stringify(rep)'); // raw-JSON placeholder rendering is gone
     expect(UI).toContain('v.note');
+  });
+});
+
+/**
+ * The load generator runs in the OBSERVER region, so its EMF (the demo namespace: Client*,
+ * Op*, Region*, Az* families) lands in us-east-1 CloudWatch, while the AWS-native metrics
+ * the cockpit also reads stay where their services emit them: the app NLB's per-AZ target
+ * health in the primary region, the replica reporters in each workload region. A read of
+ * the demo namespace through the primary-region client returns NO DATA with no error --
+ * the active-region tile reads "no region (load generator stopped?)", AZ eligibility
+ * refuses every fault, and the chart is blank -- which is indistinguishable from a stopped
+ * load generator. These tests pin the client each read uses.
+ */
+describe('cockpit metric reads follow the load generator to the observer region', () => {
+  const read = (p: string): string =>
+    fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
+  const HANDLER = read('src/cdk/lib/constructs/cockpit/lambda/handler.py');
+  const codeOnly = (src: string): string => src
+    .replace(/"""[\s\S]*?"""/g, '')
+    .split('\n').map((l) => l.replace(/#.*$/, '')).join('\n');
+  const fnBody = (name: string): string =>
+    codeOnly(HANDLER).split(`def ${name}(`)[1].split('\ndef ')[0];
+
+  it('declares a metrics-region client, defaulting to the primary for older deployments', () => {
+    const code = codeOnly(HANDLER);
+    expect(code).toMatch(/METRICS_REGION\s*=\s*os\.environ\.get\("METRICS_REGION",\s*PRIMARY_REGION\)/);
+    expect(code).toMatch(/_cw_metrics\s*=\s*boto3\.client\("cloudwatch",\s*region_name=METRICS_REGION/);
+  });
+
+  it('every read of the demo namespace goes through the metrics-region client', () => {
+    // The four functions that query METRIC_NAMESPACE families: AZ discovery, AZ traffic
+    // eligibility, the observed-traffic active-region signal, and the chart series.
+    for (const fn of ['_discover_azs', '_az_traffic_totals', '_region_traffic']) {
+      const body = fnBody(fn);
+      expect({ fn, metricsClient: body.includes('_cw_metrics.') }).toEqual({ fn, metricsClient: true });
+      expect({ fn, primaryClient: /\b_cw\./.test(body) }).toEqual({ fn, primaryClient: false });
+    }
+  });
+
+  it('the chart series splits into an EMF call and an NLB call over ONE window', () => {
+    const body = fnBody('_availability_series');
+    // EMF families (Op*, AzLatency, the AzSlo/AzSuccess/AzError trio) via the metrics
+    // client; the AWS/NetworkELB target-health pair via the primary client; both with the
+    // same StartTime/EndTime so the union lands on one timestamp grid.
+    expect(body).toMatch(/emf\s*=\s*_cw_metrics\.get_metric_data\(/);
+    expect(body).toMatch(/nlb\s*=\s*_cw\.get_metric_data\(/);
+    expect(body.match(/StartTime=start, EndTime=end/g)?.length).toBe(2);
+    // The NLB queries must NOT ride the EMF call (they would return nothing from the
+    // observer region), and vice versa.
+    const emfCall = body.split('emf = _cw_metrics.get_metric_data(')[1].split('results = list(')[0];
+    expect(emfCall).not.toContain('az_q(');
+    const nlbCall = body.split('nlb = _cw.get_metric_data(')[1].split('results.extend(')[0];
+    expect(nlbCall).toContain('az_q(');
+    expect(nlbCall).not.toContain('client_q(');
+    expect(nlbCall).not.toContain('lat_q(');
+  });
+
+  it('the NLB AZ discovery stays on the primary client — that namespace lives where the NLB does', () => {
+    const body = fnBody('_nlb_chart_azs');
+    expect(body).toContain('_cw.list_metrics(');
+    expect(body).toContain('Namespace="AWS/NetworkELB"');
+    expect(body).not.toContain('_cw_metrics');
+  });
+
+  it('the construct threads METRICS_REGION as the observer region', () => {
+    synth(STANDBY, true).hasResourceProperties('AWS::Lambda::Function', {
+      Environment: {
+        Variables: Match.objectLike({
+          METRICS_REGION: OBSERVER_REGION,
+          PRIMARY_REGION: PRIMARY,
+        }),
+      },
+    });
   });
 });
 

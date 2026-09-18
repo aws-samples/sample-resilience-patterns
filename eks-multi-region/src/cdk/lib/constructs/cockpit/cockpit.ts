@@ -31,10 +31,15 @@ import { Construct } from 'constructs';
  */
 export interface CockpitProps {
   readonly appId: string;
-  /** Primary region (us-east-2) — FIS templates, primary knob, and ALL EMF metrics live here. */
+  /** Primary region (us-east-2) — FIS templates, the primary knob and the app NLB live here. */
   readonly primaryRegion: string;
   /** Standby region (us-west-2) — where this cockpit is hosted. */
   readonly standbyRegion: string;
+  /**
+   * Region the load generator's EMF metrics land in (the observer region). Every read of
+   * `metricNamespace` targets this region; AWS-native metrics keep their own regions.
+   */
+  readonly metricsRegion: string;
   /** The access door's ALB listener — the /cockpit* rule attaches here. */
   readonly listener: elbv2.ApplicationListener;
   /** Metric namespace the load generator emits to (MyResilienceDemo). */
@@ -428,6 +433,7 @@ export class Cockpit extends Construct {
         APP_ID: props.appId,
         PRIMARY_REGION: props.primaryRegion,
         STANDBY_REGION: props.standbyRegion,
+        METRICS_REGION: props.metricsRegion,
         METRIC_NAMESPACE: props.metricNamespace,
         // STEP 5: threaded, replacing runtime DescribeStacks discovery. The handler reads
         // these and never calls CloudFormation. Every one is REQUIRED at import time, so a

@@ -6,8 +6,9 @@
  *   - NO AWS::CloudFront::* resource exists in any stack.
  *   - Each access ALB SG admits exactly one ingress rule: the observer CIDR on tcp/80.
  *   - The observer bastion has no public IP and its SG has zero ingress rules.
- *   - The observer has three SSM interface endpoints (ssm/ssmmessages/ec2messages),
- *     each with PrivateDnsEnabled.
+ *   - The observer has six interface endpoints (ssm/ssmmessages/ec2messages for the
+ *     bastion; ecr.api/ecr.dkr/logs for the load generator), each with PrivateDnsEnabled,
+ *     plus an S3 gateway endpoint on the private route table.
  *   - The observer CIDR overlaps neither workload CIDR.
  *   - build/tunnel.sh passes `bash -n`.
  */
@@ -180,20 +181,49 @@ describe('observer VPC + bastion (step 12)', () => {
     expect(Object.keys(t.findResources('AWS::EC2::NatGateway'))).toHaveLength(0);
   });
 
-  it('exposes three SSM interface endpoints, each with PrivateDnsEnabled', () => {
+  it('exposes six interface endpoints (SSM trio + ECR api/dkr + Logs), each with PrivateDnsEnabled', () => {
     const t = observerTemplate();
     const eps = Object.values(t.findResources('AWS::EC2::VPCEndpoint')) as any[];
     const services = eps
       .map((e) => e.Properties.ServiceName)
       .map((s: any) => (typeof s === 'string' ? s : JSON.stringify(s)));
-    for (const svc of ['ssm', 'ssmmessages', 'ec2messages']) {
-      expect(services.some((s: string) => s.includes(`.${svc}`))).toBe(true);
+    const interfaces = eps.filter((e) => e.Properties.VpcEndpointType === 'Interface');
+    // The bastion's three (SSM) plus the load generator's three: a Fargate task in a
+    // subnet with no internet route pulls its image through ecr.api + ecr.dkr and ships
+    // its EMF through the awslogs driver, which needs the CloudWatch Logs endpoint. The
+    // ECS documentation lists exactly these for Fargate; no ECS endpoint is required.
+    for (const svc of ['ssm', 'ssmmessages', 'ec2messages', 'ecr.api', 'ecr.dkr', 'logs']) {
+      expect({ svc, present: services.some((s: string) => s.includes(`.${svc}"`) || s.endsWith(`.${svc}`)) })
+        .toEqual({ svc, present: true });
     }
-    expect(eps).toHaveLength(3);
-    for (const ep of eps) {
-      expect(ep.Properties.VpcEndpointType).toBe('Interface');
+    expect(interfaces).toHaveLength(6);
+    for (const ep of interfaces) {
       expect(ep.Properties.PrivateDnsEnabled).toBe(true);
+      expect(ep.Properties.SubnetIds).toHaveLength(1);
     }
+  });
+
+  it('adds an S3 GATEWAY endpoint on the private route table — image layers come from S3', () => {
+    // ECR stores layers in S3, so the two ECR interface endpoints alone leave a pull
+    // hanging on the layer download. A gateway endpoint is a route, not an ENI: no
+    // subnet, no security group, no hourly charge -- and it must be on the route table
+    // the private subnet actually uses.
+    const t = observerTemplate();
+    const gateways = (Object.values(t.findResources('AWS::EC2::VPCEndpoint')) as any[])
+      .filter((e) => e.Properties.VpcEndpointType === 'Gateway');
+    expect(gateways).toHaveLength(1);
+    expect(JSON.stringify(gateways[0].Properties.ServiceName)).toContain('.s3');
+    const rtAssociations = Object.values(t.findResources('AWS::EC2::SubnetRouteTableAssociation')) as any[];
+    expect(rtAssociations).toHaveLength(1);
+    expect(gateways[0].Properties.RouteTableIds).toEqual([rtAssociations[0].Properties.RouteTableId]);
+  });
+
+  it('exports the private subnet id and AZ for the load generator stack', () => {
+    // LoadGenStack imports the observer VPC by attributes; Vpc.fromVpcAttributes needs
+    // the subnet AND its AZ, and the rail threads both from these outputs.
+    const outputs = observerTemplate().toJSON().Outputs ?? {};
+    expect(Object.keys(outputs)).toEqual(expect.arrayContaining(['VpcId', 'PrivateSubnetId', 'PrivateSubnetAz']));
+    expect(JSON.stringify(outputs.PrivateSubnetAz.Value)).toContain('AvailabilityZone');
   });
 
   // cfn_nag F1000. Interface endpoints only answer, so the endpoint SG needs no egress at
@@ -204,7 +234,7 @@ describe('observer VPC + bastion (step 12)', () => {
     const t = observerTemplate();
     const sgs = Object.values(t.findResources('AWS::EC2::SecurityGroup')) as any[];
     const endpointSg = sgs.find((s) =>
-      (s.Properties.GroupDescription ?? '').includes('SSM interface endpoints'),
+      (s.Properties.GroupDescription ?? '').includes('interface endpoints'),
     );
     expect(endpointSg).toBeDefined();
     expect(endpointSg.Properties.SecurityGroupEgress).toEqual([

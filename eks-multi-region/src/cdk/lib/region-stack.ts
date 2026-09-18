@@ -13,8 +13,16 @@ import { AuroraMember } from './aurora-member';
 import { FluentBitIam } from './fluentbit-iam';
 import { KarpenterIam } from './karpenter-iam';
 import { LbcIam } from './lbc-iam';
-import { APP_RECORD_NAME, AZ_COUNT, EKS_CONTROL_PLANE_LOG_TYPES, KUBERNETES_VERSION, PRIMARY_REGION, REGIONS } from '../regions';
-import { AuroraObservability } from './aurora-observability';
+import {
+  APP_RECORD_NAME,
+  AZ_COUNT,
+  EKS_CONTROL_PLANE_LOG_TYPES,
+  KUBERNETES_VERSION,
+  OBSERVER_CIDR,
+  OBSERVER_REGION,
+  PRIMARY_REGION,
+  REGIONS,
+} from '../regions';
 import { APP_NAMESPACE } from '../k8s';
 import { AllowedCidrSecurityGroup } from './constructs/auth';
 import {
@@ -51,11 +59,12 @@ export interface RegionStackProps extends cdk.StackProps {
    */
   readonly replicateSecretToRegion?: string;
   /**
-   * CIDRs of the OTHER regions' VPCs, which this region is peered with.
+   * CIDRs of the OTHER workload regions' VPCs, which this region is peered with.
    *
-   * Needed because the load generator lives in one region and follows DNS to whichever
-   * region is currently active, so requests arrive here from a peer VPC. See the node
-   * security group rule for why that is not automatic.
+   * Admitted on the NodePort range alongside this VPC's own CIDR and the observer VPC's
+   * (where the load generator runs). With the load balancer controller's IP targets and
+   * client IP preservation off, none of these rules is on the request path any more —
+   * see the node security group rules for why they are kept.
    */
   readonly peerVpcCidrs?: readonly string[];
 }
@@ -232,31 +241,28 @@ export class RegionStack extends cdk.Stack {
     //    - demoName is REGION-SUFFIXED. The green stub used `${appId}-demo`, which is
     //      identical in both regions and would produce COLLIDING dashboard names once
     //      there is more than one region.
-    //    - metricsRegion is the PRIMARY region in both stacks — see the inline comment
+    //    - metricsRegion is the OBSERVER region in both stacks — see the inline comment
     //      on the prop. An earlier revision used Aws.REGION per stack and shipped a
     //      standby dashboard whose widgets queried a CloudWatch nothing writes to.
     const obs = new DemoObservability(this, 'Observability', {
       demoName: `${props.appId}-${props.regionName}`,
-      // THE PRIMARY REGION, IN BOTH STACKS — codifying the 2026-08-27 finding. The load
-      // generator is the demo's ONLY metrics emitter, it runs in the primary region, and
-      // EMF metrics materialize in the region of the emitter's log group — including
-      // every Region=us-west-2 series. Failover moves where requests are SERVED, not
-      // where the emitter writes. The previous value (this.region) left the standby
-      // dashboard structurally empty: its widgets queried a CloudWatch namespace nothing
-      // ever writes, and the comment here claimed the widgets would "fill after a
-      // failover", which was wrong and discovered mid-demo. Dashboard widgets support
-      // cross-region metrics; alarms do NOT, which is why the alarm gate below stays
-      // primary-only.
-      metricsRegion: PRIMARY_REGION,
-      // The baseline ClientAvailability alarm only where client metrics can EXIST.
-      // Under Option A the load generator — the demo's only EMF emitter; the app
-      // emits nothing — runs in the primary region, and EMF metrics materialize in
-      // the region of the log group. In the secondary this alarm would sit in
-      // INSUFFICIENT_DATA for the life of the demo: an alarm over a namespace
-      // nothing ever writes, which is a gray box on stage that invites exactly the
-      // wrong question. The dashboard stays (its regional widgets fill after a
-      // failover is narrated); the alarm goes.
-      createBaselineAlarms: props.regionName === PRIMARY_REGION,
+      // THE OBSERVER REGION, IN BOTH STACKS. The load generator is the demo's ONLY
+      // metrics emitter, it runs in the observer VPC (LoadGenStack), and EMF metrics
+      // materialize in the region of the emitter's log group — including every
+      // Region=us-east-2 and Region=us-west-2 series. Failover moves where requests are
+      // SERVED, not where the emitter writes. A per-stack Aws.REGION here (the value
+      // before 2026-08-27) left the standby dashboard structurally empty: its widgets
+      // queried a CloudWatch namespace nothing ever writes, and the comment claimed the
+      // widgets would "fill after a failover", which was wrong and discovered mid-demo.
+      // Dashboard widgets support cross-region metrics; alarms do NOT, which is why no
+      // alarm over client metrics is declared in this stack at all.
+      metricsRegion: OBSERVER_REGION,
+      // NO baseline alarm in either workload region. An alarm can only read metrics in
+      // its own region, and the client metrics land in the observer region, so an alarm
+      // here would sit in INSUFFICIENT_DATA for the life of the demo: a gray box on
+      // stage that invites exactly the wrong question. The decision alarm and the ARC
+      // app-health pair live in LoadGenStack (see ClientAlarms). The dashboard stays.
+      createBaselineAlarms: false,
     });
 
     // Read-vs-write split (step 4c follow-up, 2026-08-26). Goal 2's on-stage
@@ -268,18 +274,18 @@ export class RegionStack extends cdk.Stack {
     // write path broken, the write line parks at 0 while the read line sits at 100 —
     // the runbook §6 "verify writes recover, not just reads" check, on the dashboard.
     //
-    // BOTH REGIONS' dashboards, stamped with the PRIMARY metrics region — the same
-    // 2026-08-27 correction as metricsRegion above. The earlier primary-only gate
-    // reasoned from "EMF lands in the emitter's region", which is true, but the right
-    // conclusion is cross-region widgets, not a bare standby dashboard: mid-demo the
-    // standby dashboard is exactly the one on screen, and it showed nothing.
+    // BOTH REGIONS' dashboards, stamped with the metrics region — the same 2026-08-27
+    // correction as metricsRegion above. The earlier primary-only gate reasoned from
+    // "EMF lands in the emitter's region", which is true, but the right conclusion is
+    // cross-region widgets, not a bare standby dashboard: mid-demo the standby dashboard
+    // is exactly the one on screen, and it showed nothing.
     {
       obs.dashboard.addWidgets(
         new cloudwatch.GraphWidget({
           title: 'Availability by path — reads vs writes',
           width: 24,
           height: 6,
-          region: PRIMARY_REGION,
+          region: OBSERVER_REGION,
           // Inline rather than obs.availabilityExpr: that helper hardcodes the metric
           // ids `s`/`e`, and two expressions sharing one GraphWidget collide on them
           // (CannotShareSameIdForDifferentMetrics — synth catches it, found 2026-08-26).
@@ -686,34 +692,35 @@ export class RegionStack extends cdk.Stack {
         description: 'Secret name, identical in the primary and its replica region.',
       });
 
-      // 5b) The three-alarm split (step 5, OBS-002) — PRIMARY ONLY, inside the
-      // withPrimaryDatabase gate because (a) the corroboration rows need the primary
-      // cluster identifier and (b) every metric the alarms read lives in this region:
-      // the load generator here is the demo's only emitter, and CloudWatch alarms
-      // cannot read across regions. See AuroraObservability's placement note for why
-      // this deliberately deviates from the OBS-002 changeset's per-region wiring.
-      const auroraObs = new AuroraObservability(this, 'AuroraObservability', {
-        observability: obs,
-        dbClusterIdentifier: member.cluster.clusterIdentifier,
-      });
-      // ARNs onto the dotenv rail for the singleton stacks that consume alarm STATE:
-      // the guardrail is step 6's FIS stopConditionAlarm; the app-health pair is
-      // step 8's associatedAlarms. The decision alarm is exported for the runbook's
-      // console deep-link ONLY — wiring it to anything is the C-001 violation.
-      new cdk.CfnOutput(this, 'GuardrailAlarmArn', {
-        value: auroraObs.guardrailAlarm.alarmArn,
-        description: 'FIS stop condition (step 6). Fires only on catastrophic collapse.',
-      });
-      new cdk.CfnOutput(this, 'DecisionAlarmArn', {
-        value: auroraObs.decisionAlarm.alarmArn,
-        description: 'Operator decision signal. Wired to NOTHING by design (C-001).',
-      });
-      REGIONS.forEach((r, i) => {
-        new cdk.CfnOutput(this, `AppHealthAlarmArn${i}`, {
-          value: auroraObs.appHealthAlarms.get(r.name)!.alarmArn,
-          description: `ARC associatedAlarms (step 8): availability served by ${r.name}.`,
+      // 5b) Aurora corroboration rows on the PRIMARY dashboard — operator context, NOT
+      // decision inputs. Native AWS/RDS metrics that RDS itself emits (no dependency on
+      // anything we deploy): replica lag sharpens a dependency-latency read, commit
+      // latency a write-path one. The source's AuroraWriterActive confirmation row is
+      // deliberately ABSENT: it is a custom metric emitted by an RPO-monitor Lambda this
+      // demo did not vendor, and a widget over a metric nothing emits is the defect class
+      // this repo keeps finding.
+      //
+      // The alarms that used to be declared next to these rows (the decision signal and
+      // the ARC plan's app-health pair) moved to LoadGenStack with the load generator:
+      // the client metrics they read now land in the observer region, and an alarm
+      // cannot read across regions. A dashboard widget can, which is why these rows are
+      // stamped with THIS region explicitly — the dashboard's default metrics region is
+      // the observer's, and an AWS/RDS series queried there would be empty forever.
+      const rdsMetric = (name: string, statistic: string) =>
+        new cloudwatch.Metric({
+          namespace: 'AWS/RDS',
+          metricName: name,
+          dimensionsMap: { DBClusterIdentifier: member.cluster.clusterIdentifier },
+          period: cdk.Duration.minutes(1),
+          statistic,
+          region: PRIMARY_REGION,
         });
-      });
+      obs.addMetricRow('Aurora corroboration — replica lag (ms)', [
+        rdsMetric('AuroraReplicaLag', 'Maximum'),
+      ]);
+      obs.addMetricRow('Aurora corroboration — commit latency (ms)', [
+        rdsMetric('CommitLatency', 'Average'),
+      ]);
 
       // 5c) FAILURE INJECTION (step 6) — the FIS half, PRIMARY REGION ONLY.
       //
@@ -767,10 +774,19 @@ export class RegionStack extends cdk.Stack {
           member.cluster.clusterEndpoint.hostname,
           member.cluster.clusterReadEndpoint.hostname,
         ],
-        // F-003: the GUARDRAIL (50%), never the decision signal (99%). A stop condition
-        // on the decision signal would halt the experiment the moment the operator got
-        // their reason to act, and the demo would heal itself before the human decided.
-        stopConditionAlarm: auroraObs.guardrailAlarm,
+        // NO STOP CONDITION. `stopConditionAlarm` is omitted, so the construct emits
+        // `stopConditions: [{ source: 'none' }]`. Two things bound an experiment
+        // instead: the fixed 15-minute duration below, and the cockpit's Stop button
+        // (fis:StopExperiment).
+        //
+        // The 50% ClientAvailabilityGuardrail that used to sit here was removed when the
+        // load generator moved to the observer region. FIS requires a stop-condition
+        // alarm to live in the experiment's region, and every client metric now lands
+        // in us-east-1, so no alarm here can watch client availability any more. The
+        // guardrail's only live firings had been the trap F-003 warns about from the
+        // other direction — the demo healing itself before the operator had decided
+        // anything (2026-09-01, delay=500ms) — so the fixed duration is the better
+        // bound for a demo whose point is a HUMAN deciding.
         // 15 MINUTES, matched to the zonal shift's default lifetime rather than left at
         // something demo-length-agnostic. A zonal shift is temporary by design (ARC caps a
         // customer-initiated shift at 72h and requires an expiry up front), and the cockpit
@@ -811,24 +827,24 @@ export class RegionStack extends cdk.Stack {
         //
         // SEVERITY HAS A CEILING AS WELL AS A FLOOR, found live at 14:47 UTC 2026-09-01 by
         // overshooting it. At 500ms EVERY read failed (availability 0%, read p90 pinned at
-        // 5,012ms = the timeout clipping it), which breached the 50%
-        // ClientAvailabilityGuardrail, and FIS halted the experiment on its own stop
-        // condition ~3 minutes in: "Experiment halted by stop condition." The demo healed
-        // itself before an operator could decide anything -- precisely what the F-003 note
-        // above guards against, reached from the other direction.
-        //
-        // Usable window:  50% guardrail  <  target  <  ~99% decision alarm.
-        // The band is landed by putting the amplified p90 JUST UNDER the timeout, so only
-        // the SLOW TAIL of the round-trip distribution crosses it. At 400ms the amplified
-        // p90 is ~4.9s (inside 5s), so reads slower than p90 fail and the rest do not;
-        // writes (~3.0x measured, not the 3.2x modelled) sit near 1.2s and stay healthy.
+        // 5,012ms = the timeout clipping it). At the time a 50% guardrail alarm was the
+        // FIS stop condition and halted the experiment on its own ~3 minutes in --
+        // "Experiment halted by stop condition" -- so the demo healed itself before an
+        // operator could decide anything. The guardrail is gone (see the stop-condition
+        // note above), but the ceiling is not: a fault that takes availability to 0%
+        // turns the reads-vs-writes split into a flat line and leaves the operator
+        // nothing to read a decision from. The band is landed by putting the amplified
+        // p90 JUST UNDER the timeout, so only the SLOW TAIL of the round-trip
+        // distribution crosses it. At 400ms the amplified p90 is ~4.9s (inside 5s), so
+        // reads slower than p90 fail and the rest do not; writes (~3.0x measured, not the
+        // 3.2x modelled) sit near 1.2s and stay healthy.
         delay: cdk.Duration.millis(400),
         // 25%, calibrated between two live results: 10% was absorbed COMPLETELY by TCP
         // retransmission (zero errors), and 60% was never measured because the latency
-        // overshoot proved the guardrail ceiling first -- 60% loss would near-certainly
-        // blow through it the same way. 25% is the conservative step: enough to defeat
+        // overshoot proved the ceiling first -- 60% loss would near-certainly collapse
+        // availability the same way. 25% is the conservative step: enough to defeat
         // retransmission on the slow tail and to threaten the 3s connect timeout, low
-        // enough to stay above the guardrail. Loss is the STOCHASTIC lever, so its band
+        // enough to keep the graph readable. Loss is the STOCHASTIC lever, so its band
         // comes from per-request variance rather than from a distribution edge.
         packetLossPercent: 25,
         // THE FOURTH FAULT: the AZ impairment. Stated explicitly (with the construct's
@@ -856,8 +872,8 @@ export class RegionStack extends cdk.Stack {
         //    is exactly what the record resolves to: one entry, whole path, nothing else.
         //  * The DB path is EXCLUDED BY CONSTRUCTION: Aurora's ENIs live in these same
         //    subnets, so CIDR exclusion is impossible -- naming the one legitimate
-        //    destination is the only clean scope. 500ms on the DB path breached the 50%
-        //    guardrail live (2026-09-01); a brownout that leaked into it would repeat that.
+        //    destination is the only clean scope. 500ms on the DB path took availability
+        //    to 0% live (2026-09-01); a brownout that leaked into it would repeat that.
         //
         // SEVERITY, live-recalibrated 2026-09-03. Our vendored LBC HONORS the health-check
         // timeout annotation -- the target group reads timeout=2s (verified post-deploy),
@@ -894,7 +910,7 @@ export class RegionStack extends cdk.Stack {
         // pods fail real requests. It arrives over the same proven SSM path, so it needs no
         // new IAM and no cluster-endpoint change. 85% of node memory is the starting point;
         // like the other two it needs live calibration against the SAME two-sided window
-        // (above the 50% guardrail, below the ~99% decision alarm).
+        // (a readable chart well above 0%, below the ~99% decision alarm).
       });
 
       // Template ids for the wrapper that starts every per-AZ experiment together —
@@ -1153,30 +1169,27 @@ export class RegionStack extends cdk.Stack {
       description: 'L1 SSM error-rate knob. Read by the app via ERROR_RATE_PARAM.',
     });
 
-    // ---- cross-region client reachability -----------------------------------------
+    // ---- client reachability on the NodePort range ---------------------------------
     //
-    // WITHOUT THIS RULE EVERY CROSS-REGION REQUEST TIMES OUT, with nothing else wrong.
+    // Three client sources are admitted on the Kubernetes NodePort range of the cluster
+    // security group: the peer workload VPC (below), this VPC's own CIDR, and the
+    // observer VPC, where the load generator runs.
     //
-    // The load generator runs in ONE region and follows DNS to whichever region is
-    // currently active, so after a failover its requests arrive here from the peer VPC.
-    // Peering carries the packets. What stops them is the node security group, and the
-    // reason is not obvious:
+    // HISTORY, because the rules outlived their reason. They were written when the
+    // in-tree service controller created the app's NLB with INSTANCE targets, for which
+    // client IP preservation is on by default: the node saw the ORIGINAL client address
+    // rather than the load balancer's, so without these rules every request from a
+    // peered VPC timed out with nothing else wrong. AWS states the requirement plainly:
+    // "If your load balancer preserves client IP addresses, add a rule that accepts
+    // traffic from the IP addresses of approved clients on the traffic port."
     //
-    //   The in-tree Kubernetes service controller — the only one on this cluster —
-    //   creates Network Load Balancers with INSTANCE targets exclusively. For instance
-    //   target groups, CLIENT IP PRESERVATION IS ON BY DEFAULT. So the node does not see
-    //   the load balancer's private address as the source; it sees the ORIGINAL CLIENT
-    //   address, which lives in the peer region's CIDR. A rule admitting the load
-    //   balancer is therefore not sufficient — the peer CIDR itself has to be admitted,
-    //   on the NodePort range the Service is published on.
-    //
-    // AWS states the requirement plainly: "If your load balancer preserves client IP
-    // addresses, add a rule that accepts traffic from the IP addresses of approved
-    // clients on the traffic port."
-    //
-    // Turning client IP preservation off would be the alternative, but the in-tree
-    // controller exposes no annotation for it — that is an AWS Load Balancer Controller
-    // feature, and installing that controller is the dependency step 2 rejected.
+    // The AWS Load Balancer Controller now creates that NLB with IP targets and
+    // preserve_client_ip.enabled=false pinned in k8s/app.yaml, so the pods see the load
+    // balancer's own address and the controller manages the rules that admit it. None of
+    // these three rules is on the request path any more. They are kept because they are
+    // harmless, because a controller default change back to instance targets would make
+    // them load-bearing again with no other signal, and because admitting every client
+    // source symmetrically is easier to reason about than admitting two of three.
     //
     // Declared as a parameter rather than a constant so a deploy-time CIDR override
     // (REGION_<i>_VPC_CIDR) can be matched here too, instead of silently drifting.
@@ -1190,35 +1203,38 @@ export class RegionStack extends cdk.Stack {
         new ec2.CfnSecurityGroupIngress(this, `PeerNodePortIngress${i}`, {
           groupId: cluster.attrClusterSecurityGroupId,
           ipProtocol: 'tcp',
-          // The Kubernetes default service NodePort range. The load balancer forwards to
-          // a port in this range on the node, and with client IP preservation the source
-          // address on that hop is the original cross-region client.
+          // The Kubernetes default service NodePort range.
           fromPort: 30000,
           toPort: 32767,
           cidrIp: cdk.Fn.select(i, peerCidrs.valueAsList),
-          description: 'Cross-region client to NodePort (client IP preservation is on)',
+          description: 'Cross-region client to NodePort (peer workload VPC)',
         });
       });
     }
 
-    // ---- SAME-VPC client reachability (step 4c) -------------------------------------
-    //
-    // The load generator's Fargate task lives in THIS VPC's isolated subnets and hits
-    // the same NLB — and client IP preservation applies identically: the node sees the
-    // task's address in this VPC's own CIDR, not the load balancer's. The in-tree
-    // controller MAY manage node-security-group client rules for the NLBs it creates,
-    // but that behaviour cannot be verified offline, and if it does not, the demo's own
-    // traffic source times out with peering, DNS and every health check green — the
-    // exact failure shape the peer rule above exists for. A redundant rule is harmless;
-    // a missing one is a silent timeout. This also deterministically admits the NLB
-    // health checks, which source from load balancer node addresses inside this CIDR.
+    // The observer VPC: the load generator's Fargate task reaches this region's NLB over
+    // the observer peering. A synth-time constant, like the observer-CIDR ingress on the
+    // operator access ALB — the observer stack pins the same value, and a test asserts
+    // it overlaps neither workload CIDR.
+    new ec2.CfnSecurityGroupIngress(this, 'ObserverNodePortIngress', {
+      groupId: cluster.attrClusterSecurityGroupId,
+      ipProtocol: 'tcp',
+      fromPort: 30000,
+      toPort: 32767,
+      cidrIp: OBSERVER_CIDR,
+      description: 'Observer VPC client (load generator) to NodePort',
+    });
+
+    // This VPC's own CIDR: the NLB's health checks source from load balancer node
+    // addresses inside it, and any in-VPC client (a debugging pod, the installer) does
+    // too.
     new ec2.CfnSecurityGroupIngress(this, 'LocalNodePortIngress', {
       groupId: cluster.attrClusterSecurityGroupId,
       ipProtocol: 'tcp',
       fromPort: 30000,
       toPort: 32767,
       cidrIp: this.vpcCidr.valueAsString,
-      description: 'Same-VPC client to NodePort (client IP preservation is on)',
+      description: 'Same-VPC client to NodePort',
     });
   }
 }

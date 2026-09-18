@@ -97,14 +97,14 @@ done
 cat <<'NOTE'
 
 == running.
-Watch the DECISION alarm (<demo>-ClientAvailability, availability < 99% for 3 of 5
-minutes). Target band is roughly 90-96%: high enough that the guardrail (< 50%) does not
-stop the experiment, low enough that the decision signal fires and stays lit. That band
-is the demo's main tuning number and MUST be checked against real numbers here -- it was
-chosen from the alarm arithmetic, not measured.
+Watch the DECISION alarm (<demo>-us-east-1-ClientAvailability, in the observer region:
+availability < 99% for 3 of 5 minutes). Target band is roughly 90-96%: low enough that
+the decision signal fires and stays lit, high enough that the reads-vs-writes split stays
+readable (at 0% every line is flat and there is nothing to decide from). That band is the
+demo's main tuning number; the shipped 400ms / 25% values were measured against it.
 
-If availability sits above 99%, the fault is too gentle to be a signal. If the guardrail
-fires, the experiment stops itself and the story ends before the human decides.
+If availability sits above 99%, the fault is too gentle to be a signal. Nothing stops the
+experiment for you: it runs its fixed 15-minute duration unless you stop it.
 
 To stop early:   aws fis stop-experiment --region <region> --id <experiment-id>
 To disarm:       aws ec2 delete-tags --region <region> --resources <ids> --tags Key=ChaosAllowed

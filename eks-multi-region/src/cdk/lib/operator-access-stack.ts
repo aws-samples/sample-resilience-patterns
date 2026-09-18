@@ -5,7 +5,7 @@ import * as elbv2Targets from 'aws-cdk-lib/aws-elasticloadbalancingv2-targets';
 import { Construct } from 'constructs';
 import { Cockpit } from './constructs/cockpit/cockpit';
 import { DEMO_METRIC_NAMESPACE } from './constructs/observability/metric-namespace';
-import { AZ_COUNT, OBSERVER_CIDR, REGIONS } from '../regions';
+import { AZ_COUNT, OBSERVER_CIDR, OBSERVER_REGION, REGIONS } from '../regions';
 
 export interface OperatorAccessStackProps extends cdk.StackProps {
   readonly appId: string;
@@ -205,6 +205,8 @@ export class OperatorAccessStack extends cdk.Stack {
         appId: props.appId,
         primaryRegion: REGIONS[0].name,
         standbyRegion: REGIONS[1].name,
+        // The load generator runs in the observer VPC, so its EMF lands there.
+        metricsRegion: OBSERVER_REGION,
         listener,
         metricNamespace: DEMO_METRIC_NAMESPACE,
         planArn: cockpitParam('PlanArn',

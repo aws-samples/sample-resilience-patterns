@@ -25,16 +25,22 @@ export const AURORA_ENGINE_VERSION = rds.AuroraPostgresEngineVersion.VER_16_8;
  *
  * LIVE-SIZED, not guessed. The provisioned `db.r6g.large` this replaced ran at 13-15%
  * CPU of 2 vCPU with 8-13 database connections under the demo's steady load
- * (measured 2026-09-04), i.e. well under one ACU of actual compute. `db.r6g.large` is
- * 16 GiB ≈ 8 ACU-equivalent, so THREE serverless instances holding ~2 ACU each cost
- * less always-on compute than the single provisioned instance they replace.
+ * (measured 2026-09-04), i.e. well under one ACU of actual compute.
  *
- * The floor is 2 rather than the 0.5 minimum on purpose, and it is a DEMO-FIDELITY
- * choice rather than a performance one: `shared_buffers` and `max_connections` both
- * derive from ACU, so a floor that scales up under load would add its own latency
- * variance on top of an injected fault — and every FIS severity number in
- * docs/runbook.md was calibrated against a fixed-size instance. A floor the workload
- * never leaves keeps those numbers meaning what they measured.
+ * The floor is the 0.5 ACU minimum, chosen for COST: six instances at the floor are
+ * 3 ACU, against 12 ACU at the previous floor of 2 (about $790 a month at list price).
+ * The primary's instances scale above it under the load generator and settle back when
+ * it stops; the secondary's readers sit at the floor until a failover. Two consequences
+ * are accepted and documented:
+ *   - `shared_buffers` derives from current ACU, so an instance that scales while a
+ *     fault is running adds latency variance of its own. Every FIS severity number in
+ *     docs/runbook.md was calibrated at the earlier fixed floor of 2 ACU; re-measure
+ *     before quoting them (the runbook says so).
+ *   - AWS recommends a minimum of 8 ACU for the PRIMARY region of an Aurora global
+ *     database, for replication under write-heavy load. This demo writes a few rows a
+ *     second, so the floor is set for cost instead. Reader2 (promotion tier 2) scales
+ *     independently of the writer; at this write volume it cannot fall behind.
+ * Never 0: automatic pause would put a cold start in the middle of a failover.
  *
  * The ceiling is a COST STOP, not a capacity plan: 16 ACU is 2x the instance class it
  * replaces, so a runaway cannot quietly cost more than a few provisioned instances.
@@ -43,7 +49,7 @@ export const AURORA_ENGINE_VERSION = rds.AuroraPostgresEngineVersion.VER_16_8;
  * requirement, not a convenience: a secondary whose ceiling is below the primary's
  * cannot keep up with replication.
  */
-export const AURORA_MIN_ACU = 2;
+export const AURORA_MIN_ACU = 0.5;
 export const AURORA_MAX_ACU = 16;
 
 /**
@@ -53,8 +59,9 @@ export const AURORA_MAX_ACU = 16;
  * the AZ power-interruption fault's `aws:network:disrupt-connectivity` action blackholes
  * the faulted zone's subnets — which are the SAME subnets as the Aurora DB subnet group.
  * Faulting us-east-2b therefore cut the region's only database out from under all three
- * AZs: regional availability read 0.00%, FIS's own 50% guardrail halted the experiment
- * three minutes in, and a "single-AZ" fault was in fact region-wide one time in three.
+ * AZs: regional availability read 0.00%, the 50% guardrail the experiments carried at the
+ * time halted the run three minutes in, and a "single-AZ" fault was in fact region-wide one
+ * time in three.
  * Whether the demo's core claim held was decided by which zone happened to be busiest.
  *
  * Pinning is deliberate rather than left to Aurora's automatic placement, because

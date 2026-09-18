@@ -1,4 +1,4 @@
-# Threat model note — Resilience Cockpit write role
+# Threat model note: Resilience Cockpit write role
 
 Scope: the `Cockpit` construct's Lambda execution role in `eks-mr-demo`
 (`src/cdk/lib/constructs/cockpit/cockpit.ts`), which holds fault-injection and
@@ -29,14 +29,14 @@ Defaults), AWS guidance **Prevent Privilege Escalation**, and the recommendation
 | `fis:StartExperiment` / `StopExperiment` / read | primary-region templates + experiments | pre-existing templates only |
 | `iam:PassRole` | the FIS service role ARN (threaded) | `iam:PassedToService = fis.amazonaws.com` |
 | `arc-region-switch:StartPlanExecution`, `UpdatePlanExecutionStep` | the plan ARN (threaded) | one plan |
-| `arc-zonal-shift:StartZonalShift` / `UpdateZonalShift` / `CancelZonalShift` | `*` + `StringLike` on `arc-zonal-shift:ResourceIdentifier` = the app NLB ARN (threaded) | the service scopes by CONDITION KEY, not the Resource element — an ARN in `Resource` authorizes nothing. No `iam:PassRole`: zonal shift passes no service role. Blast radius: one AZ removed from one demo NLB in the primary region, self-expiring (≤72h, default 15m). |
-| `arc-zonal-shift:ListZonalShifts` / `ListManagedResources` / `GetManagedResource` | `*` | account/Region-wide listers with no resource type — read-only, own statement so nothing mutating rides the wildcard |
+| `arc-zonal-shift:StartZonalShift` / `UpdateZonalShift` / `CancelZonalShift` | `*` + `StringLike` on `arc-zonal-shift:ResourceIdentifier` = the app NLB ARN (threaded) | the service scopes by CONDITION KEY, not the Resource element; an ARN in `Resource` authorizes nothing. No `iam:PassRole`: zonal shift passes no service role. Blast radius: one AZ removed from one demo NLB in the primary region, self-expiring (≤72h, default 15m). |
+| `arc-zonal-shift:ListZonalShifts` / `ListManagedResources` / `GetManagedResource` | `*` | account/Region-wide listers with no resource type; read-only, own statement so nothing mutating rides the wildcard |
 | assorted `Describe*` / `List*` / CloudWatch reads | `*` where AWS does not support scoping | read-only |
 
 A `CockpitRoleBoundary` permissions boundary caps all of it. Because a boundary is an
 intersection, its explicit `Deny` wins over any future `Allow` added to the role in a hurry.
 
-## 2. The `iam:PassRole` edge
+## 2. The `iam:PassRole` grant
 
 AWS FIS requires the caller to pass it a service role; there is no way to start an
 experiment without `iam:PassRole`. That role
@@ -47,7 +47,7 @@ Controls, defence in depth:
 
 1. **Exact resource.** The threaded FIS role ARN, not a wildcard and no longer a prefix on
    a generated role name.
-2. **Condition key.** `StringEquals: {"iam:PassedToService": "fis.amazonaws.com"}` — the
+2. **Condition key.** `StringEquals: {"iam:PassedToService": "fis.amazonaws.com"}`; the
    role cannot be handed to EC2, Lambda, CloudFormation or anything else.
 3. **Boundary counterpart.** The boundary carries the inverse:
    `Deny iam:PassRole` with `StringNotEquals: {"iam:PassedToService": "fis.amazonaws.com"}`.
@@ -59,23 +59,23 @@ Controls, defence in depth:
 
 **The FIS service-linked role is deploy-time plumbing, never a cockpit grant.** On the
 first `fis:StartExperiment` in an account, FIS creates `AWSServiceRoleForFIS` using the
-*caller's* `iam:CreateServiceLinkedRole`. The boundary's `Deny iam:Create*` blocks that —
-observed live 2026-09-01, an AccessDenied naming this boundary — and that is the control
-working, not a defect: a demo-facing web role must not create IAM roles of any kind
-(per the "Prevent Privilege Escalation" best practice; SLRs are also the tamper-proof
-shape AWS service-linked-role guidance favors). The deploy rail's Phase 0 creates the
+*caller's* `iam:CreateServiceLinkedRole`. The boundary's `Deny iam:Create*` blocks that.
+This was observed live 2026-09-01 as an AccessDenied naming this boundary, so the control
+is working. It is not a defect: a demo-facing web role must not create IAM roles of any
+kind (per the "Prevent Privilege Escalation" best practice; SLRs are also the tamper-proof
+model that AWS service-linked-role guidance favors). Phase 0 of `make deploy` creates the
 SLR idempotently with the deployer's credentials instead, so the cockpit role never needs
 the action. Do not "fix" a recurrence by widening the boundary.
 
-**Why the boundary deliberately differs from `PlanRoleBoundary`.** That policy denies
-`iam:PassRole` outright. Cloning it here would intersect away the one edge FIS needs, and
+**Why the boundary differs from `PlanRoleBoundary` on purpose.** That policy denies
+`iam:PassRole` outright. Cloning it here would intersect away the one grant FIS needs, and
 the failure would surface as an authorization error pointing at a role policy where the
 grant is present and looks correct. The narrower `StringNotEquals` form is the reason this
 is a separate managed policy rather than a reuse.
 
 ## 3. Escalation chains considered
 
-the guidance asks specifically about combinations — "permissions when combined may
+the guidance asks specifically about combinations; "permissions when combined may
 enable broader actions that may not be intended."
 
 | Documented chain | Present? | Why not exploitable |
@@ -87,7 +87,7 @@ enable broader actions that may not be intended."
 | Credential mutation (`iam:CreateAccessKey`, `UpdateLoginProfile`, …) | **No** | Same `Deny`. |
 | `organizations:*`, `account:*` | **No** | Same `Deny`. |
 
-`iam:SimulatePrincipalPolicy` is deliberately **not** denied. It is read-only, and a
+`iam:SimulatePrincipalPolicy` is intentionally **not** denied. It is read-only, and a
 blanket `iam:*` deny previously left ARC plan evaluation permanently in `actionRequired`
 because plan evaluation calls it (observed 2026-08-26).
 
@@ -100,7 +100,7 @@ documented escalation chain** sitting in one role: AWS guidance lists
 "get access to an IAM role by creating a CloudFormation template to create new
 instances/functions, passing the role to the instances/functions, and run them."
 
-The chain was incomplete — `CreateStack` was never granted — so this was not an exploitable
+The chain was incomplete (`CreateStack` was never granted), so this was not an exploitable
 finding. But relying on a missing third leg is a weaker position than not holding the
 pattern at all. Threading the ARNs as CfnParameters removed the need for discovery, so the
 grant is gone, and three resource scopes tightened as a side effect:
@@ -118,7 +118,7 @@ authorization is the network path plus IAM, not a browser gate:
 
 - The cockpit is served only by the standby region's internal operator-access ALB, whose
   sole ingress is the observer VPC CIDR. The only route in is the third-region observer
-  bastion (no public IP, no inbound rules) over SSM Session Manager — so reaching the
+  bastion (no public IP, no inbound rules) over SSM Session Manager, so reaching the
   cockpit at all requires `ssm:StartSession` on that bastion. An operator without that
   access cannot see it.
 - The ARC plan carries **no approval gate**, so `StartPlanExecution` succeeding *is* the
@@ -140,7 +140,7 @@ real second-actor control.
   resource-level scoping. All are read-only. The same justification is carried inline in
   the region-switch execution role for the same actions.
 - **`ec2:CreateTags` on `instance/*`.** Scoped to primary-region instances, but not to the
-  node group's instances specifically — an instance ARN condition would need the instance
+  node group's instances specifically. An instance ARN condition would need the instance
   ids, which are not known at synth time (they are AWS-owned ASG members, which is why
   tagging is the arming gesture at all). The tag written is only `ChaosAllowed`, which is
   inert unless a FIS template selects on it.
