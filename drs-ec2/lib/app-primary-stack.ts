@@ -89,7 +89,9 @@ dnf install -y postgresql15
 # upgrades it out from under the CLI and every later 'aws' call in this script dies with
 # "No module named 'dateutil'" (seen live 2026-09-16). Never pip into the system interpreter.
 python3 -m venv /opt/app/venv
-/opt/app/venv/bin/pip install --quiet flask pg8000 boto3
+# Exact pins: reproducible boots and no drift into an unvetted release. AL2023's python3 is 3.9,
+# which boto3 1.43+ no longer supports; bump these together and keep THIRD-PARTY-LICENSES in step.
+/opt/app/venv/bin/pip install --quiet flask==3.1.3 pg8000==1.31.5 boto3==1.42.97
 
 REGION="${this.region}"
 PROJECT="${project}"
