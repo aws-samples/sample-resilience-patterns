@@ -62,7 +62,7 @@ if (c('nag') === 'true') {
 }
 const suppressions = [
   { id: 'AwsSolutions-IAM4', reason: 'AWSLambdaBasicExecutionRole / AmazonSSMManagedInstanceCore / DRS managed policies are the documented service policies.' },
-  { id: 'AwsSolutions-IAM5', reason: 'drs:* and ViaAWSService EC2 grants: DRS launches recovery instances with the caller\'s credentials and offers no resource-level scoping for these actions (design.md s8).' },
+  { id: 'AwsSolutions-IAM5', reason: 'DRS actions on resource "*" and ViaAWSService EC2 grants: DRS creates source servers, recovery instances and jobs at run time with no predictable ARN, and launches recovery instances with the caller\'s credentials. The DRS actions are enumerated (see lib/constructs/drs-region-switch-steps.ts).' },
   { id: 'AwsSolutions-EC23', reason: 'Internal ALBs; ingress is limited to the workload/observer CIDRs supplied via context.' },
   { id: 'AwsSolutions-EC26', reason: 'Demo root volume; DRS replicates the block device as-is.' },
   { id: 'AwsSolutions-EC28', reason: 'Detailed monitoring not needed for the demo.' },
