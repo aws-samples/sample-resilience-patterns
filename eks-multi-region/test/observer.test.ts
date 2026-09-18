@@ -121,6 +121,22 @@ describe('operator access door (step 12)', () => {
     }
   });
 
+  // checkov CKV_AWS_131: requests carrying malformed header names are refused at the door
+  // rather than forwarded to argocd-server or the cockpit (request-smuggling class).
+  it('drops invalid HTTP header fields on both access ALBs', () => {
+    for (const [, t] of accessTemplates()) {
+      const albs = Object.values(
+        t.findResources('AWS::ElasticLoadBalancingV2::LoadBalancer'),
+      ) as any[];
+      expect(albs).toHaveLength(1);
+      const attrs = albs[0].Properties.LoadBalancerAttributes ?? [];
+      expect(attrs).toContainEqual({
+        Key: 'routing.http.drop_invalid_header_fields.enabled',
+        Value: 'true',
+      });
+    }
+  });
+
   it('IP-targets the argocd NLB ENIs, AZ_COUNT of them', () => {
     for (const [, t] of accessTemplates()) {
       const tgs = Object.values(
@@ -178,6 +194,28 @@ describe('observer VPC + bastion (step 12)', () => {
       expect(ep.Properties.VpcEndpointType).toBe('Interface');
       expect(ep.Properties.PrivateDnsEnabled).toBe(true);
     }
+  });
+
+  // cfn_nag F1000. Interface endpoints only answer, so the endpoint SG needs no egress at
+  // all -- but an ABSENT egress list is CloudFormation's allow-all default. The SG must carry
+  // CDK's own `allowAllOutbound: false` rule (the one the region stacks' endpoint SGs get),
+  // so "no egress" is written in the template rather than implied.
+  it('states the endpoint SG has no egress, with the explicit deny-all rule', () => {
+    const t = observerTemplate();
+    const sgs = Object.values(t.findResources('AWS::EC2::SecurityGroup')) as any[];
+    const endpointSg = sgs.find((s) =>
+      (s.Properties.GroupDescription ?? '').includes('SSM interface endpoints'),
+    );
+    expect(endpointSg).toBeDefined();
+    expect(endpointSg.Properties.SecurityGroupEgress).toEqual([
+      {
+        IpProtocol: 'icmp',
+        FromPort: 252,
+        ToPort: 86,
+        CidrIp: '255.255.255.255/32',
+        Description: 'Disallow all traffic',
+      },
+    ]);
   });
 
   it('creates a requester peering to each workload VPC and routes toward each workload CIDR', () => {
