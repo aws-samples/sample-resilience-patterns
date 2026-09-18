@@ -1,6 +1,6 @@
 # Auto-REQUESTS a review from the maintainer whenever these paths change. It does not
 # block a merge: that would need "Require review from Code Owners" in the main branch
-# protection, which is deliberately OFF -- the auto-approve/auto-merge workflows approve
+# protection, which is intentionally OFF: the auto-approve/auto-merge workflows approve
 # Dependabot PRs as github-actions[bot], and a bot cannot satisfy a Code Owners review, so
 # turning it on would stall every Dependabot PR that touched these paths. (Today Dependabot
 # is lockfile-only npm and touches none of them; the toggle stays off so that cannot change

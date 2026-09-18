@@ -18,9 +18,11 @@ DESIGN NOTES
 - Active region is DERIVED FROM OBSERVED TRAFFIC (RegionSuccess/RegionError per Region),
   not from a DNS or HTTP probe — see _region_traffic's docstring for why neither can
   answer the question here.
-- All AWS metrics/EMF land in PRIMARY_REGION (single load generator), so CloudWatch reads
-  target PRIMARY_REGION regardless of where this Lambda runs. FIS templates and node
-  tagging are primary-only for the same structural reason.
+- EMF metrics land in METRICS_REGION (the observer region, where the single load generator
+  runs), so every read of the demo's own namespace targets that region regardless of where
+  this Lambda runs. AWS-native metrics stay regional: the app NLB's per-AZ target health is
+  read from PRIMARY_REGION and the replica reporters from each workload region. FIS
+  templates and node tagging are primary-only for the same structural reason.
 - RUNTIME ARN DISCOVERY: the ARC plan, knob names, FIS template ids, cluster and node
   group names are resolved from stack outputs (Step 5 replaces this with threaded
   CfnParameters). Every READ degrades gracefully: a tile that cannot be read returns
@@ -46,6 +48,9 @@ _CFG = Config(connect_timeout=2, read_timeout=4, retries={"max_attempts": 2})
 APP_ID = os.environ["APP_ID"]
 PRIMARY_REGION = os.environ["PRIMARY_REGION"]
 STANDBY_REGION = os.environ["STANDBY_REGION"]
+# Where the load generator's EMF lands: the observer region. Defaults to the primary so a
+# deployment that predates the observer-hosted load generator keeps reading where it did.
+METRICS_REGION = os.environ.get("METRICS_REGION", PRIMARY_REGION)
 METRIC_NAMESPACE = os.environ.get("METRIC_NAMESPACE", "MyResilienceDemo")
 
 # ── The Az-dimensioned availability family (D1) — READER SIDE ─────────────────────────
@@ -84,6 +89,11 @@ _cw = boto3.client("cloudwatch", region_name=PRIMARY_REGION, config=_CFG)
 # interface endpoint serves only its own region), so the replicas tile reads BOTH.
 _cw_standby = boto3.client("cloudwatch", region_name=STANDBY_REGION, config=_CFG)
 _CW = {PRIMARY_REGION: _cw, STANDBY_REGION: _cw_standby}
+# The load generator's EMF (METRIC_NAMESPACE: Client*/Op*/Region*/Az* families) lands in
+# the region of ITS log group, the observer region. Every read of that namespace goes
+# through this client; `_cw` stays for AWS-native metrics that live in the primary region
+# (the app NLB's per-AZ target health).
+_cw_metrics = boto3.client("cloudwatch", region_name=METRICS_REGION, config=_CFG)
 _rds = boto3.client("rds", region_name=PRIMARY_REGION, config=_CFG)
 _ssm_primary = boto3.client("ssm", region_name=PRIMARY_REGION, config=_CFG)
 _ssm_standby = boto3.client("ssm", region_name=STANDBY_REGION, config=_CFG)
@@ -248,8 +258,9 @@ FAULTS = {
     #
     # Same severity values as the region-wide faults (400ms / 25%) -- reused deliberately, so
     # there is one set of numbers to defend rather than two calibrations. Diluted across three
-    # AZs the aggregate lands ~96-97%, below the 99% decision alarm and far above the 50%
-    # guardrail that self-terminated the 500ms experiment.
+    # AZs the aggregate lands ~96-97%, below the 99% decision alarm and far above the collapse
+    # to 0% that the 500ms experiment produced (which, under the since-removed 50% guardrail,
+    # self-terminated).
     "latency-single-az": {"env": "FIS_LATENCY_TEMPLATES_BY_AZ",
                           "availability": True, "singleAz": True},
     "packet-loss-single-az": {"env": "FIS_PACKET_LOSS_TEMPLATES_BY_AZ",
@@ -264,7 +275,8 @@ FAULTS = {
     # shift. Genuinely zonal only since each Aurora member runs one instance per AZ
     # (2026-09-04) -- its 2-minute subnet blackhole also cuts that zone's database, and
     # with the single-instance cluster it replaced, hitting the writer's zone took the
-    # whole region to 0.00% and tripped the 50% guardrail. Same armed-nodes interlock: the
+    # whole region to 0.00% (and tripped the 50% guardrail the experiments carried at the
+    # time). Same armed-nodes interlock: the
     # stop action targets ChaosAllowed=true, so the generic armed==0 refusal below covers
     # it.
     "power-interruption-single-az": {"env": "FIS_POWER_TEMPLATES_BY_AZ",
@@ -433,7 +445,7 @@ def _discover_azs(recently_active=True):
         for _ in range(5):
             if token:
                 kwargs["NextToken"] = token
-            r = _cw.list_metrics(**kwargs)
+            r = _cw_metrics.list_metrics(**kwargs)
             for m in r.get("Metrics", []):
                 for d in m.get("Dimensions", []):
                     if d.get("Name") == AZ_DIMENSION and d.get("Value"):
@@ -502,7 +514,7 @@ def _az_traffic_totals(minutes=15):
                     },
                     "ReturnData": True,
                 })
-        r = _cw.get_metric_data(
+        r = _cw_metrics.get_metric_data(
             MetricDataQueries=queries, StartTime=start, EndTime=end,
             ScanBy="TimestampAscending",
         )
@@ -570,11 +582,13 @@ def _availability_series(minutes=45):
             "ReturnData": True,
         }
 
-    # Per-AZ TARGET-HEALTH queries ride the SAME GetMetricData call, so every AZ line
-    # shares the aggregate lines' timestamp grid exactly. Two calls could straddle a
-    # minute boundary and produce series of different lengths, which the chart would
-    # render as AZ lines offset from the aggregate -- reading as a data problem rather
-    # than a rendering one.
+    # Per-AZ TARGET-HEALTH queries share the aggregate lines' WINDOW exactly, so every AZ
+    # line lands on the same timestamp grid. They cannot share the CALL any more (the two
+    # families live in different regions -- see the try block below); what keeps the grid
+    # aligned is the single StartTime/EndTime pair computed above. Two calls that each
+    # picked their own `now` could straddle a minute boundary and produce series of
+    # different lengths, which the chart would render as AZ lines offset from the
+    # aggregate -- reading as a data problem rather than a rendering one.
     #
     # SOURCE MOVED (2026-09-02) from the pod-emitted Az family to the NLB's per-AZ
     # HealthyHostCount/UnHealthyHostCount. The pod family is emitted BY the pods, so the
@@ -678,19 +692,31 @@ def _availability_series(minutes=45):
         }
 
     try:
-        r = _cw.get_metric_data(
+        # TWO calls, TWO regions, ONE window. The pod-emitted families live where the load
+        # generator's log group is (METRICS_REGION); the NLB's per-AZ target health is an
+        # AWS-native metric in the primary region, and a GetMetricData call cannot span
+        # regions. Both calls take the SAME StartTime/EndTime computed once above, so their
+        # timestamps fall on one grid and the union below is the same grid a single call
+        # would have produced -- the straddled-minute risk only exists when each call picks
+        # its own `now`. Query ids are disjoint across the two, so merging by id is safe.
+        emf = _cw_metrics.get_metric_data(
             MetricDataQueries=(
                 [q(o, m) for o in ("read", "write") for m in ("OpSuccess", "OpError")]
-                + [az_q(az, m, i) for i, az in enumerate(azs)
-                   for m in ("HealthyHostCount", "UnHealthyHostCount")]
                 + [lat_q(az, i) for i, az in enumerate(azs)]
                 + [client_q(az, m, i) for i, az in enumerate(azs)
                    for m in (AZ_SLO_SUCCESS, AZ_SUCCESS, AZ_ERROR)]
             ),
             StartTime=start, EndTime=end, ScanBy="TimestampAscending",
         )
-        by_id = {m["Id"]: dict(zip(m["Timestamps"], m["Values"]))
-                 for m in r["MetricDataResults"]}
+        results = list(emf["MetricDataResults"])
+        if azs:
+            nlb = _cw.get_metric_data(
+                MetricDataQueries=[az_q(az, m, i) for i, az in enumerate(azs)
+                                   for m in ("HealthyHostCount", "UnHealthyHostCount")],
+                StartTime=start, EndTime=end, ScanBy="TimestampAscending",
+            )
+            results.extend(nlb["MetricDataResults"])
+        by_id = {m["Id"]: dict(zip(m["Timestamps"], m["Values"])) for m in results}
         stamps = sorted({t for d in by_id.values() for t in d})
         out = {"available": True, "minutes": [t.strftime("%H:%M") for t in stamps],
                "read": [], "write": []}
@@ -803,7 +829,7 @@ def _region_traffic():
         for region in regions:
             queries.append(q(region, "RegionSuccess"))
             queries.append(q(region, "RegionError"))
-        res = _cw.get_metric_data(MetricDataQueries=queries, StartTime=start, EndTime=end)
+        res = _cw_metrics.get_metric_data(MetricDataQueries=queries, StartTime=start, EndTime=end)
         vals = {m["Id"]: sum(m["Values"]) for m in res["MetricDataResults"]}
 
         traffic = {

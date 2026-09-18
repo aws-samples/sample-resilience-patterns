@@ -12,7 +12,8 @@ export interface ObserverStackProps extends cdk.StackProps {
 }
 
 /**
- * The observer VPC (step 12) — a THIRD region that stands in for the customer's operator.
+ * The observer VPC (step 12) — a THIRD region that stands in for the customer's operator
+ * AND the customer's clients.
  *
  * Modeled on drs-mr-demo/templates/10-observer.yaml. It replaces the old CloudFront
  * signed-cookie front
@@ -22,6 +23,13 @@ export interface ObserverStackProps extends cdk.StackProps {
  * VPC-peered into both workload regions. `build/tunnel.sh` port-forwards over that bastion.
  * Surviving anything done to either workload region is the point, so the observer lives in
  * a region that is neither workload region.
+ *
+ * THE LOAD GENERATOR LIVES HERE TOO (LoadGenStack deploys into this VPC). The synthetic
+ * users used to run in the primary region's isolated subnets, which meant a real loss of
+ * the primary region took the client's view of the outage down with it. Clients belong
+ * outside both workload regions for the same reason the operator does. That is why this
+ * VPC carries ECR and CloudWatch Logs endpoints as well as the SSM three: a Fargate task
+ * with no internet route pulls its image and ships its logs only through them.
  *
  * CROSS-REGION IDS ARE PARAMETERS, NOT IMPORTS. The workload VPC ids live in other
  * regions; CloudFormation exports are region-scoped, so they are threaded here as
@@ -111,9 +119,16 @@ export class ObserverStack extends cdk.Stack {
       });
     });
 
-    // ---- Systems Manager reachability with no internet path: three interface endpoints
+    // ---- AWS reachability with no internet path: interface endpoints + the S3 gateway
+    //
+    // Two consumers share these. The bastion needs the three Systems Manager endpoints.
+    // The load generator (LoadGenStack, deployed into this VPC) is a Fargate task in a
+    // subnet with no internet route, and the ECS documentation is explicit about what
+    // that needs: the ecr.api and ecr.dkr interface endpoints plus an S3 gateway endpoint
+    // to pull its image, and a CloudWatch Logs interface endpoint because it ships EMF
+    // through the awslogs driver. Tasks on Fargate need no ECS endpoints of their own.
     const endpointSg = new ec2.CfnSecurityGroup(this, 'EndpointSecurityGroup', {
-      groupDescription: 'HTTPS from the observer VPC to the SSM interface endpoints',
+      groupDescription: 'HTTPS from the observer VPC to the interface endpoints',
       vpcId: vpc.ref,
       securityGroupIngress: [
         {
@@ -121,7 +136,7 @@ export class ObserverStack extends cdk.Stack {
           fromPort: 443,
           toPort: 443,
           cidrIp: observerCidr,
-          description: 'observer VPC to SSM endpoints',
+          description: 'observer VPC to the interface endpoints',
         },
       ],
       // Interface endpoints only ANSWER, and security groups are stateful, so replies to the
@@ -141,22 +156,36 @@ export class ObserverStack extends cdk.Stack {
       tags: [{ key: 'Name', value: `${props.appId}-observer-vpce-sg` }],
     });
 
-    const ssmService = (svc: string): string => `com.amazonaws.${this.region}.${svc}`;
-    for (const svc of ['ssm', 'ssmmessages', 'ec2messages']) {
-      const logicalId = svc === 'ssm'
-        ? 'SsmEndpoint'
-        : svc === 'ssmmessages'
-          ? 'SsmMessagesEndpoint'
-          : 'Ec2MessagesEndpoint';
+    const serviceName = (svc: string): string => `com.amazonaws.${this.region}.${svc}`;
+    // Logical ids are spelled out rather than derived so the three SSM endpoints keep the
+    // ids they were first deployed with (a changed logical id is a replace, not an update).
+    const interfaceEndpoints: Record<string, string> = {
+      SsmEndpoint: 'ssm',
+      SsmMessagesEndpoint: 'ssmmessages',
+      Ec2MessagesEndpoint: 'ec2messages',
+      EcrApiEndpoint: 'ecr.api',
+      EcrDockerEndpoint: 'ecr.dkr',
+      LogsEndpoint: 'logs',
+    };
+    for (const [logicalId, svc] of Object.entries(interfaceEndpoints)) {
       new ec2.CfnVPCEndpoint(this, logicalId, {
         vpcId: vpc.ref,
-        serviceName: ssmService(svc),
+        serviceName: serviceName(svc),
         vpcEndpointType: 'Interface',
         privateDnsEnabled: true,
         subnetIds: [subnet.ref],
         securityGroupIds: [endpointSg.ref],
       });
     }
+    // Image LAYERS come from S3 (ECR stores them there), so the pull needs this gateway
+    // as well as the two ECR interface endpoints. A gateway endpoint is a route-table
+    // entry, not an ENI: no subnet, no security group, and no hourly charge.
+    new ec2.CfnVPCEndpoint(this, 'S3GatewayEndpoint', {
+      vpcId: vpc.ref,
+      serviceName: serviceName('s3'),
+      vpcEndpointType: 'Gateway',
+      routeTableIds: [routeTable.ref],
+    });
 
     // ---- the bastion: SSM only. No inbound. Egress to the endpoints + workload VPCs. ---
     const bastionRole = new iam.CfnRole(this, 'BastionRole', {
@@ -213,10 +242,19 @@ export class ObserverStack extends cdk.Stack {
       ],
     });
 
-    // Outputs consumed by build/tunnel.sh (BastionInstanceId) and by the deploy rail's
-    // accepter-side route step (the peering ids, per workload region).
+    // Outputs consumed by build/tunnel.sh (BastionInstanceId), by the deploy rail's
+    // accepter-side route step (the peering ids, per workload region), and by
+    // LoadGenStack, which places its Fargate task in this subnet (PrivateSubnetId/Az).
     new cdk.CfnOutput(this, 'VpcId', { value: vpc.ref });
     new cdk.CfnOutput(this, 'VpcCidr', { value: observerCidr });
+    new cdk.CfnOutput(this, 'PrivateSubnetId', {
+      value: subnet.ref,
+      description: 'The observer private subnet. The load generator runs here.',
+    });
+    new cdk.CfnOutput(this, 'PrivateSubnetAz', {
+      value: subnet.attrAvailabilityZone,
+      description: 'Availability zone of PrivateSubnetId, for Vpc.fromVpcAttributes.',
+    });
     new cdk.CfnOutput(this, 'BastionInstanceId', { value: bastion.ref });
     workloads.forEach((w, i) => {
       new cdk.CfnOutput(this, `PeeringTo${i}Id`, {

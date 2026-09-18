@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Every stack the deploy rail owns must be in a *_COMPLETE state, in its own region.
-# A rail that "finished" with one stack in ROLLBACK_COMPLETE is not a deploy. The stack
-# list and regions here MIRROR the rail in .projen/tasks.json; test/topology.test.ts pins
-# the two against each other so they cannot drift.
+# Every stack the deploy creates must be in a *_COMPLETE state, in its own region.
+# A deploy that "finished" with one stack in ROLLBACK_COMPLETE is not a deploy. The stack
+# list and regions here MIRROR the deploy tasks in .projen/tasks.json; test/topology.test.ts
+# pins the two against each other so they cannot drift.
 set -euo pipefail
 
 PROJECT="${PROJECT_NAME:-eks-mr-demo}"
@@ -19,7 +19,7 @@ STACKS=(
   "$SECONDARY:$PROJECT-secondarydb"
   "$OBSERVER:$PROJECT-observer"
   "$PRIMARY:$PROJECT-dns"
-  "$PRIMARY:$PROJECT-loadgen"
+  "$OBSERVER:$PROJECT-loadgen"
   "$PRIMARY:$PROJECT-failover"
   "$SECONDARY:$PROJECT-standbyaccess"
   "$PRIMARY:$PROJECT-access-$PRIMARY"

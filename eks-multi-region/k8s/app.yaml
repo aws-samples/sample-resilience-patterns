@@ -306,7 +306,7 @@ metadata:
     # the Aurora path, which shares these subnets and so can never be excluded by CIDR, is
     # untouched by construction. false is already the LBC default for ip targets (read live
     # 2026-09-02); it is PINNED here so a controller default change cannot silently re-scope
-    # the fault into the DB path and trip the 50% guardrail.
+    # the fault into the DB path and change the calibrated severity.
     service.beta.kubernetes.io/aws-load-balancer-target-group-attributes: deregistration_delay.timeout_seconds=15,target_health_state.unhealthy.connection_termination.enabled=false,preserve_client_ip.enabled=false
     # HTTP HEALTH CHECKS ON /health -- the brownout fault's FLAP WINDOW (design D2).
     #

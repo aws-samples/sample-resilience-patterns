@@ -53,9 +53,9 @@ AZ_LATENCY = "AzLatency"
 #: A SEPARATE counter rather than a redefinition of ``AzSuccess``. Three reasons, in order of
 #: how badly each would hurt:
 #:
-#: 1. ``Client*`` and ``Region*`` feed ALARMS -- the 50% FIS stop condition and the ARC
+#: 1. ``Client*`` and ``Region*`` feed ALARMS -- the decision signal and the ARC
 #:    application-health alarms. ``Az*`` feeds charts only. Keeping the SLO measure inside the
-#:    Az family is what makes it impossible for a latency SLO to re-arm the FIS guardrail or
+#:    Az family is what makes it impossible for a latency SLO to trip the decision alarm or
 #:    to shift Route 53 on a single-AZ fault.
 #: 2. Both lines can then be drawn together, and their DIVERGENCE is the gray-failure thesis:
 #:    "responded" stays at 100% while "responded within 2s" falls. One redefined line just

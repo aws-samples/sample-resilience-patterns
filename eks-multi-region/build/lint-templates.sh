@@ -6,7 +6,7 @@
 # ---------------
 # `cdk synth` validates the CDK object graph. It does NOT validate the template it
 # produces, and CloudFormation only rejects some errors at CreateChangeSet -- i.e. mid
-# deploy, after the rail has spent minutes on earlier phases. Three separate defects
+# deploy, after earlier phases have already spent minutes. Three separate defects
 # reached a live deploy on 2026-08-31 behind a completely green synth:
 #
 #   1. `Fn::GetAtt [Plan, 'Route53HealthChecks.Regions']` -- nested attribute path that

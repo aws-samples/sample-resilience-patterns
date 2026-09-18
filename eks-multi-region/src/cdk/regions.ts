@@ -120,28 +120,32 @@ export const FAILOVER_SUFFIX = 'failover';
  */
 export const STANDBY_ACCESS_SUFFIX = 'standbyaccess';
 /**
- * Cross-region VPC peering. REINSTATED after being dropped as D-008.
+ * Cross-region VPC peering between the two workload VPCs. REINSTATED after being dropped
+ * as D-008.
  *
  * D-008 reasoned that nothing here is VPC-routed across regions — Aurora replication rides
  * the AWS network, ARC Region switch uses per-region endpoints, traffic shifting is DNS.
- * All true, and all beside the point: DNS resolves names, it does not move packets. A
- * client that follows the failover to the other region needs a path to a load balancer
- * that is internal, and peering is that path.
+ * All true, and all beside the point: DNS resolves names, it does not move packets. The
+ * app's writes go to the Aurora global writer endpoint, a private address in whichever
+ * region holds the writer, and peering is the path to it from the other region.
  */
 export const PEERING_SUFFIX = 'peering';
 
 /**
- * Global routing (step 4b). A PRIVATE hosted zone associated with both regions' VPCs,
- * holding the latency records the load generator resolves and the ARC Region Switch
- * `Route53HealthCheck` block flips. This was the plan gap found at step 4: the records
- * appeared only in the architecture diagram while step 8's plan assumed they existed.
+ * Global routing (step 4b). A PRIVATE hosted zone associated with both workload regions'
+ * VPCs and the observer VPC, holding the failover records the load generator resolves and
+ * the ARC Region Switch `Route53HealthCheck` block flips. This was the plan gap found at
+ * step 4: the records appeared only in the architecture diagram while step 8's plan
+ * assumed they existed.
  */
 export const DNS_SUFFIX = 'dns';
 
 /**
- * The load generator (step 4c). PRIMARY region only — Option A's one set of users
- * that follows the failover DNS. Deploys after `dns` (both are post-deploy stacks)
- * so the name its tasks resolve exists before the first request.
+ * The load generator (step 4c). OBSERVER region — one set of users, outside both workload
+ * regions, that follows the failover DNS over the observer VPC's peerings. Deploys after
+ * `dns` (both are post-deploy stacks) so the name its tasks resolve exists before the
+ * first request. It also hosts the alarms over the client metrics, because EMF lands in
+ * the emitter's region and an alarm cannot read across regions.
  */
 export const LOADGEN_SUFFIX = 'loadgen';
 
@@ -221,10 +225,11 @@ export const peerVpcCidrs = (region: string): string[] =>
  * one that stays green through build AND synth, and only fails on a live deploy — the
  * same defect that made the orphaned PeeringStack a deploy break (C-2).
  *
- * `peering` is present again as of step 4: the load generator lives in one region and
- * follows DNS to whichever region is active, so it needs a route to the other region's
- * internal load balancer. It sits between the region stacks and the singletons, matching
- * the deploy factory's own Phase 3.
+ * `peering` is present again as of step 4: the app's writes go to the Aurora global writer
+ * endpoint, a private address in whichever region holds the writer, so each region's pods
+ * need a route into the other VPC. It sits between the region stacks and the singletons,
+ * matching the deploy factory's own Phase 3. (The load generator reaches both regions over
+ * the observer VPC's own peerings, declared by the observer stack.)
  */
 export const STACK_SUFFIXES: readonly string[] = [
   ...REGIONS.map((r) => regionSuffix(r)),
