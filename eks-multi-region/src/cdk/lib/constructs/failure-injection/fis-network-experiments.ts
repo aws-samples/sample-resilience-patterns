@@ -103,8 +103,8 @@ export interface FisNetworkExperimentsProps {
    * Egress destinations for the `brownout` fault — its OWN Sources list, deliberately
    * separate from {@link networkSources}. The region-wide faults shape latency toward the
    * DATABASE; the brownout shapes it toward the pod↔NLB data-plane path and must carry NO
-   * database endpoint, or the amplified DB round trips put the zone through the 50%
-   * guardrail (breached live at 500ms, 2026-09-01). Domain names are supported — the SSM
+   * database endpoint, or the amplified DB round trips collapse the zone's availability to
+   * 0% (seen live at 500ms, 2026-09-01). Domain names are supported — the SSM
    * document resolves them on-host via dig at experiment start.
    *
    * REQUIRED when `faults` includes `'brownout'` (constructor throws otherwise): an empty
@@ -577,7 +577,8 @@ export class FisNetworkExperiments extends Construct {
             // faulted zone's DATABASE instance too. That is survivable only because each
             // regional member now runs one instance per AZ (see AuroraMember); with the
             // single-instance cluster it replaced, faulting the writer's zone took the
-            // whole region to 0.00% and FIS's own guardrail halted the experiment.
+            // whole region to 0.00% (and the 50% guardrail the templates carried then
+            // halted the experiment).
             resourceTags: { AzImpairmentPower: 'DisruptSubnet' },
             filters: [{ path: 'AvailabilityZone', values: [azName] }],
           },

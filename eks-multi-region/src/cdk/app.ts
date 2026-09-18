@@ -73,24 +73,26 @@ for (const region of REGIONS) {
     // them up.
     replicateSecretToRegion:
       region.name === PRIMARY_REGION ? REGIONS[1].name : undefined,
-    // Peer CIDRs this region must admit on the NodePort range. The load generator lives in
-    // one region and follows DNS to whichever region is active, so requests arrive from
-    // the peer VPC — and because the in-tree controller uses instance targets with client
-    // IP preservation on, the node sees the ORIGINAL client address, not the load
-    // balancer's. See RegionStack for the full reasoning.
+    // Peer CIDRs this region admits on the NodePort range, alongside its own CIDR and
+    // the observer VPC's (where the load generator runs). With the load balancer
+    // controller's IP targets these rules are no longer on the request path; see
+    // RegionStack for why they are kept.
     peerVpcCidrs: peerVpcCidrs(region.name),
   });
 }
 
 /**
- * Cross-region VPC peering. Deploy position 3 — after both region stacks, before the
- * database singletons.
+ * Cross-region VPC peering between the two WORKLOAD VPCs. Deploy position 3 — after both
+ * region stacks, before the database singletons.
  *
  * This reverses D-008. That decision traced what used the cross-region path (database
  * replication: no, it rides the AWS network; ARC Region switch: no, regional endpoints;
  * traffic shifting: DNS) and concluded nothing did. The gap in that reasoning is that DNS
- * resolves names without moving packets: the load generator follows the failover to the
- * other region's INTERNAL load balancer, and that needs a route.
+ * resolves names without moving packets: the app's WRITES go to the Aurora global writer
+ * endpoint, which resolves to a private address in whichever region holds the writer, so
+ * the standby's pods (and, after a failover, the old primary's) need a route into the
+ * other VPC. The load generator's path is separate: the observer VPC peers to both
+ * workload VPCs on its own (ObserverStack).
  */
 const peeringName = `${APP_ID}-${PEERING_SUFFIX}`;
 new PeeringStack(app, peeringName, {
@@ -150,15 +152,17 @@ new DnsStack(app, dnsName, {
 });
 
 /**
- * The synthetic users (step 4c). Primary region, after `dns`: they resolve the latency
- * record the DNS stack just created, so starting them any earlier is a flood of
- * DNS-failure errors into the availability alarm before the demo has begun.
+ * The synthetic users (step 4c). OBSERVER region, after `dns`: they resolve the failover
+ * record the failover stack creates in the zone the DNS stack owns, so starting them any
+ * earlier is a flood of DNS-failure errors into the availability alarm before the demo
+ * has begun. They live outside both workload regions so that a loss of the primary does
+ * not take the client's view of the outage down with it — see LoadGenStack.
  */
 const loadGenName = `${APP_ID}-${LOADGEN_SUFFIX}`;
 new LoadGenStack(app, loadGenName, {
   stackName: loadGenName,
   synthesizer: makeSynthesizer(),
-  env: { region: PRIMARY_REGION },
+  env: { region: OBSERVER_REGION },
   appId: APP_ID,
 });
 

@@ -668,32 +668,38 @@ createDeployTasks(project, [...REGIONS], {
       suffix: DNS_SUFFIX,
       region: PRIMARY_REGION,
       // Only the VPC associations: the app RECORDS moved to the failover stack, which owns
-      // them alongside the plan whose health checks they carry.
-      sourceSuffixes: [regionSuffix(REGIONS[0]), regionSuffix(REGIONS[1])],
+      // them alongside the plan whose health checks they carry. The observer VPC is
+      // associated too — the load generator resolves the app record from there.
+      sourceSuffixes: [regionSuffix(REGIONS[0]), regionSuffix(REGIONS[1]), OBSERVER_SUFFIX],
       outputsPrefix: 'DNS',
       stackParameters: {
         R0VpcId: '$REGION_0_VPCID',
         R1VpcId: '$REGION_1_VPCID',
+        ObserverVpcId: '$OBSERVER_VPCID',
       },
     },
-    // Step 4c: the load generator, AFTER dns — its tasks resolve the latency record at
+    // Step 4c: the load generator, AFTER dns — its tasks resolve the app record at
     // startup, so the record must exist first or the availability alarm floods with
-    // deploy-sequencing noise. Target URL is a synth-time constant (APP_RECORD_NAME),
-    // so only the primary VPC placement values are threaded.
+    // deploy-sequencing noise. It runs in the OBSERVER VPC, outside both workload regions,
+    // so the placement values come from the observer stack. Target URL is a synth-time
+    // constant (APP_RECORD_NAME). The stack also declares the alarms over the client
+    // metrics (EMF lands in the emitter's region; alarms cannot read across regions), and
+    // their ARNs feed the failover stack below.
     {
       suffix: LOADGEN_SUFFIX,
-      region: PRIMARY_REGION,
-      sourceSuffixes: [regionSuffix(REGIONS[0])],
+      region: OBSERVER_REGION,
+      sourceSuffixes: [OBSERVER_SUFFIX],
       outputsPrefix: 'LOADGEN',
       stackParameters: {
-        VpcId: '$REGION_0_VPCID',
-        IsolatedSubnetIds: '$REGION_0_ISOLATEDSUBNETIDS',
-        IsolatedSubnetAzs: '$REGION_0_ISOLATEDSUBNETAZS',
+        VpcId: '$OBSERVER_VPCID',
+        SubnetId: '$OBSERVER_PRIVATESUBNETID',
+        SubnetAz: '$OBSERVER_PRIVATESUBNETAZ',
       },
     },
     // Step 7: the ARC Region Switch plan. AFTER dns — its activate workflow's
     // Route53HealthCheck block needs a real hosted zone id, and that zone is created by
-    // the dns stack (which itself waits on the Kubernetes-created load balancers).
+    // the dns stack (which itself waits on the Kubernetes-created load balancers). AFTER
+    // loadgen — the plan's associatedAlarms are the app-health pair that stack declares.
     {
       suffix: FAILOVER_SUFFIX,
       region: PRIMARY_REGION,
@@ -703,6 +709,7 @@ createDeployTasks(project, [...REGIONS], {
         GLOBAL_DATA_SUFFIX,
         SECONDARY_DB_SUFFIX,
         DNS_SUFFIX,
+        LOADGEN_SUFFIX,
         // Plain paths: written by the installer phases, not by a stack deploy. This stack
         // owns the app DNS records, so it needs the Kubernetes-created NLB coordinates.
         'dist/app-endpoint-0.env',
@@ -718,8 +725,8 @@ createDeployTasks(project, [...REGIONS], {
         PrimaryClusterName: '$REGION_0_EKSCLUSTERNAME',
         R0ClusterArn: '$REGION_0_EKSCLUSTERARN',
         R1ClusterArn: '$REGION_1_EKSCLUSTERARN',
-        R0AppHealthAlarmArn: '$REGION_0_APPHEALTHALARMARN0',
-        R1AppHealthAlarmArn: '$REGION_0_APPHEALTHALARMARN1',
+        R0AppHealthAlarmArn: '$LOADGEN_APPHEALTHALARMARN0',
+        R1AppHealthAlarmArn: '$LOADGEN_APPHEALTHALARMARN1',
         GlobalClusterIdentifier: '$GLOBALDATA_GLOBALCLUSTERIDENTIFIER',
         R0DbClusterArn: '$REGION_0_DBCLUSTERARN',
         R1DbClusterArn: '$SECONDARYDB_DBCLUSTERARN',

@@ -22,6 +22,7 @@ import {
   AURORA_READER_AZ_INDEXES,
   AURORA_WRITER_AZ_INDEX,
 } from '../src/cdk/lib/aurora-member';
+import { DEMO_METRIC_NAMESPACE } from '../src/cdk/lib/constructs/observability/metric-namespace';
 import { DnsStack } from '../src/cdk/lib/dns-stack';
 import { FailoverStack } from '../src/cdk/lib/failover-stack';
 import { GlobalDataStack } from '../src/cdk/lib/global-data-stack';
@@ -38,6 +39,7 @@ import {
   APP_RECORD_NAME,
   AZ_COUNT,
   operatorAccessSuffix,
+  OBSERVER_CIDR,
   OBSERVER_REGION,
   OBSERVER_SUFFIX,
   DNS_SUFFIX,
@@ -149,14 +151,15 @@ const synthAll = (): Map<string, Template> => {
     }),
   ]);
 
-  // Load generator after dns: its tasks resolve the record the dns stack creates.
+  // Load generator after dns: its tasks resolve the record the dns stack creates. OBSERVER
+  // region: the users, their EMF and the alarms over it live outside both workload regions.
   const lgName = `${APP_ID}-${LOADGEN_SUFFIX}`;
   built.push([
     lgName,
     new LoadGenStack(app, lgName, {
       stackName: lgName,
       synthesizer: makeSynthesizer(),
-      env: { region: PRIMARY_REGION },
+      env: { region: OBSERVER_REGION },
       appId: APP_ID,
     }),
   ]);
@@ -846,12 +849,15 @@ describe('EKS (step 2)', () => {
     }
   });
 
-  it('every dashboard widget reads metrics from the PRIMARY region, BOTH dashboards', () => {
-    // Codifies the 2026-08-27 mid-demo finding: the load generator is the only metrics
-    // emitter and EMF lands in ITS region (the primary) -- including the
-    // Region=us-west-2 series. A standby dashboard whose widgets query us-west-2
-    // CloudWatch is structurally empty forever; failover moves where requests are
-    // SERVED, not where the emitter writes. Widgets support cross-region metrics.
+  it('every dashboard widget reads client metrics from the OBSERVER region, BOTH dashboards', () => {
+    // Codifies the 2026-08-27 mid-demo finding, updated for the load generator's move: it
+    // is the only metrics emitter and EMF lands in ITS region -- now the observer region
+    // -- including the Region=us-east-2 and Region=us-west-2 series. A dashboard whose
+    // widgets query the region they are deployed in is structurally empty forever;
+    // failover moves where requests are SERVED, not where the emitter writes. Widgets
+    // support cross-region metrics, so both dashboards stamp the observer region. The
+    // one exception is the primary dashboard's AWS/RDS corroboration rows, whose metrics
+    // are emitted by RDS in the primary region and carry a metric-level stamp saying so.
     for (const [stackName, template] of regionStacks()) {
       const dashboards = Object.values(template.findResources('AWS::CloudWatch::Dashboard')) as any[];
       expect(dashboards.length).toBeGreaterThanOrEqual(1);
@@ -859,12 +865,36 @@ describe('EKS (step 2)', () => {
       const bodyProp = dashboards[0].Properties?.DashboardBody;
       const parts = (bodyProp?.['Fn::Join']?.[1] ?? [bodyProp]) as unknown[];
       const body = parts.map((x) => (typeof x === 'string' ? x : 'X')).join('');
-      // Every region stamp inside the dashboard body must be the primary region --
-      // one us-west-2 stamp on the standby means an empty widget on stage.
-      const regionStamps = [...body.matchAll(/"region":\s*"(us-[a-z]+-\d)"/g)].map((m) => m[1]);
-      expect(regionStamps.length).toBeGreaterThan(0);
-      expect({ stackName, offRegion: regionStamps.filter((r) => r !== PRIMARY_REGION) })
-        .toEqual({ stackName, offRegion: [] });
+      const widgets = JSON.parse(body).widgets as any[];
+      const graphs = widgets.filter((w) => w.type === 'metric');
+      expect(graphs.length).toBeGreaterThan(0);
+      // Every graph widget's default region is the observer's.
+      expect({ stackName, widgetRegions: [...new Set(graphs.map((w) => w.properties.region))] })
+        .toEqual({ stackName, widgetRegions: [OBSERVER_REGION] });
+      // Per-metric stamps: the demo namespace reads the observer region, AWS/RDS the
+      // primary, and no stamp anywhere names the standby (an empty widget on stage).
+      const metricEntries = graphs.flatMap((w) => (w.properties.metrics ?? []) as unknown[][]);
+      const stampOf = (entry: unknown[]): string | undefined => {
+        const opts = entry[entry.length - 1];
+        return typeof opts === 'object' && opts !== null ? (opts as any).region : undefined;
+      };
+      const byNamespace = (ns: string) => metricEntries.filter((e) => e[0] === ns);
+      expect(byNamespace(DEMO_METRIC_NAMESPACE).length).toBeGreaterThan(0);
+      for (const e of byNamespace(DEMO_METRIC_NAMESPACE)) {
+        expect({ stackName, entry: e[1], stamp: stampOf(e) })
+          .toEqual({ stackName, entry: e[1], stamp: OBSERVER_REGION });
+      }
+      for (const e of byNamespace('AWS/RDS')) {
+        expect({ stackName, entry: e[1], stamp: stampOf(e) })
+          .toEqual({ stackName, entry: e[1], stamp: PRIMARY_REGION });
+      }
+      // The corroboration rows need the primary cluster identifier, so they exist on the
+      // primary dashboard only.
+      expect({ stackName, rdsRows: byNamespace('AWS/RDS').length > 0 })
+        .toEqual({ stackName, rdsRows: stackName.endsWith(PRIMARY_REGION) });
+      const stamps = [...body.matchAll(/"region":\s*"(us-[a-z]+-\d)"/g)].map((m) => m[1]);
+      expect({ stackName, standbyStamps: stamps.filter((r) => r === REGIONS[1].name) })
+        .toEqual({ stackName, standbyStamps: [] });
     }
   });
 
@@ -1068,11 +1098,12 @@ describe('Aurora Global Database (step 1b)', () => {
 
   it('declares a capacity range on both members, bounded on BOTH sides', () => {
     // A range is MANDATORY: RDS rejects a db.serverless instance on a cluster with no
-    // ServerlessV2ScalingConfiguration. The bounds are two-sided on purpose — the
-    // one-sided version of this test would pass for a floor of 0.5 (which reintroduces
-    // scaling variance into every calibrated FIS severity number) and for a ceiling of
-    // 256 (which is an unbounded bill, not a capacity plan).
-    expect(AURORA_MIN_ACU).toBeGreaterThanOrEqual(1);
+    // ServerlessV2ScalingConfiguration. The bounds are two-sided on purpose. The floor
+    // is the 0.5 ACU minimum for cost (see aurora-member.ts for the calibration and
+    // global-database trade-offs that decision accepts); it must never reach 0, because
+    // 0 enables automatic pause and a paused cluster puts a cold start in the middle of
+    // a failover. The ceiling is capped because 256 is an unbounded bill, not a plan.
+    expect(AURORA_MIN_ACU).toBeGreaterThanOrEqual(0.5);
     expect(AURORA_MIN_ACU).toBeLessThanOrEqual(AURORA_MAX_ACU);
     expect(AURORA_MAX_ACU).toBeLessThanOrEqual(32);
     for (const [label, t] of [['primary', primary()], ['secondary', secondary()]] as const) {
@@ -1847,17 +1878,21 @@ describe('cross-region client path (step 4a, option A)', () => {
   });
 
   /**
-   * THE NON-OBVIOUS HALF, and the one that would have cost a live debugging session.
+   * THE NON-OBVIOUS HALF, and the one that cost a live debugging session once.
    *
-   * Peering carries the packets; it does not get them past the node security group. The
-   * in-tree service controller — the only one on this cluster — creates NLBs with INSTANCE
-   * targets, and instance target groups have CLIENT IP PRESERVATION ON BY DEFAULT. So the
-   * node does not see the load balancer's private address as the source, it sees the
-   * ORIGINAL CLIENT address, which lives in the peer region's CIDR.
+   * Peering carries the packets; it does not get them past the node security group. When
+   * the in-tree service controller created the app NLB, it did so with INSTANCE targets,
+   * and instance target groups have CLIENT IP PRESERVATION ON BY DEFAULT: the node saw the
+   * ORIGINAL CLIENT address, in a peered CIDR, and without these rules every cross-region
+   * request timed out while peering, routes, DNS, the load balancer and every health check
+   * looked correct.
    *
-   * A rule admitting the load balancer is therefore not enough. Without a rule admitting
-   * the PEER CIDR on the NodePort range, every cross-region request times out while
-   * peering, routes, DNS, the load balancer and every health check all look correct.
+   * The AWS Load Balancer Controller now creates that NLB with IP targets and client IP
+   * preservation pinned OFF (k8s/app.yaml), so the pods see the load balancer's address and
+   * these rules are no longer on the request path. They stay because they are harmless, a
+   * controller default change would make them load-bearing again silently, and admitting
+   * every client source (peer region, observer VPC, own VPC) symmetrically is simpler to
+   * reason about than admitting two of three.
    */
   test('each region admits the PEER CIDR on the NodePort range, not just the load balancer', () => {
     for (const region of REGIONS) {
@@ -1865,8 +1900,8 @@ describe('cross-region client path (step 4a, option A)', () => {
       const rules = Object.values(t.findResources('AWS::EC2::SecurityGroupIngress')).filter(
         (r) => String(r.Properties?.Description ?? '').includes('Cross-region client to NodePort'),
       );
-      // One per peer. (The same-VPC client rule — step 4c, for the load generator —
-      // is a SEPARATE rule with its own test, filtered out by description here.)
+      // One per peer workload region. (The same-VPC and observer-VPC client rules are
+      // SEPARATE rules with their own tests, filtered out by description here.)
       expect(rules).toHaveLength(REGIONS.length - 1);
       for (const rule of rules) {
         // The Kubernetes default service NodePort range.
@@ -1878,6 +1913,23 @@ describe('cross-region client path (step 4a, option A)', () => {
         expect(rule.Properties.CidrIp).toBeDefined();
         expect(rule.Properties.SourceSecurityGroupId).toBeUndefined();
       }
+    }
+  });
+
+  test('each region admits the OBSERVER CIDR on the NodePort range — the load generator\'s source', () => {
+    // The load generator runs in the observer VPC and reaches each region's NLB over the
+    // observer peering. With the controller's IP targets and client IP preservation off
+    // this rule is not on the request path, but every other client source has one, and a
+    // controller default flipping back to instance targets would make it load-bearing
+    // again with no other signal. Synth-time constant, like the access ALB's ingress.
+    for (const region of REGIONS) {
+      const t = synthAll().get(`${APP_ID}-${regionSuffix(region)}`)!;
+      t.hasResourceProperties('AWS::EC2::SecurityGroupIngress', {
+        FromPort: 30000,
+        ToPort: 32767,
+        CidrIp: OBSERVER_CIDR,
+        GroupId: Match.objectLike({ 'Fn::GetAtt': Match.arrayWith(['ClusterSecurityGroupId']) }),
+      });
     }
   });
 
@@ -1906,19 +1958,28 @@ describe('global routing (step 4b)', () => {
       .filter(Boolean);
   };
 
-  test('the private zone is associated with BOTH regions VPCs, each under its own region', () => {
+  test('the private zone is associated with BOTH workload VPCs AND the observer VPC, each under its own region', () => {
     // A zone associated with one VPC resolves in one region only. The load generator
-    // lives in the primary but must keep resolving after the failover — and the standby
-    // region's pods and any debugging session there need the name too. Association is
-    // per-VPC-per-region, so a wrong vpcRegion fails only at deploy.
+    // lives in the OBSERVER VPC and must keep resolving the app record across a
+    // failover — and the workload regions' pods and any debugging session there need the
+    // name too. Association is per-VPC-per-region, so a wrong vpcRegion fails only at
+    // deploy; a missing observer association would leave the users unable to resolve
+    // the target at all, with every stack green.
     const t = dnsTemplate();
     t.hasResourceProperties('AWS::Route53::HostedZone', {
       Name: APP_DOMAIN,
-      VPCs: REGIONS.map((r, i) => ({
-        VPCId: { Ref: `R${i}VpcId` },
-        VPCRegion: r.name,
-      })),
+      VPCs: [
+        ...REGIONS.map((r, i) => ({
+          VPCId: { Ref: `R${i}VpcId` },
+          VPCRegion: r.name,
+        })),
+        { VPCId: { Ref: 'ObserverVpcId' }, VPCRegion: OBSERVER_REGION },
+      ],
     });
+    // And the rail threads the observer stack's VPC id into that parameter.
+    const dns = deployExecs().find((e) => e.includes(`STACK_NAME="$PROJECT_NAME-${DNS_SUFFIX}"`))!;
+    expect(dns).toContain('ObserverVpcId=$OBSERVER_VPCID');
+    expect(dns).toContain(`. dist/$PROJECT_NAME-${OBSERVER_SUFFIX}.env`);
   });
 
   test('ONE RecordSetGroup holding a FAILOVER pair, with the set identifiers ARC flips', () => {
@@ -2116,19 +2177,46 @@ describe('load generation (step 4c)', () => {
     });
   });
 
-  test('tasks run in the imported isolated subnets', () => {
+  test('tasks run in the observer VPC\'s private subnet, threaded from the observer stack', () => {
     // The construct defaults to PRIVATE_WITH_EGRESS, which this VPC does not have —
     // left at the default, subnet selection fails at synth OR lands somewhere with no
-    // ECR path and the task dies pulling its image.
+    // ECR path and the task dies pulling its image. ONE subnet: the observer VPC has a
+    // single private subnet in a single AZ, so there is no Fn::Select over AZ_COUNT here.
     lgTemplate().hasResourceProperties('AWS::ECS::Service', {
       NetworkConfiguration: {
         AwsvpcConfiguration: {
-          Subnets: Array.from({ length: AZ_COUNT }, (_, i) => ({
-            'Fn::Select': [i, { Ref: 'IsolatedSubnetIds' }],
-          })),
+          Subnets: [{ Ref: 'SubnetId' }],
         },
       },
     });
+    // The placement parameters are the observer stack's outputs, and the rail threads
+    // exactly those (the derived template-vs-deploy contract test checks the set; this
+    // pins the SOURCE, since $REGION_0_* values here would deploy the users back into
+    // the primary region with every layer green).
+    const lg = deployExecs().find((e) => e.includes(`STACK_NAME="$PROJECT_NAME-${LOADGEN_SUFFIX}"`))!;
+    expect(lg).toBeDefined();
+    expect(lg).toContain(`AWS_REGION="${OBSERVER_REGION}"`);
+    expect(lg).toContain(`. dist/$PROJECT_NAME-${OBSERVER_SUFFIX}.env`);
+    expect(lg).toContain('VpcId=$OBSERVER_VPCID');
+    expect(lg).toContain('SubnetId=$OBSERVER_PRIVATESUBNETID');
+    expect(lg).toContain('SubnetAz=$OBSERVER_PRIVATESUBNETAZ');
+    expect(lg).not.toContain('$REGION_0_');
+  });
+
+  test('the load generator\'s alarms and dashboard are declared where its EMF lands', () => {
+    // CloudWatch alarms cannot read across regions and EMF materializes in the log
+    // group's region, so the decision signal and the ARC app-health pair MUST share the
+    // load generator's stack. The dashboard is stamped with the same region so its
+    // widgets read the metrics that exist.
+    const t = lgTemplate();
+    expect(Object.keys(t.findResources('AWS::CloudWatch::Alarm'))).toHaveLength(3);
+    const [dash] = Object.values(t.findResources('AWS::CloudWatch::Dashboard')) as any[];
+    expect(dash.Properties.DashboardName).toBe(`${APP_ID}-${OBSERVER_REGION}`);
+    const parts = (dash.Properties.DashboardBody['Fn::Join']?.[1] ?? [dash.Properties.DashboardBody]) as unknown[];
+    const body = parts.map((x) => (typeof x === 'string' ? x : 'X')).join('');
+    const stamps = [...body.matchAll(/"region":\s*"(us-[a-z]+-\d)"/g)].map((m) => m[1]);
+    expect(stamps.length).toBeGreaterThan(0);
+    expect(new Set(stamps)).toEqual(new Set([OBSERVER_REGION]));
   });
 
   test('every EKS AccessEntry references the cluster by Ref, never by literal name', () => {
@@ -2671,7 +2759,7 @@ print(json.dumps({
     // where EMF lands but drew the wrong conclusion: widgets support cross-region
     // metrics, and mid-demo (2026-08-27) the standby dashboard was exactly the one
     // on screen -- bare. Both dashboards now carry the row, stamped with the
-    // primary metrics region; the companion test below pins the region stamps.
+    // observer metrics region; the companion test above pins the region stamps.
     for (const region of REGIONS) {
       const template = synthAll().get(`${APP_ID}-${regionSuffix(region)}`)!;
       const dashboards = template.findResources('AWS::CloudWatch::Dashboard');
@@ -2737,26 +2825,29 @@ print(json.dumps({
   });
 });
 
-describe('the three-alarm split (step 5)', () => {
+describe('the client alarms (step 5)', () => {
   const alarmsOf = (stackName: string): Record<string, any>[] => {
     const t = synthAll().get(stackName)!;
     return Object.values(t.findResources('AWS::CloudWatch::Alarm')).map(
       (r) => (r as { Properties: Record<string, any> }).Properties,
     );
   };
-  const primaryAlarms = () => alarmsOf(`${APP_ID}-${regionSuffix(REGIONS[0])}`);
+  const loadgenName = `${APP_ID}-${LOADGEN_SUFFIX}`;
+  const clientAlarms = () => alarmsOf(loadgenName);
   const byName = (frag: string) =>
-    primaryAlarms().filter((p) => String(p.AlarmName).includes(frag));
+    clientAlarms().filter((p) => String(p.AlarmName).includes(frag));
 
-  test('all four alarms live in the PRIMARY stack; the secondary declares none', () => {
-    // Deliberate deviation from the OBS-002 changeset, forced by Option A: the load
-    // generator in the primary region is the demo's ONLY metric emitter (the app emits
-    // nothing), EMF metrics land in the log group's region, and CloudWatch alarms
-    // cannot read across regions. A secondary-region alarm would watch a namespace
-    // nothing ever writes — INSUFFICIENT_DATA for the life of the demo, a gray box on
-    // stage. Step 8 consumes these by region-qualified ARN, so placement costs nothing.
-    expect(primaryAlarms()).toHaveLength(4);
-    expect(alarmsOf(`${APP_ID}-${regionSuffix(REGIONS[1])}`)).toHaveLength(0);
+  test('all three alarms live in the LOADGEN stack; neither region stack declares any', () => {
+    // The load generator is the demo's ONLY metric emitter (the app emits nothing), EMF
+    // metrics land in the log group's region -- the OBSERVER region, where the load
+    // generator now runs -- and CloudWatch alarms cannot read across regions. An alarm
+    // in either workload region would watch a namespace nothing ever writes:
+    // INSUFFICIENT_DATA for the life of the demo, a gray box on stage. Step 8 consumes
+    // the app-health pair by region-qualified ARN, so placement costs nothing.
+    expect(clientAlarms()).toHaveLength(3);
+    for (const region of REGIONS) {
+      expect(alarmsOf(`${APP_ID}-${regionSuffix(region)}`)).toHaveLength(0);
+    }
   });
 
   test('role 1 — decision signal: 99, 3-of-5, missing data is NOT a decision, wired to nothing', () => {
@@ -2771,23 +2862,21 @@ describe('the three-alarm split (step 5)', () => {
     expect(a.AlarmActions ?? []).toHaveLength(0);
   });
 
-  test('role 2 — guardrail: STRICTLY below the decision threshold, 2 consecutive, missing = stop', () => {
-    const [g] = byName('Guardrail');
-    const [d] = byName('ClientAvailability');
-    expect(g).toBeDefined();
-    expect(g.Threshold).toBe(50);
-    // THE ordering the split exists for: a guardrail at or above the decision
-    // threshold fires first and self-terminates the injection before the operator has
-    // decided anything — the demo ends in minute two with nothing to approve.
-    expect(g.Threshold).toBeLessThan(d.Threshold);
-    expect(g.EvaluationPeriods).toBe(2);
-    expect(g.DatapointsToAlarm).toBe(2);
-    // Total telemetry loss ALSO stops the injection.
-    expect(g.TreatMissingData).toBe('breaching');
-    expect(g.AlarmActions ?? []).toHaveLength(0);
+  test('there is NO guardrail alarm anywhere — FIS experiments are bounded by duration, not by an alarm', () => {
+    // The 50% ClientAvailabilityGuardrail was the FIS stop condition. FIS requires that
+    // alarm in the experiment's region (the primary), and every client metric now lands
+    // in the observer region, so no alarm in the primary can watch client availability.
+    // Its only live firings were the trap the runbook warns about (the demo healing
+    // itself before the operator decided), so it was removed rather than re-homed. A
+    // 50% alarm reappearing anywhere means someone re-armed a self-halt the docs deny.
+    for (const [name] of synthAll()) {
+      const fifty = alarmsOf(name).filter((p) => p.Threshold === 50);
+      expect({ name, fifty }).toEqual({ name, fifty: [] });
+      expect(alarmsOf(name).filter((p) => String(p.AlarmName).includes('Guardrail'))).toHaveLength(0);
+    }
   });
 
-  test('role 3 — app health: one alarm per Region DIMENSION, reading the names the workload emits', () => {
+  test('role 2 — app health: one alarm per Region DIMENSION, reading the names the workload emits', () => {
     const health = byName('AppHealth');
     expect(health).toHaveLength(REGIONS.length);
     for (const region of REGIONS) {
@@ -2816,9 +2905,9 @@ describe('the three-alarm split (step 5)', () => {
   });
 
   test('no alarm anywhere carries an action — the operator decides, nothing auto-fires', () => {
-    // C-001's alarm-side half. FIS consumes the guardrail as STATE, ARC reads the
-    // app-health pair as STATE; SNS on any of them is a path to an automated reaction
-    // this demo's premise (a HUMAN approves the failover) forbids.
+    // C-001's alarm-side half. ARC reads the app-health pair as STATE; SNS on any alarm
+    // is a path to an automated reaction this demo's premise (a HUMAN approves the
+    // failover) forbids.
     for (const [name] of synthAll()) {
       for (const a of alarmsOf(name)) {
         expect(a.AlarmActions ?? []).toHaveLength(0);
@@ -2827,19 +2916,34 @@ describe('the three-alarm split (step 5)', () => {
     }
   });
 
-  test('alarm ARNs are exported for steps 6 and 8', () => {
-    const t = synthAll().get(`${APP_ID}-${regionSuffix(REGIONS[0])}`)!;
+  test('alarm ARNs are exported by the loadgen stack for step 8, and the failover step consumes them from there', () => {
+    const t = synthAll().get(loadgenName)!;
     const outputs = Object.keys(t.toJSON().Outputs ?? {});
-    // Guardrail → failure-injection stopConditionAlarm; AppHealth pair → the ARC
-    // plan's associatedAlarms; Decision → runbook deep-link only.
+    // AppHealth pair → the ARC plan's associatedAlarms; Decision → runbook deep-link only.
     expect(outputs).toEqual(
-      expect.arrayContaining([
-        'GuardrailAlarmArn',
-        'DecisionAlarmArn',
-        'AppHealthAlarmArn0',
-        'AppHealthAlarmArn1',
-      ]),
+      expect.arrayContaining(['DecisionAlarmArn', 'AppHealthAlarmArn0', 'AppHealthAlarmArn1']),
     );
+    expect(outputs).not.toContain('GuardrailAlarmArn');
+    // The region stacks export none of them any more -- a rail step still reading
+    // $REGION_0_APPHEALTHALARMARN0 would deploy the plan with an empty alarm ARN.
+    const primary = synthAll().get(`${APP_ID}-${regionSuffix(REGIONS[0])}`)!;
+    const primaryOutputs = Object.keys(primary.toJSON().Outputs ?? {});
+    expect(primaryOutputs.filter((o) => o.includes('AlarmArn'))).toEqual([]);
+    const tasks = JSON.parse(
+      fs.readFileSync(path.join(__dirname, '..', '.projen', 'tasks.json'), 'utf8'),
+    );
+    const execs: string[] = tasks.tasks.deploy.steps.map((s: { exec?: string }) => s.exec ?? '');
+    const failover = execs.find((e) => e.includes(`STACK_NAME="$PROJECT_NAME-${FAILOVER_SUFFIX}"`))!;
+    expect(failover).toBeDefined();
+    REGIONS.forEach((_, i) => {
+      expect(failover).toContain(`R${i}AppHealthAlarmArn=$LOADGEN_APPHEALTHALARMARN${i}`);
+    });
+    expect(failover).toContain(`. dist/$PROJECT_NAME-${LOADGEN_SUFFIX}.env`);
+    // ...and the loadgen stack deploys BEFORE the failover stack, so that dotenv exists.
+    const lgIdx = execs.findIndex((e) => e.includes(`STACK_NAME="$PROJECT_NAME-${LOADGEN_SUFFIX}"`));
+    const foIdx = execs.findIndex((e) => e.includes(`STACK_NAME="$PROJECT_NAME-${FAILOVER_SUFFIX}"`));
+    expect(lgIdx).toBeGreaterThan(-1);
+    expect(lgIdx).toBeLessThan(foIdx);
   });
 
   test('the app echoes its region on ERROR responses, not just successes', () => {
@@ -2905,23 +3009,23 @@ describe('failure injection (step 6)', () => {
     }
   });
 
-  test('every experiment stops on the GUARDRAIL alarm — never on `none`', () => {
-    // The upstream sample ships stopConditions: none, which lets a 30-minute experiment
-    // run unbounded. And it must be the guardrail (50%), NOT the decision signal (99%):
-    // stopping on the decision signal would halt the injection at the exact moment the
-    // operator got their reason to act, and the demo would heal itself before the human
-    // decided anything.
-    const guardrailLogicalId = Object.keys(
-      synthAll().get(primary)!.findResources('AWS::CloudWatch::Alarm', {
-        Properties: { Threshold: 50 },
-      }),
-    )[0];
-    expect(guardrailLogicalId).toBeDefined();
+  test('no experiment carries a stop condition — every template is bounded by its fixed duration instead', () => {
+    // The upstream sample ships stopConditions: none. So did this demo, until a 50%
+    // guardrail alarm was wired in as the stop condition -- and then removed again when
+    // the load generator moved to the observer region: FIS requires a stop-condition
+    // alarm in the experiment's region, and no client metric lands in the primary any
+    // more. What bounds an experiment now is the 15-minute duration on every action and
+    // the cockpit's Stop button. `none` is therefore the CORRECT value here, and a real
+    // alarm reappearing would mean a self-halt the runbook says does not exist.
     for (const p of fisOf(primary)) {
-      expect(p.StopConditions).toHaveLength(1);
-      expect(p.StopConditions[0].Source).toBe('aws:cloudwatch:alarm');
-      expect(JSON.stringify(p.StopConditions[0].Value)).toContain(guardrailLogicalId);
-      expect(JSON.stringify(p.StopConditions)).not.toContain('"none"');
+      expect(p.StopConditions).toEqual([{ Source: 'none' }]);
+      // Bounded by time, then: at least one action in every template carries a duration
+      // (the exact values -- PT15M, and PT2M for the power fault's network blip -- are
+      // pinned by the duration tests below).
+      const durations = (Object.values(p.Actions) as any[])
+        .map((a) => a.Parameters?.duration)
+        .filter((d) => d !== undefined);
+      expect(durations.length).toBeGreaterThan(0);
     }
   });
 

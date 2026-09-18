@@ -256,19 +256,19 @@
           "say": "Phase 6.0: deploying dns into us-east-2"
         },
         {
-          "exec": "bash -c '. dist/$PROJECT_NAME-region-us-east-2.env && . dist/$PROJECT_NAME-region-us-west-2.env && ASSETS_PREFIX=\"$(cat dist/assets_prefix)\" AWS_REGION=\"us-east-2\" ASSETS_BUCKET=\"$ASSETS_BUCKET_PREFIX-us-east-2\" STACK_NAME=\"$PROJECT_NAME-dns\" TEMPLATE_NAME=\"$PROJECT_NAME-dns\" OUTPUTS_PREFIX=\"DNS\" STACK_PARAMETERS=\"R0VpcId=$REGION_0_VPCID\nR1VpcId=$REGION_1_VPCID\" bash build/deploy-stack.sh'"
+          "exec": "bash -c '. dist/$PROJECT_NAME-region-us-east-2.env && . dist/$PROJECT_NAME-region-us-west-2.env && . dist/$PROJECT_NAME-observer.env && ASSETS_PREFIX=\"$(cat dist/assets_prefix)\" AWS_REGION=\"us-east-2\" ASSETS_BUCKET=\"$ASSETS_BUCKET_PREFIX-us-east-2\" STACK_NAME=\"$PROJECT_NAME-dns\" TEMPLATE_NAME=\"$PROJECT_NAME-dns\" OUTPUTS_PREFIX=\"DNS\" STACK_PARAMETERS=\"R0VpcId=$REGION_0_VPCID\nR1VpcId=$REGION_1_VPCID\nObserverVpcId=$OBSERVER_VPCID\" bash build/deploy-stack.sh'"
         },
         {
-          "say": "Phase 6.1: deploying loadgen into us-east-2"
+          "say": "Phase 6.1: deploying loadgen into us-east-1"
         },
         {
-          "exec": "bash -c '. dist/$PROJECT_NAME-region-us-east-2.env && ASSETS_PREFIX=\"$(cat dist/assets_prefix)\" AWS_REGION=\"us-east-2\" ASSETS_BUCKET=\"$ASSETS_BUCKET_PREFIX-us-east-2\" STACK_NAME=\"$PROJECT_NAME-loadgen\" TEMPLATE_NAME=\"$PROJECT_NAME-loadgen\" OUTPUTS_PREFIX=\"LOADGEN\" STACK_PARAMETERS=\"VpcId=$REGION_0_VPCID\nIsolatedSubnetIds=$REGION_0_ISOLATEDSUBNETIDS\nIsolatedSubnetAzs=$REGION_0_ISOLATEDSUBNETAZS\" bash build/deploy-stack.sh'"
+          "exec": "bash -c '. dist/$PROJECT_NAME-observer.env && ASSETS_PREFIX=\"$(cat dist/assets_prefix)\" AWS_REGION=\"us-east-1\" ASSETS_BUCKET=\"$ASSETS_BUCKET_PREFIX-us-east-1\" STACK_NAME=\"$PROJECT_NAME-loadgen\" TEMPLATE_NAME=\"$PROJECT_NAME-loadgen\" OUTPUTS_PREFIX=\"LOADGEN\" STACK_PARAMETERS=\"VpcId=$OBSERVER_VPCID\nSubnetId=$OBSERVER_PRIVATESUBNETID\nSubnetAz=$OBSERVER_PRIVATESUBNETAZ\" bash build/deploy-stack.sh'"
         },
         {
           "say": "Phase 6.2: deploying failover into us-east-2"
         },
         {
-          "exec": "bash -c '. dist/$PROJECT_NAME-region-us-east-2.env && . dist/$PROJECT_NAME-region-us-west-2.env && . dist/$PROJECT_NAME-globaldata.env && . dist/$PROJECT_NAME-secondarydb.env && . dist/$PROJECT_NAME-dns.env && . dist/app-endpoint-0.env && . dist/app-endpoint-1.env && ASSETS_PREFIX=\"$(cat dist/assets_prefix)\" AWS_REGION=\"us-east-2\" ASSETS_BUCKET=\"$ASSETS_BUCKET_PREFIX-us-east-2\" STACK_NAME=\"$PROJECT_NAME-failover\" TEMPLATE_NAME=\"$PROJECT_NAME-failover\" OUTPUTS_PREFIX=\"FAILOVER\" STACK_PARAMETERS=\"HostedZoneId=$DNS_HOSTEDZONEID\nR0LbDns=$APP_ENDPOINT_0\nR0LbZoneId=$APP_LB_ZONE_0\nR1LbDns=$APP_ENDPOINT_1\nR1LbZoneId=$APP_LB_ZONE_1\nPrimaryClusterName=$REGION_0_EKSCLUSTERNAME\nR0ClusterArn=$REGION_0_EKSCLUSTERARN\nR1ClusterArn=$REGION_1_EKSCLUSTERARN\nR0AppHealthAlarmArn=$REGION_0_APPHEALTHALARMARN0\nR1AppHealthAlarmArn=$REGION_0_APPHEALTHALARMARN1\nGlobalClusterIdentifier=$GLOBALDATA_GLOBALCLUSTERIDENTIFIER\nR0DbClusterArn=$REGION_0_DBCLUSTERARN\nR1DbClusterArn=$SECONDARYDB_DBCLUSTERARN\" bash build/deploy-stack.sh'"
+          "exec": "bash -c '. dist/$PROJECT_NAME-region-us-east-2.env && . dist/$PROJECT_NAME-region-us-west-2.env && . dist/$PROJECT_NAME-globaldata.env && . dist/$PROJECT_NAME-secondarydb.env && . dist/$PROJECT_NAME-dns.env && . dist/$PROJECT_NAME-loadgen.env && . dist/app-endpoint-0.env && . dist/app-endpoint-1.env && ASSETS_PREFIX=\"$(cat dist/assets_prefix)\" AWS_REGION=\"us-east-2\" ASSETS_BUCKET=\"$ASSETS_BUCKET_PREFIX-us-east-2\" STACK_NAME=\"$PROJECT_NAME-failover\" TEMPLATE_NAME=\"$PROJECT_NAME-failover\" OUTPUTS_PREFIX=\"FAILOVER\" STACK_PARAMETERS=\"HostedZoneId=$DNS_HOSTEDZONEID\nR0LbDns=$APP_ENDPOINT_0\nR0LbZoneId=$APP_LB_ZONE_0\nR1LbDns=$APP_ENDPOINT_1\nR1LbZoneId=$APP_LB_ZONE_1\nPrimaryClusterName=$REGION_0_EKSCLUSTERNAME\nR0ClusterArn=$REGION_0_EKSCLUSTERARN\nR1ClusterArn=$REGION_1_EKSCLUSTERARN\nR0AppHealthAlarmArn=$LOADGEN_APPHEALTHALARMARN0\nR1AppHealthAlarmArn=$LOADGEN_APPHEALTHALARMARN1\nGlobalClusterIdentifier=$GLOBALDATA_GLOBALCLUSTERIDENTIFIER\nR0DbClusterArn=$REGION_0_DBCLUSTERARN\nR1DbClusterArn=$SECONDARYDB_DBCLUSTERARN\" bash build/deploy-stack.sh'"
         },
         {
           "say": "Phase 6.3: deploying standbyaccess into us-west-2"

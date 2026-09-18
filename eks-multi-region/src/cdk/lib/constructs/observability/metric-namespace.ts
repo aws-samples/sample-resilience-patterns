@@ -57,10 +57,10 @@ export const AZ_METRICS = {
    * client-perceived availability chart (2026-09-03).
    *
    * Deliberately a SEPARATE counter from `success`, not a redefinition of it. `Client*` and
-   * `Region*` feed ALARMS (the 50% FIS stop condition; the ARC application-health alarms);
-   * `Az*` feeds charts only. Keeping the latency-aware measure inside the Az family is what
-   * makes it impossible for an SLO definition to re-arm the FIS guardrail or shift Route 53
-   * on a single-AZ fault.
+   * `Region*` feed ALARMS (the decision signal; the ARC application-health alarms); `Az*`
+   * feeds charts only. Keeping the latency-aware measure inside the Az family is what makes
+   * it impossible for an SLO definition to trip the decision alarm or shift Route 53 on a
+   * single-AZ fault.
    */
   sloSuccess: 'AzSloSuccess',
 } as const;

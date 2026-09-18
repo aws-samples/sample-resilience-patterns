@@ -4,6 +4,7 @@ import { Construct } from 'constructs';
 import {
   APP_DOMAIN,
   APP_RECORD_NAME,
+  OBSERVER_REGION,
   REGIONS,
 } from '../regions';
 
@@ -15,8 +16,9 @@ export interface DnsStackProps extends cdk.StackProps {
  * Global routing (step 4b) — the plan step that existed only as a box in the
  * architecture diagram until step 4 found the gap.
  *
- * A PRIVATE hosted zone for {@link APP_DOMAIN}, associated with BOTH regions' VPCs. That is
- * ALL this stack owns.
+ * A PRIVATE hosted zone for {@link APP_DOMAIN}, associated with BOTH workload regions'
+ * VPCs and with the observer VPC (the load generator resolves the app record from there).
+ * That is ALL this stack owns.
  *
  * THE APP RECORDS ARE NOT HERE. They live in the FAILOVER stack, next to the ARC plan whose
  * health checks they carry — see `failover-stack.ts`. The plan and the records are a mutual
@@ -72,12 +74,24 @@ export class DnsStack extends cdk.Stack {
       }),
     }));
 
+    // The observer VPC as well: the load generator runs there (LoadGenStack) and resolves
+    // the app record from it, so the zone must answer in that VPC too. A hosted zone's
+    // VPC associations may name any region, which is what makes a third-region client
+    // possible without a resolver rule or a forwarding endpoint.
+    const observerVpcId = new cdk.CfnParameter(this, 'ObserverVpcId', {
+      type: 'String',
+      description: `VPC id of the ${OBSERVER_REGION} observer stack, where the load generator resolves the app record.`,
+    });
+
     const zone = new route53.CfnHostedZone(this, 'HostedZone', {
       name: APP_DOMAIN,
-      vpcs: perRegion.map((p) => ({
-        vpcId: p.vpcId.valueAsString,
-        vpcRegion: p.region,
-      })),
+      vpcs: [
+        ...perRegion.map((p) => ({
+          vpcId: p.vpcId.valueAsString,
+          vpcRegion: p.region,
+        })),
+        { vpcId: observerVpcId.valueAsString, vpcRegion: OBSERVER_REGION },
+      ],
     });
 
     // NO app records here. They live in the FAILOVER stack alongside the ARC plan, because
