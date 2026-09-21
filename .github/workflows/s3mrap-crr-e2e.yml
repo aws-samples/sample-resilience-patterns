@@ -5,6 +5,8 @@ on:
   pull_request:
     paths:
       - s3mrap-crr/**
+      - "!s3mrap-crr/**.md"
+      - "!s3mrap-crr/docs/**"
   workflow_dispatch: {}
 jobs:
   e2e:
