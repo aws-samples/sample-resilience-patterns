@@ -125,7 +125,7 @@ def render(icon: dict[str, str], out_stem: str) -> None:
                                  icon["alb"])
                     nlb = Custom("NLB\norders-api", icon["nlb"])
                     extra = {}
-                    eks = Custom("EKS 1.35\norders-api (one pod per AZ)\nArgo CD, Karpenter",
+                    eks = Custom("EKS 1.36\norders-api (one pod per AZ)\nArgo CD, Karpenter",
                                  icon["eks"])
                     if not primary:
                         extra["cockpit"] = Custom("Cockpit\nLambda", icon["lambda"])

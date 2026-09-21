@@ -188,7 +188,7 @@ rely on a number; prices change and your account may have different terms.
 
 | Service | What this sample runs | List price | Monthly |
 |---|---|---|---|
-| [Amazon EKS](https://aws.amazon.com/eks/pricing/) | 2 clusters, Kubernetes 1.35 (standard support) | $0.10 per cluster-hour | $146 |
+| [Amazon EKS](https://aws.amazon.com/eks/pricing/) | 2 clusters, Kubernetes 1.36 (standard support) | $0.10 per cluster-hour | $146 |
 | [Amazon EC2](https://aws.amazon.com/ec2/pricing/on-demand/) (node groups) | 2 x `t4g.large` per region (4) | $0.0672 per hour | $196 |
 | Amazon EC2 (Karpenter) | 1 x `m7g.large` per region at rest (the one-pod-per-node, one-AZ-per-pod spread needs a third node) | $0.0816 per hour | $119 |
 | [Amazon EBS](https://aws.amazon.com/ebs/pricing/) | gp3 root volumes: 6 x 20 GiB nodes + 8 GiB bastion | $0.08 per GB-month | $10 |

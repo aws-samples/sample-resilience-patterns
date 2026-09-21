@@ -109,7 +109,7 @@
       "arm64Digest": "sha256:bb2b42014fef4b89eaff7b16289652e9fa8073cbd05819d9922795748e937726",
       "arm64": true,
       "neededBy": "11",
-      "note": "Karpenter node autoscaler (step 11, Option C: baseline capacity on the managed node group, surge provisioned by Karpenter). Karpenter's own docs require the image be copied into private ECR for a private cluster -- pulling from public.ecr.aws fails there, and the reported symptom is an image-pull timeout that reads as a network fault. Version 1.14.1 against a pinned Kubernetes 1.35: the compatibility matrix requires >= 1.9 for 1.35, so there is headroom in both directions. Re-check that matrix on any Kubernetes version bump."
+      "note": "Karpenter node autoscaler (step 11, Option C: baseline capacity on the managed node group, surge provisioned by Karpenter). Karpenter's own docs require the image be copied into private ECR for a private cluster -- pulling from public.ecr.aws fails there, and the reported symptom is an image-pull timeout that reads as a network fault. Version 1.14.1 against a pinned Kubernetes 1.36: the compatibility matrix requires >= 1.13 for 1.36 (checked 2026-09-21), so 1.14.1 clears the floor with one minor to spare. Re-check that matrix on any Kubernetes version bump."
     },
     {
       "name": "aws-load-balancer-controller",

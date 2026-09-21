@@ -63,19 +63,25 @@ export const AZ_COUNT = 3;
  * matrix is version-bound, so an unpinned cluster can drift out of the pinned Karpenter
  * release's supported range with no code change and no warning.
  *
- * WHY 1.35 AND NOT THE NEWEST. Against the EKS release calendar as of 2026-08-25:
- * 1.33 is already PAST end of standard support (29 Jul 2026), so it would quietly incur
- * extended-support billing. 1.34 ends standard support 2 Dec 2026 — roughly three months
- * out, too close for a demo that gets redeployed. 1.36 is newest but only reached EKS in
- * June 2026. 1.35 (EKS Jan 2026, standard support through 27 Mar 2027) has months of field
- * exposure and a real runway.
+ * WHY 1.36. It is the newest version in standard support and, as of 2026-09-21, the EKS
+ * default in both workload regions (`aws eks describe-cluster-versions`, patch 1.36.4).
+ * Against the EKS release calendar: 1.36 reached EKS on 2 Jun 2026 and stays in standard
+ * support through 2 Aug 2027, the longest runway on offer. 1.35 ends standard support
+ * 27 Mar 2027, 1.34 on 2 Dec 2026, and 1.33 is already in extended support (billed extra).
+ * The pin still matters even though 1.36 happens to be today's default: the default moves
+ * with each EKS release, the pin does not.
  *
  * ON BUMPING: re-check https://karpenter.sh/docs/upgrading/compatibility/ — Kubernetes
- * 1.36 requires Karpenter >= 1.13, and the mirrored Karpenter version is pinned separately
- * in src/mirror/images.json. A test asserts the two are declared together so they cannot
- * drift apart unnoticed.
+ * 1.36 requires Karpenter >= 1.13 (mirrored 1.14.1 clears it), and the mirrored Karpenter
+ * version is pinned separately in src/mirror/images.json. A test asserts the two are
+ * declared together so they cannot drift apart unnoticed. Also confirm the core add-ons
+ * publish builds for the new version (`aws eks describe-addon-versions
+ * --kubernetes-version <v>`); on 2026-09-21 vpc-cni, coredns, kube-proxy, metrics-server
+ * and eks-pod-identity-agent all did for 1.36. Nothing else in this repo pins a Kubernetes
+ * minor: the node group inherits the cluster version, Karpenter selects `al2023@latest`,
+ * and the deploy task stages a kubectl derived from the live cluster version.
  */
-export const KUBERNETES_VERSION = '1.35';
+export const KUBERNETES_VERSION = '1.36';
 
 /**
  * Control-plane log types enabled on every cluster. ALL FIVE: `audit` is the record of who
