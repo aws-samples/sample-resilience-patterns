@@ -70,7 +70,8 @@ Leave it closed. If you open it to your address for diagnosis, close it afterwar
 
 ### Expected steady state
 
-- Availability ~100% in the primary, client p90 around 95 ms, three AZ lines at 100%.
+- Availability ~100% in the primary, client p90 around 120 ms (the client sits in
+  us-east-1, so every request pays one cross-region hop), three AZ lines at 100%.
 - **The standby's app-health alarm sits in ALARM, by design.** Missing data is treated as
   breaching and no traffic reaches the standby until the DNS flip. Its transition to OK
   after failover *is* the measured recovery. Say so before someone points at it.
@@ -79,6 +80,20 @@ Leave it closed. If you open it to your address for diagnosis, close it afterwar
   (`<project>-us-east-1`): the load generator runs in the observer VPC there, and alarms
   can only read metrics in their own region. The two regional dashboards read the same
   metrics cross-region.
+
+### Right after a deploy
+
+For the first five minutes or so after the load generator starts, the client-view dashboard
+shows a burst of fast errors with no region attribution (`Region=unknown`, about 800 a
+minute, ~2 ms each), the primary's app-health alarm is in ALARM, and the decision alarm
+follows it into ALARM a few minutes later. The cause is deploy order: the app's DNS records
+are created by the failover stack, which deploys after the load generator because it takes
+the load generator's alarm ARNs as input, so the client is running before its target name
+resolves. Nothing needs doing. The errors stop once the records exist, both alarms return to
+OK within about ten minutes of the client starting, and the standby's app-health alarm
+settles into the ALARM state described above. The plan has no automatic triggers, so none of
+this starts an execution. Take the steady-state readings above only after the decision alarm
+is back to OK.
 
 ---
 
@@ -147,8 +162,11 @@ it, at roughly 90-96% aggregate availability.
 
 **Re-validate both numbers after any change to the armed fleet**, and after changing the
 Aurora capacity floor: the values were measured with two armed nodes and a fixed 2 ACU
-floor. Run the region-wide latency fault for five minutes and confirm the aggregate line
-sits between the two reference lines before a live run.
+floor. The same goes for the per-zone figures below and the ~95 ms resting p90 they quote:
+those were measured from a client inside the primary region, and the client now runs in
+us-east-1, where every request pays a cross-region hop (resting p90 about 120 ms). Run the
+region-wide latency fault for five minutes and confirm the aggregate line sits between the
+two reference lines before a live run.
 
 ### Single-AZ calibration table
 
@@ -413,6 +431,7 @@ feature is there if a customer wants it in the plan.
 | Everything green, workload dead, `ImagePullBackOff` | Image not in the region's ECR, or the mirror pinned a digest that region does not hold. |
 | Load generator task stuck in `PROVISIONING`/`PENDING`, or `CannotPullContainerError` | The observer VPC is missing an ECR or S3 endpoint, or the Locust image was not pushed to the us-east-1 repository. The task has no internet route; there is no fallback. |
 | Every chart empty, every alarm `INSUFFICIENT_DATA`, task running | The Locust task cannot resolve `app.eks-mr-demo.internal`: the private zone is not associated with the observer VPC, or the observer peerings were not accepted and routed in a workload region. |
+| Hundreds of ~2 ms errors a minute with `Region=unknown`, both us-east-1 alarms in ALARM, minutes after a deploy | Normal. The failover stack that creates the app's DNS records deploys after the load generator (§2, "Right after a deploy"). It clears within about ten minutes; if it persists, treat it as the row above. |
 | Availability alarm stuck in `INSUFFICIENT_DATA` | Nothing is emitting the metrics the alarm reads. Check the load generator's log group in **us-east-1**. |
 | FIS experiment runs, injects nothing | No node registered with SSM, or no `ChaosAllowed` tag. The arming script fails on the first; the second is silent. |
 | Karpenter node joins EC2 but never appears as a Kubernetes Node | Missing `EC2_LINUX` access entry. Instances look healthy while pods stay Pending. |

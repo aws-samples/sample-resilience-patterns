@@ -71,6 +71,15 @@ touches: a real loss of the primary region degrades the graph instead of taking 
 Per-AZ and per-region attribution comes from the app's own response body, so nothing about
 the measurements depends on where the client sits.
 
+**The observer is one Availability Zone.** The observer VPC has a single subnet, so the
+bastion, the load generator and, through its metrics, the client-view dashboard and all three
+alarms depend on one us-east-1 zone. If that zone is lost the application keeps serving and
+only the measuring stops, but the app-health alarms treat missing data as breaching, so for
+as long as the client is down they read the same as a dead primary. The plan has no
+automatic triggers, so that misreading starts nothing on its own. This is an acceptable
+trade for a sample; a production derivative would run the client, and anything that acts on
+its metrics, in more than one zone.
+
 **A write pool that survives the failover.** `src/app/common.py` pools connections to the
 Aurora Global writer endpoint. When the writer moves to the other region, every pooled
 socket still points at the old host, which is now a reader. That is how a fleet that reports
