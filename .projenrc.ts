@@ -707,7 +707,25 @@ for (const p of patterns) {
   // ----------- E2E workflow -----------------------------------------------
   const e2eWf = new github.GithubWorkflow(root.github!, `${p.outdir}-e2e`);
   e2eWf.on({
-    pullRequest: { paths: [`${p.outdir}/**`] },
+    pullRequest: {
+      // The e2e is a live deploy (hours of runner time, real AWS spend). Nothing under
+      // docs/ or in a markdown file reaches it, so a PR that changes only those files
+      // does not run it. The negations must FOLLOW the positive pattern: GitHub applies
+      // path patterns in order. The build workflow keeps its plain filter on purpose;
+      // it runs the tests that pin runbook and presenter-script text.
+      //
+      // What this saves, precisely: GitHub evaluates pull_request path filters against
+      // the whole PR (three-dot diff, head vs merge-base), NOT the latest push. A PR
+      // that also touches code keeps running the e2e on every push; only a docs-only PR
+      // skips it. And a path-skipped workflow leaves its check "Pending" forever, so
+      // this is safe only while the e2e is not a required status check on main (it is
+      // not; check before making it one).
+      paths: [
+        `${p.outdir}/**`,
+        `!${p.outdir}/**.md`,
+        `!${p.outdir}/docs/**`,
+      ],
+    },
     workflowDispatch: {},
   });
   e2eWf.file?.addOverride('name', `${p.outdir}: e2e`);

@@ -5,6 +5,8 @@ on:
   pull_request:
     paths:
       - eks-multi-region/**
+      - "!eks-multi-region/**.md"
+      - "!eks-multi-region/docs/**"
   workflow_dispatch: {}
 jobs:
   e2e:
