@@ -16,8 +16,9 @@ jobs:
       - name: Re-enable auto-merge on Dependabot PRs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
         run: |-
-          for pr in $(gh pr list --repo "${{ github.repository }}" --author "app/dependabot" --json number,autoMergeRequest --jq '.[] | select(.autoMergeRequest == null) | .number'); do
+          for pr in $(gh pr list --repo "$REPO" --author "app/dependabot" --json number,autoMergeRequest --jq '.[] | select(.autoMergeRequest == null) | .number'); do
             echo "Re-enabling auto-merge on PR #$pr"
-            gh pr merge --auto --squash "$pr" --repo "${{ github.repository }}" || true
+            gh pr merge --auto --squash "$pr" --repo "$REPO" || true
           done
