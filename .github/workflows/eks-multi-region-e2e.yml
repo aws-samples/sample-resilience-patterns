@@ -41,6 +41,8 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: echo "ASSETS_BUCKET_PREFIX=eks-multi-region-$(echo $HEAD_SHA | cut -c1-6)" >> $GITHUB_ENV
       - name: Pre-flight cleanup (idempotent)
+        env:
+          SWEEP_STALE_ASSETS: "true"
         run: chmod +x cleanup.sh && ./cleanup.sh
       - name: Create assets buckets
         run: make buckets
@@ -94,6 +96,8 @@ jobs:
           role-duration-seconds: 28800
       - name: Cleanup on success
         if: success()
+        env:
+          SWEEP_STALE_ASSETS: "true"
         run: ./cleanup.sh
     timeout-minutes: 180
 env:

@@ -10,7 +10,8 @@
 # The stack names MIRROR the deploy tasks in .projen/tasks.json; test/topology.test.ts pins
 # the two lists against each other.
 #
-# Env: ASSETS_BUCKET_PREFIX (required), PROJECT_NAME (default eks-mr-demo), regions.
+# Env: ASSETS_BUCKET_PREFIX (required), PROJECT_NAME (default eks-mr-demo), regions,
+#      SWEEP_STALE_ASSETS=true to also remove sibling-prefix assets buckets (e2e only).
 set -euo pipefail
 
 PROJECT="${PROJECT_NAME:-eks-mr-demo}"
@@ -309,6 +310,30 @@ for r in "$PRIMARY" "$SECONDARY" "$OBSERVER"; do
     aws s3api delete-bucket --bucket "$b" --region "$r"
   fi
 done
+
+# Assets buckets left by EARLIER runs, opt-in. The e2e suffixes the prefix with the
+# commit SHA, and a run that fails or is cancelled before its own cleanup strands its
+# buckets: no later run's prefix matches them, so the loop above never sees them
+# (19 empty buckets from one day of iteration, 2026-09-15). With
+# SWEEP_STALE_ASSETS=true every other bucket in the same family
+# (<family>-<anything>) goes too. Only the e2e sets it: its concurrency group runs
+# one job at a time, so nothing else in that account is using a sibling prefix. An
+# operator sharing an account with another install leaves it unset.
+if [ "${SWEEP_STALE_ASSETS:-false}" = "true" ]; then
+  family="${ASSETS_BUCKET_FAMILY:-${ASSETS_BUCKET_PREFIX%-*}}"
+  for b in $(aws s3api list-buckets --query "Buckets[?starts_with(Name, '$family-')].Name" --output text | tr -s '[:space:]' ' '); do
+    case "$b" in
+      "$ASSETS_BUCKET_PREFIX"-*) continue ;;   # the current run's buckets: handled above
+      "$family"-*) ;;                           # re-check the family here, never trust the query alone
+      *) continue ;;
+    esac
+    loc=$(aws s3api get-bucket-location --bucket "$b" --query LocationConstraint --output text 2>/dev/null) || continue
+    [ "$loc" = "None" ] && loc="us-east-1"
+    echo "  s3     $b (stale prefix)"
+    aws s3 rm "s3://$b" --recursive --region "$loc" --quiet || true
+    aws s3api delete-bucket --bucket "$b" --region "$loc"
+  done
+fi
 
 # ---- 6. nothing may remain --------------------------------------------------------------
 # A stack left behind is a hard failure, not a warning: run 9 deployed onto a
