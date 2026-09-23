@@ -18,8 +18,10 @@ data "aws_iam_policy_document" "assume" {
 }
 
 data "aws_iam_policy_document" "orchestration" {
-  # DRS: exactly the APIs the seven steps call (lambda/drs_region_switch). Resource stays "*":
-  # source servers, recovery instances and jobs are created by DRS at run time.
+  # DRS: the APIs the seven steps call (lambda/drs_region_switch) plus the three calls DRS makes on the
+  # caller's behalf during StartRecovery and StartFailbackLaunch (CreateRecoveryInstanceForDrs,
+  # ListTagsForResource, DescribeReplicationConfigurationTemplates). IAM evaluates those against this
+  # role. Resource stays "*": source servers, recovery instances and jobs are created by DRS at run time.
   statement {
     sid = "Drs"
     actions = [
@@ -29,6 +31,9 @@ data "aws_iam_policy_document" "orchestration" {
       "drs:StopFailback", "drs:StopReplication", "drs:TerminateRecoveryInstances",
       "drs:DisconnectSourceServer", "drs:DeleteSourceServer", "drs:DeleteRecoveryInstance",
       "drs:TagResource", "drs:UntagResource",
+      # called by DRS as this role, not by the Lambda code
+      "drs:CreateRecoveryInstanceForDrs", "drs:ListTagsForResource",
+      "drs:DescribeReplicationConfigurationTemplates",
     ]
     resources = ["*"]
   }

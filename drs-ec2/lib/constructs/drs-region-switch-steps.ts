@@ -226,10 +226,13 @@ function orchestrationPolicy(scope: Construct, cfg: DrsRegionSwitchConfig): iam.
 
   return new iam.Policy(scope, 'OrchestrationPolicy', {
     statements: [
-      // DRS: exactly the APIs the seven steps call (lambda/drs_region_switch). Read side first, then the
-      // recovery / reverse-replication / retire mutations. Resource must stay '*': source servers,
+      // DRS: the APIs the seven steps call (lambda/drs_region_switch) plus the three DRS calls on the
+      // caller's behalf (forwarded access session, CloudTrail invokedBy=drs.amazonaws.com) during
+      // StartRecovery and StartFailbackLaunch: CreateRecoveryInstanceForDrs, ListTagsForResource and
+      // DescribeReplicationConfigurationTemplates. IAM evaluates those against this role, so without
+      // them the recovery launch fails after conversion. Resource must stay '*': source servers,
       // recovery instances and jobs are created by DRS at run time and carry no predictable ARN.
-      // test/drs-actions-contract.test.ts derives this list from the Lambda code and fails on drift.
+      // test/drs-actions-contract.test.ts derives the first set from the Lambda code and fails on drift.
       new iam.PolicyStatement({
         sid: 'Drs',
         actions: [
@@ -239,6 +242,9 @@ function orchestrationPolicy(scope: Construct, cfg: DrsRegionSwitchConfig): iam.
           'drs:StopFailback', 'drs:StopReplication', 'drs:TerminateRecoveryInstances',
           'drs:DisconnectSourceServer', 'drs:DeleteSourceServer', 'drs:DeleteRecoveryInstance',
           'drs:TagResource', 'drs:UntagResource',
+          // called by DRS as this role, not by the Lambda code
+          'drs:CreateRecoveryInstanceForDrs', 'drs:ListTagsForResource',
+          'drs:DescribeReplicationConfigurationTemplates',
         ],
         resources: ['*'],
       }),

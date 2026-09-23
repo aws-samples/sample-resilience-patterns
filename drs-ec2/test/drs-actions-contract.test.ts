@@ -6,11 +6,26 @@ import { DrsRegionSwitchConfig, DrsRegionSwitchSteps } from '../lib/constructs/d
 
 /**
  * Derives the set of DRS actions the step Lambdas invoke by reading their source, and asserts the
- * orchestration policy grants exactly those by name. A new boto3 call without a matching grant fails
- * here instead of as an AccessDenied halfway through a live fail-over; a wildcard fails here too.
+ * orchestration policy grants exactly those by name plus SERVICE_FORWARDED. A new boto3 call without
+ * a matching grant fails here instead of as an AccessDenied halfway through a live fail-over; a
+ * wildcard fails here too, and so does a grant nobody can account for.
  */
 const LAMBDA_DIR = path.join(__dirname, '..', 'lambda', 'drs_region_switch');
 const IAM_TF = path.join(__dirname, '..', 'terraform', 'iam.tf');
+
+/**
+ * DRS calls these itself, under the caller's identity (forwarded access session), while it services
+ * StartRecovery and StartFailbackLaunch. IAM evaluates them against the orchestration role, but no
+ * Lambda source line names them, so a code-derived list cannot see them. Evidence: CloudTrail for the
+ * 2026-09-18 rehearsals in account 563688183446, eventSource drs.amazonaws.com, userIdentity.invokedBy
+ * drs.amazonaws.com, sessionIssuer = the orchestration role, sessions drsdemo-drs-recover-ec2,
+ * drsdemo-drs-failback-launch, drsdemo-drs-reverse-replicate and drsdemo-drs-reprotect.
+ */
+const SERVICE_FORWARDED = [
+  'drs:CreateRecoveryInstanceForDrs',
+  'drs:ListTagsForResource',
+  'drs:DescribeReplicationConfigurationTemplates',
+];
 
 const cfg: DrsRegionSwitchConfig = {
   project: 'drsdemo',
@@ -73,8 +88,17 @@ describe('DRS action contract (Lambda code -> orchestration policy)', () => {
     for (const a of called) expect(cdkGranted).toContain(a);
   });
 
-  test('CDK construct: every granted DRS action is one the Lambda code calls', () => {
-    for (const a of cdkGranted) expect(called.has(a)).toBe(true);
+  test('CDK construct: the actions DRS makes as the caller are granted', () => {
+    for (const a of SERVICE_FORWARDED) expect(cdkGranted).toContain(a);
+  });
+
+  test('SERVICE_FORWARDED lists only actions the Lambda code does not call itself', () => {
+    // If the code starts calling one of these directly, it belongs in the derived set instead.
+    for (const a of SERVICE_FORWARDED) expect(called.has(a)).toBe(false);
+  });
+
+  test('CDK construct: every granted DRS action is called by the code or made by DRS as the caller', () => {
+    for (const a of cdkGranted) expect(called.has(a) || SERVICE_FORWARDED.includes(a)).toBe(true);
   });
 
   test('Terraform module grants the identical set', () => {

@@ -80,7 +80,7 @@ For an 8 GB root volume, stateless rehearsal takes ~10 min out and ~5 min back. 
 
 ## AWS DRS requirements
 
-- The `StartRecovery` caller needs the EC2 permissions from `AWSElasticDisasterRecoveryConsoleFullAccess`, `iam:PassRole`, and the 16 AWS DRS actions listed in [`lib/constructs/drs-region-switch-steps.ts`](lib/constructs/drs-region-switch-steps.ts). A gap can surface as `LAUNCH_FAILED` after a ~5-minute conversion.
+- The `StartRecovery` caller needs the EC2 permissions from `AWSElasticDisasterRecoveryConsoleFullAccess`, `iam:PassRole`, and the 19 AWS DRS actions listed in [`lib/constructs/drs-region-switch-steps.ts`](lib/constructs/drs-region-switch-steps.ts). Three of them (`drs:CreateRecoveryInstanceForDrs`, `drs:ListTagsForResource`, `drs:DescribeReplicationConfigurationTemplates`) are called by AWS DRS under the caller's identity, not by this code, so a policy derived from the code alone is short. A gap can surface as `LAUNCH_FAILED` after a ~5-minute conversion.
 - Configure the generated AWS DRS launch template with a subnet, security group, and instance profile. For launch-into-source, use BIOS boot, `AWSDRS=AllowLaunchingIntoThisInstance`, and a stopped target instance.
 - One Amazon Route 53 record has one `HealthCheckId`. AWS DRS account settings persist outside AWS CloudFormation and create two security groups per staging VPC. `cleanup.sh` removes them.
 - To remove stateful fail-back resources, stop replication on the FAILBACK server, terminate the recovery instance, then delete the FAILBACK server. The application sends `Connection: close` to avoid a retained Application Load Balancer IP through an SSM port-forward.
