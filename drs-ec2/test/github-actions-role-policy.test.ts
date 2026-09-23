@@ -1,0 +1,200 @@
+import * as fs from 'fs';
+import * as path from 'path';
+
+/**
+ * The GitHub Actions e2e runs the Makefile, cleanup.sh, scripts/*.sh and the DRS service-role
+ * helper under one OIDC role (docs/iam/github-actions-role-policy.json). This test derives
+ * every AWS call those surfaces make and asserts the policy grants the matching IAM action by
+ * name. A call added to a script without a grant fails here, not as an AccessDenied an hour
+ * into a live run. A wildcard action fails here too.
+ */
+const ROOT = path.join(__dirname, '..');
+const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
+
+const RUNNER_SHELL = [
+  'Makefile',
+  'cleanup.sh',
+  'scripts/app-code.sh',
+  'scripts/drs-setup.sh',
+  'scripts/rehearse-cycle.sh',
+  'scripts/rehearse-switchover.sh',
+  'scripts/status.sh',
+];
+// scripts/tunnel.sh is operator-only (ssm start-session); the workflow never runs it.
+const NOT_RUN_BY_CI = ['scripts/tunnel.sh'];
+const HELPER = 'scripts/create-drs-service-roles.py';
+const POLICY = 'docs/iam/github-actions-role-policy.json';
+const TRUST = 'docs/iam/github-actions-role-trust.json';
+
+const SERVICE_PREFIX: Record<string, string> = { elbv2: 'elasticloadbalancing', s3api: 's3' };
+
+/** CLI operations whose IAM action is not the PascalCase of the operation name. */
+const SPECIAL: Record<string, string[]> = {
+  'cloudformation wait stack-delete-complete': ['cloudformation:DescribeStacks'],
+  // both `s3 cp` calls in the runner upload a local file (scripts/app-code.sh)
+  's3 cp': ['s3:PutObject'],
+  's3 rm': ['s3:ListBucket', 's3:DeleteObject'],
+  's3 rb': ['s3:DeleteBucket'],
+  's3api head-bucket': ['s3:ListBucket'],
+  's3api put-public-access-block': ['s3:PutBucketPublicAccessBlock'],
+  // the new template version names an instance profile: EC2 evaluates iam:PassRole on its role
+  'ec2 create-launch-template-version': ['ec2:CreateLaunchTemplateVersion', 'iam:PassRole'],
+};
+
+const pascal = (kebab: string) => kebab.split(/[-_]/).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join('');
+
+function actionsFor(service: string, op: string, waiter?: string): string[] {
+  const key = waiter ? `${service} ${op} ${waiter}` : `${service} ${op}`;
+  if (SPECIAL[key]) return SPECIAL[key];
+  return [`${SERVICE_PREFIX[service] ?? service}:${pascal(op)}`];
+}
+
+/**
+ * Every `aws <service> <operation>` (or `$(AWS) ...` in the Makefile) in the runner's shell
+ * surfaces, keyed by "service operation [waiter]", with file:line citations. Lines that pass a
+ * shell string to SSM (`commands=` / `"commands":`) run on the EC2 instance under its own
+ * profile; the `aws ...` inside them is not a runner call and is skipped, while the
+ * `aws ssm send-command` on the same line is kept.
+ */
+function runnerCliCalls(): Map<string, string[]> {
+  const calls = new Map<string, string[]>();
+  const re = /(?:\baws|\$\(AWS\))\s+(?:--[\w-]+(?:\s+\S+)?\s+)*([a-z0-9-]+)\s+([a-z0-9-]+)(?:\s+([a-z0-9-]+))?/g;
+  for (const file of RUNNER_SHELL) {
+    read(file).split('\n').forEach((line, i) => {
+      const payload = /commands=|"commands":/.test(line);
+      for (const m of line.matchAll(re)) {
+        const [, service, op, third] = m;
+        if (!/^[a-z0-9-]+$/.test(service) || service === 'configure') continue;
+        if (payload && service === 's3') continue; // instance-side download inside the SSM payload
+        const key = op === 'wait' && third ? `${service} ${op} ${third}` : `${service} ${op}`;
+        calls.set(key, [...(calls.get(key) ?? []), `${file}:${i + 1}`]);
+      }
+    });
+  }
+  return calls;
+}
+
+/** boto3 calls in the helper: iam.create_role( -> iam:CreateRole, session.client("sts").get_caller_identity() -> sts:GetCallerIdentity */
+function helperSdkCalls(): Map<string, string[]> {
+  const calls = new Map<string, string[]>();
+  read(HELPER).split('\n').forEach((line, i) => {
+    for (const m of line.matchAll(/(?:\b(iam|sts)|client\("(iam|sts)"\))\.([a-z_]+)\(/g)) {
+      const action = `${m[1] ?? m[2]}:${pascal(m[3])}`;
+      calls.set(action, [...(calls.get(action) ?? []), `${HELPER}:${i + 1}`]);
+    }
+  });
+  return calls;
+}
+
+type Statement = { Sid: string; Effect: string; Action: string | string[]; Resource: string | string[]; Condition?: Record<string, Record<string, string | string[]>> };
+const policy = JSON.parse(read(POLICY)) as { Version: string; Statement: Statement[] };
+const granted = new Set(policy.Statement.filter((s) => s.Effect === 'Allow').flatMap((s) => [s.Action].flat()));
+const resourcesOf = (sid: string) => [policy.Statement.find((s) => s.Sid === sid)!.Resource].flat();
+
+describe('github-actions-drs-ec2 policy covers every call the e2e runner makes', () => {
+  const cli = runnerCliCalls();
+  const sdk = helperSdkCalls();
+
+  test('the runner surfaces are the ones the workflow runs, and the extraction finds a real set', () => {
+    const wf = fs.readFileSync(path.join(ROOT, '..', '.github', 'workflows', 'drs-ec2-e2e.yml'), 'utf8');
+    for (const step of ['./cleanup.sh', 'make deploy', 'make status', 'make rehearse-cycle LEGS=2']) expect(wf).toContain(step);
+    expect(read('scripts/drs-setup.sh')).toMatch(/create-drs-service-roles\.py/);
+    for (const f of NOT_RUN_BY_CI) expect(wf).not.toContain(path.basename(f));
+    expect(cli.size).toBeGreaterThanOrEqual(45);
+    expect([...sdk.keys()].sort()).toEqual(['iam:AddRoleToInstanceProfile', 'iam:AttachRolePolicy', 'iam:CreateInstanceProfile', 'iam:CreateRole', 'sts:GetCallerIdentity']);
+  });
+
+  for (const [key, where] of [...runnerCliCalls().entries()].sort()) {
+    const [service, op, waiter] = key.split(' ');
+    for (const action of actionsFor(service, op, waiter)) {
+      test(`grants ${action} for \`${key}\` (${where[0]})`, () => {
+        expect({ call: key, action, granted: granted.has(action), where }).toEqual({ call: key, action, granted: true, where });
+      });
+    }
+  }
+
+  for (const [action, where] of [...helperSdkCalls().entries()].sort()) {
+    test(`grants ${action} for the DRS service-role helper (${where[0]})`, () => {
+      expect({ action, granted: granted.has(action), where }).toEqual({ action, granted: true, where });
+    });
+  }
+
+  test('no wildcard actions, no admin, and every Allow names its resources', () => {
+    for (const a of granted) {
+      expect(a).not.toBe('*');
+      expect(a).not.toMatch(/:\*$/);
+      expect(a).toMatch(/^[a-z0-9-]+:[A-Z][A-Za-z0-9]+$/);
+    }
+    for (const s of policy.Statement) expect([s.Resource].flat().length).toBeGreaterThan(0);
+  });
+
+  test('cdk deploy runs without --role-arn, so the runner assumes the CDK bootstrap roles in all three Regions', () => {
+    const mk = read('Makefile');
+    expect(mk).toMatch(/^CDK\s+:=\s+npx cdk /m);
+    expect(mk).not.toMatch(/--role-arn/);
+    for (const f of RUNNER_SHELL) expect(read(f)).not.toMatch(/--role-arn/);
+    const regions = ['PRIMARY_REGION', 'SECONDARY_REGION', 'OBSERVER_REGION'].map((v) => mk.match(new RegExp(`^${v}\\s*\\?=\\s*(\\S+)`, 'm'))![1]);
+    expect(regions.sort()).toEqual(['us-east-1', 'us-east-2', 'us-west-2']);
+    const assume = resourcesOf('CdkBootstrapRoles');
+    for (const r of regions) {
+      for (const kind of ['deploy', 'file-publishing', 'image-publishing', 'lookup']) {
+        expect(assume).toContain(`arn:aws:iam::ACCOUNT_ID:role/cdk-hnb659fds-${kind}-role-ACCOUNT_ID-${r}`);
+      }
+    }
+    const stmt = policy.Statement.find((s) => s.Sid === 'CdkBootstrapRoles')!;
+    expect([stmt.Action].flat()).toEqual(['sts:AssumeRole']);
+  });
+
+  test('the DRS service-role helper is fenced to the six role names and the six AWS managed policies it attaches', () => {
+    const helper = read(HELPER);
+    const roles = [...helper.matchAll(/\("(AWSElasticDisasterRecovery\w+Role)", "(drs|ec2)"/g)].map((m) => m[1]);
+    expect(roles).toHaveLength(6);
+    const roleArns = roles.map((r) => `arn:aws:iam::ACCOUNT_ID:role/service-role/${r}`).sort();
+    expect([...resourcesOf('CreateOnlyTheDrsServiceRoles')].sort()).toEqual(roleArns);
+    expect([...resourcesOf('AttachOnlyTheDrsManagedPolicies')].sort()).toEqual(roleArns);
+    const attach = policy.Statement.find((s) => s.Sid === 'AttachOnlyTheDrsManagedPolicies')!;
+    const allowedPolicies = new Set([attach.Condition!.ArnEquals['iam:PolicyARN']].flat());
+    const mp = helper.match(/^MP = "([^"]+)"/m)![1];
+    const ssm = helper.match(/^SSM = "([^"]+)"/m)![1];
+    const attached = new Set<string>([ssm]);
+    for (const m of helper.matchAll(/MP \+ "(\w+)"/g)) attached.add(mp + m[1]);
+    expect([...allowedPolicies].sort()).toEqual([...attached].sort());
+    // only the four EC2-trust roles get instance profiles
+    const profiled = [...helper.matchAll(/\("(AWSElasticDisasterRecovery\w+Role)", "ec2"/g)].map((m) => `arn:aws:iam::ACCOUNT_ID:instance-profile/service-role/${m[1]}`).sort();
+    expect([...resourcesOf('CreateOnlyTheDrsInstanceProfiles')].sort()).toEqual(profiled);
+  });
+
+  test('iam:PassRole is limited to the app instance role, passed to EC2 only', () => {
+    const pass = policy.Statement.filter((s) => [s.Action].flat().includes('iam:PassRole'));
+    expect(pass).toHaveLength(1);
+    expect([pass[0].Resource].flat()).toEqual(['arn:aws:iam::ACCOUNT_ID:role/drsdemo-app-instance-role']);
+    expect(pass[0].Condition).toEqual({ StringEquals: { 'iam:PassedToService': 'ec2.amazonaws.com' } });
+    expect(read('lib/iam-stack.ts')).toContain("roleName: `${project}-app-instance-role`");
+  });
+
+  test('the runner holds none of the DRS launch or reverse-replication authority; the plan steps do', () => {
+    for (const a of ['drs:StartRecovery', 'drs:ReverseReplication', 'drs:StartFailbackLaunch', 'drs:CreateRecoveryInstanceForDrs']) {
+      expect(granted.has(a)).toBe(false);
+    }
+    for (const f of RUNNER_SHELL) expect(read(f)).not.toMatch(/drs (start-recovery|reverse-replication|start-failback-launch)/);
+  });
+
+  test('trust: GitHub OIDC for this repository only, audience sts.amazonaws.com', () => {
+    const trust = JSON.parse(read(TRUST));
+    expect(trust.Statement).toHaveLength(1);
+    const s = trust.Statement[0];
+    expect(s.Action).toBe('sts:AssumeRoleWithWebIdentity');
+    expect(s.Principal.Federated).toBe('arn:aws:iam::ACCOUNT_ID:oidc-provider/token.actions.githubusercontent.com');
+    expect(s.Condition.StringEquals['token.actions.githubusercontent.com:aud']).toBe('sts.amazonaws.com');
+    expect(s.Condition.StringLike['token.actions.githubusercontent.com:sub']).toBe('repo:aws-samples/sample-resilience-patterns:*');
+  });
+
+  test('the workflow assumes the documented role name and asks for a session the README documents', () => {
+    const wf = fs.readFileSync(path.join(ROOT, '..', '.github', 'workflows', 'drs-ec2-e2e.yml'), 'utf8');
+    expect(wf).toContain('role/github-actions-drs-ec2');
+    const readme = read('docs/iam/README.md');
+    expect(readme).toContain('--role-name github-actions-drs-ec2');
+    const requested = Number(wf.match(/role-duration-seconds:\s*(\d+)/)![1]);
+    expect(readme).toContain(`--max-session-duration ${requested}`);
+  });
+});
