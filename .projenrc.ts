@@ -1065,6 +1065,7 @@ new TextFile(root, '.github/CODEOWNERS', {
     `*                    ${codeOwners}`,
     `/.github/            ${codeOwners}`,
     `/.projenrc.ts        ${codeOwners}`,
+    `/eks-multi-region/docs/iam/  ${codeOwners}`,
     '',
   ],
 });

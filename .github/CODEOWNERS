@@ -8,3 +8,4 @@
 *                    @aws-samples/aws-cre
 /.github/            @aws-samples/aws-cre
 /.projenrc.ts        @aws-samples/aws-cre
+/eks-multi-region/docs/iam/  @aws-samples/aws-cre
