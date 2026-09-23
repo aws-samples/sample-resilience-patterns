@@ -101,8 +101,24 @@ describe('github-actions-drs-ec2 policy covers every call the e2e runner makes',
     expect(read('scripts/drs-setup.sh')).toMatch(/create-drs-service-roles\.py/);
     for (const f of NOT_RUN_BY_CI) expect(wf).not.toContain(path.basename(f));
     expect(cli.size).toBeGreaterThanOrEqual(45);
-    expect([...sdk.keys()].sort()).toEqual(['iam:AddRoleToInstanceProfile', 'iam:AttachRolePolicy', 'iam:CreateInstanceProfile', 'iam:CreateRole', 'sts:GetCallerIdentity']);
+    expect([...sdk.keys()].sort()).toEqual(['iam:AddRoleToInstanceProfile', 'iam:AttachRolePolicy', 'iam:CreateInstanceProfile', 'iam:CreateRole', 'iam:GetInstanceProfile', 'sts:GetCallerIdentity']);
   });
+
+  /**
+   * `drs initialize-service` makes IAM calls under the CALLER's identity (forwarded access
+   * session, userIdentity.invokedBy=drs.amazonaws.com), so the runner must hold them even though
+   * no script spells them out. CloudTrail, account e2e: fresh account 2026-09-16 13:31Z ->
+   * CreateServiceLinkedRole, GetInstanceProfile x4, CreateInstanceProfile x4 (path "/"),
+   * AddRoleToInstanceProfile x4; every later initialize-service (14:15Z, 15:00Z, 16:19Z, 18:35Z,
+   * account already initialized) -> CreateServiceLinkedRole (InvalidInputException = exists) and
+   * GetInstanceProfile x4 on every call. A code-derived set cannot see these.
+   */
+  const SERVICE_FORWARDED = ['iam:CreateServiceLinkedRole', 'iam:GetInstanceProfile', 'iam:CreateInstanceProfile', 'iam:AddRoleToInstanceProfile'];
+  for (const action of SERVICE_FORWARDED) {
+    test(`grants ${action}, which drs initialize-service issues under the runner's identity`, () => {
+      expect({ action, granted: granted.has(action) }).toEqual({ action, granted: true });
+    });
+  }
 
   for (const [key, where] of [...runnerCliCalls().entries()].sort()) {
     const [service, op, waiter] = key.split(' ');
@@ -159,17 +175,41 @@ describe('github-actions-drs-ec2 policy covers every call the e2e runner makes',
     const attached = new Set<string>([ssm]);
     for (const m of helper.matchAll(/MP \+ "(\w+)"/g)) attached.add(mp + m[1]);
     expect([...allowedPolicies].sort()).toEqual([...attached].sort());
-    // only the four EC2-trust roles get instance profiles
-    const profiled = [...helper.matchAll(/\("(AWSElasticDisasterRecovery\w+Role)", "ec2"/g)].map((m) => `arn:aws:iam::ACCOUNT_ID:instance-profile/service-role/${m[1]}`).sort();
-    expect([...resourcesOf('CreateOnlyTheDrsInstanceProfiles')].sort()).toEqual(profiled);
+    // only the four EC2-trust roles get instance profiles. DRS creates these profiles itself at
+    // path "/" (CloudTrail 2026-09-16 13:31Z, invokedBy drs.amazonaws.com); the helper creates
+    // them at "/service-role/". IAM evaluates the EXISTING profile's ARN, so both forms are named.
+    const profiled = [...helper.matchAll(/\("(AWSElasticDisasterRecovery\w+Role)", "ec2"/g)].map((m) => m[1]);
+    expect(profiled).toHaveLength(4);
+    const profileArns = profiled.flatMap((p) => [
+      `arn:aws:iam::ACCOUNT_ID:instance-profile/${p}`,
+      `arn:aws:iam::ACCOUNT_ID:instance-profile/service-role/${p}`,
+    ]).sort();
+    expect([...resourcesOf('CreateOnlyTheDrsInstanceProfiles')].sort()).toEqual(profileArns);
+    const profileStmt = policy.Statement.find((s) => s.Sid === 'CreateOnlyTheDrsInstanceProfiles')!;
+    expect([profileStmt.Action].flat().sort()).toEqual(['iam:AddRoleToInstanceProfile', 'iam:CreateInstanceProfile', 'iam:GetInstanceProfile']);
+    // the service-linked role initialize-service creates: one name, one service
+    const slr = policy.Statement.find((s) => s.Sid === 'DrsServiceLinkedRoleOnInitialize')!;
+    expect([slr.Action].flat()).toEqual(['iam:CreateServiceLinkedRole']);
+    expect([slr.Resource].flat()).toEqual(['arn:aws:iam::ACCOUNT_ID:role/aws-service-role/drs.amazonaws.com/AWSServiceRoleForElasticDisasterRecovery']);
+    expect(slr.Condition).toEqual({ StringEquals: { 'iam:AWSServiceName': 'drs.amazonaws.com' } });
   });
 
-  test('iam:PassRole is limited to the app instance role, passed to EC2 only', () => {
+  test('iam:PassRole: the app instance role to EC2, and the four DRS EC2-trust roles into their instance profiles (also EC2)', () => {
     const pass = policy.Statement.filter((s) => [s.Action].flat().includes('iam:PassRole'));
-    expect(pass).toHaveLength(1);
-    expect([pass[0].Resource].flat()).toEqual(['arn:aws:iam::ACCOUNT_ID:role/drsdemo-app-instance-role']);
-    expect(pass[0].Condition).toEqual({ StringEquals: { 'iam:PassedToService': 'ec2.amazonaws.com' } });
+    expect(pass).toHaveLength(2);
+    for (const s of pass) {
+      expect([s.Action].flat()).toEqual(['iam:PassRole']);
+      // AddRoleToInstanceProfile requires PassRole on the role and passes it to EC2 (the instance
+      // profile's service): IAM docs, iam:AssociatedResourceArn / API_AddRoleToInstanceProfile.
+      expect(s.Condition).toEqual({ StringEquals: { 'iam:PassedToService': 'ec2.amazonaws.com' } });
+    }
+    const app = pass.find((s) => s.Sid === 'PassOnlyTheAppRoleToEc2')!;
+    expect([app.Resource].flat()).toEqual(['arn:aws:iam::ACCOUNT_ID:role/drsdemo-app-instance-role']);
     expect(read('lib/iam-stack.ts')).toContain("roleName: `${project}-app-instance-role`");
+    const drs = pass.find((s) => s.Sid === 'PassOnlyTheDrsEc2RolesIntoTheirInstanceProfiles')!;
+    const helper = read(HELPER);
+    const ec2Roles = [...helper.matchAll(/\("(AWSElasticDisasterRecovery\w+Role)", "ec2"/g)].map((m) => `arn:aws:iam::ACCOUNT_ID:role/service-role/${m[1]}`).sort();
+    expect([drs.Resource].flat().sort()).toEqual(ec2Roles);
   });
 
   test('the runner holds none of the DRS launch or reverse-replication authority; the plan steps do', () => {

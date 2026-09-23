@@ -22,7 +22,7 @@ Everything else in the policy is what the workflow's own shell steps call direct
 | Application code bucket | create, upload, empty, delete `drsdemo-app-code-ACCOUNT_ID-us-east-2` | `scripts/app-code.sh`, `cleanup.sh` |
 | Lambda log groups | `logs:DescribeLogGroups`; `logs:DeleteLogGroup` on `/aws/lambda/drsdemo-*` in the two AWS DRS Regions | `cleanup.sh` |
 | AWS DRS set-up | `InitializeService`, replication and launch configuration templates, source-server configuration, `TagResource` | `scripts/drs-setup.sh` |
-| AWS DRS service roles | `iam:CreateRole`, `iam:AttachRolePolicy`, `iam:CreateInstanceProfile`, `iam:AddRoleToInstanceProfile` on the six `AWSElasticDisasterRecovery*Role` names, the six AWS managed policies only | `scripts/create-drs-service-roles.py` |
+| AWS DRS service roles | `iam:CreateRole`, `iam:AttachRolePolicy` on the six `AWSElasticDisasterRecovery*Role` names, the six AWS managed policies only; `iam:GetInstanceProfile`, `iam:CreateInstanceProfile`, `iam:AddRoleToInstanceProfile` on the four instance profiles (both `/` and `/service-role/` paths); `iam:PassRole` of the four EC2-trust roles to EC2; `iam:CreateServiceLinkedRole` for `AWSServiceRoleForElasticDisasterRecovery` only | `scripts/create-drs-service-roles.py`, and `drs initialize-service` itself (see below) |
 | Launch template for recovery | `ec2:CreateLaunchTemplateVersion`, `ec2:ModifyLaunchTemplate` on DRS-managed templates; `iam:PassRole` of `drsdemo-app-instance-role` to EC2 | `scripts/drs-setup.sh` |
 | Agent install and app refresh | `ssm:SendCommand` with `AWS-RunShellScript`, `ssm:GetCommandInvocation`, `ssm:DescribeInstanceInformation` | `scripts/app-code.sh`, `scripts/drs-setup.sh`, `scripts/rehearse-cycle.sh` |
 | Rehearsal | `arc-region-switch:StartPlanExecution`, `GetPlanExecution`, `GetPlanEvaluationStatus`, `ListRoute53HealthChecks` on the `drsdemo-switchover` plan; `rds:DescribeGlobalClusters`; `elasticloadbalancing:DescribeTargetHealth`; `lambda:GetFunctionConfiguration` | `scripts/rehearse-cycle.sh`, `scripts/rehearse-switchover.sh`, `scripts/status.sh` |
@@ -37,6 +37,13 @@ recovery launch needs.
 The runner does not accept VPC peering connections either. All three peerings are in one
 account, and AWS CloudFormation accepts a same-account peering while it creates the
 `AWS::EC2::VPCPeeringConnection`, under the CDK bootstrap execution role.
+
+`drs initialize-service` makes IAM calls under the caller's own identity (a forwarded access
+session): `iam:CreateServiceLinkedRole` for `AWSServiceRoleForElasticDisasterRecovery` and
+`iam:GetInstanceProfile` on the four instance profiles on every call, plus
+`iam:CreateInstanceProfile` (at path `/`) and `iam:AddRoleToInstanceProfile` when a profile is
+missing. The policy grants those to the runner. `AddRoleToInstanceProfile` also requires
+`iam:PassRole` on the role being added, passed to EC2.
 
 `test/github-actions-role-policy.test.ts` reads every `aws <service> <operation>` in the
 runner's scripts and the helper's boto3 calls, and fails when the policy does not grant the
@@ -71,11 +78,9 @@ use `repo:<owner>/<repo>:pull_request`.
 
 ## Known limits of the static derivation
 
-- `drs:InitializeService` creates the `AWSServiceRoleForElasticDisasterRecovery`
-  service-linked role the first time AWS DRS is used in an account. The e2e account already
-  has it. If a first run in a new account fails at that step, add `iam:CreateServiceLinkedRole`
-  on `arn:aws:iam::ACCOUNT_ID:role/aws-service-role/drs.amazonaws.com/AWSServiceRoleForElasticDisasterRecovery`
-  with the condition `iam:AWSServiceName = drs.amazonaws.com`.
+- The four AWS DRS instance profiles exist at path `/` when `drs initialize-service` created
+  them and at `/service-role/` when `create-drs-service-roles.py` did. IAM evaluates the
+  existing profile's ARN, so the policy names both forms for each of the four names.
 - `iam:CreateRole` on the six AWS DRS service-role names lets the runner set those roles'
   trust policies. IAM cannot constrain the trust document itself. Creating the roles once by
   hand and removing the two `iam:Create*` statements is the tighter option.

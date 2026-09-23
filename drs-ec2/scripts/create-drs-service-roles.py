@@ -124,6 +124,22 @@ def main() -> int:
                 else:
                     failures.append((name, "create_instance_profile", e))
                     print(f"  FAILED instance profile: {e}")
+            # `drs initialize-service` creates these profiles itself (at path "/") when they are
+            # absent, so in an initialized account the role is already attached. Read first: the
+            # add call is authorized before its idempotency check, and it also requires
+            # iam:PassRole on the role, so skipping it when nothing is missing keeps the caller's
+            # write surface at zero here.
+            try:
+                attached = [
+                    r["RoleName"]
+                    for r in iam.get_instance_profile(InstanceProfileName=name)["InstanceProfile"]["Roles"]
+                ]
+            except ClientError as e:
+                attached = []
+                print(f"  (could not read instance profile: {e.response['Error']['Code']})")
+            if name in attached:
+                print("  role already in instance profile")
+                continue
             try:
                 iam.add_role_to_instance_profile(
                     InstanceProfileName=name, RoleName=name

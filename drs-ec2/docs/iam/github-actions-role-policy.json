@@ -164,15 +164,47 @@
       "Sid": "CreateOnlyTheDrsInstanceProfiles",
       "Effect": "Allow",
       "Action": [
+        "iam:GetInstanceProfile",
         "iam:CreateInstanceProfile",
         "iam:AddRoleToInstanceProfile"
       ],
       "Resource": [
+        "arn:aws:iam::ACCOUNT_ID:instance-profile/AWSElasticDisasterRecoveryConversionServerRole",
+        "arn:aws:iam::ACCOUNT_ID:instance-profile/AWSElasticDisasterRecoveryRecoveryInstanceRole",
+        "arn:aws:iam::ACCOUNT_ID:instance-profile/AWSElasticDisasterRecoveryReplicationServerRole",
+        "arn:aws:iam::ACCOUNT_ID:instance-profile/AWSElasticDisasterRecoveryRecoveryInstanceWithLaunchActionsRole",
         "arn:aws:iam::ACCOUNT_ID:instance-profile/service-role/AWSElasticDisasterRecoveryConversionServerRole",
         "arn:aws:iam::ACCOUNT_ID:instance-profile/service-role/AWSElasticDisasterRecoveryRecoveryInstanceRole",
         "arn:aws:iam::ACCOUNT_ID:instance-profile/service-role/AWSElasticDisasterRecoveryReplicationServerRole",
         "arn:aws:iam::ACCOUNT_ID:instance-profile/service-role/AWSElasticDisasterRecoveryRecoveryInstanceWithLaunchActionsRole"
       ]
+    },
+    {
+      "Sid": "PassOnlyTheDrsEc2RolesIntoTheirInstanceProfiles",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": [
+        "arn:aws:iam::ACCOUNT_ID:role/service-role/AWSElasticDisasterRecoveryConversionServerRole",
+        "arn:aws:iam::ACCOUNT_ID:role/service-role/AWSElasticDisasterRecoveryRecoveryInstanceRole",
+        "arn:aws:iam::ACCOUNT_ID:role/service-role/AWSElasticDisasterRecoveryReplicationServerRole",
+        "arn:aws:iam::ACCOUNT_ID:role/service-role/AWSElasticDisasterRecoveryRecoveryInstanceWithLaunchActionsRole"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "ec2.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "DrsServiceLinkedRoleOnInitialize",
+      "Effect": "Allow",
+      "Action": "iam:CreateServiceLinkedRole",
+      "Resource": "arn:aws:iam::ACCOUNT_ID:role/aws-service-role/drs.amazonaws.com/AWSServiceRoleForElasticDisasterRecovery",
+      "Condition": {
+        "StringEquals": {
+          "iam:AWSServiceName": "drs.amazonaws.com"
+        }
+      }
     },
     {
       "Sid": "DrsServiceAndDiscovery",
