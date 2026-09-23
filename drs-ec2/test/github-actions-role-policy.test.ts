@@ -179,6 +179,34 @@ describe('github-actions-drs-ec2 policy covers every call the e2e runner makes',
     for (const f of RUNNER_SHELL) expect(read(f)).not.toMatch(/drs (start-recovery|reverse-replication|start-failback-launch)/);
   });
 
+  test('the runner does not accept VPC peerings: CloudFormation accepts a same-account peering while creating it', () => {
+    // CloudTrail, account e2e, every drs-ec2 deploy 2026-09-16..23: AcceptVpcPeeringConnection by the
+    // requester Region's cdk cfn-exec role (invokedBy cloudformation.amazonaws.com) seconds after the
+    // AWS::EC2::VPCPeeringConnection create, for the primary<->secondary and both observer peerings.
+    // The former `make accept-peering` ran after that and was redundant; under the runner it was also
+    // denied, because the action is evaluated against the accepter `vpc` resource as well as the
+    // `vpc-peering-connection` (live, 2026-09-23 19:17Z). It is gone rather than widened.
+    expect(granted.has('ec2:AcceptVpcPeeringConnection')).toBe(false);
+    for (const f of RUNNER_SHELL) expect(read(f)).not.toMatch(/accept-vpc-peering-connection/);
+    expect(read('lib/network-stack.ts')).toContain('new ec2.CfnVPCPeeringConnection');
+    expect(read('lib/observer-stack.ts')).toContain('new ec2.CfnVPCPeeringConnection');
+  });
+
+  test('log-group deletion is fenced to the project Lambda groups in the two DRS Regions', () => {
+    // cleanup.sh sweeps /aws/lambda/<project>-* after the stacks are gone: a group that outlived its
+    // stack keeps the fixed name and makes the next deploy fail with "already exists" (live, 2026-09-23).
+    const del = policy.Statement.filter((s) => [s.Action].flat().includes('logs:DeleteLogGroup'));
+    expect(del).toHaveLength(1);
+    expect([del[0].Resource].flat().sort()).toEqual([
+      'arn:aws:logs:us-east-2:ACCOUNT_ID:log-group:/aws/lambda/drsdemo-*',
+      'arn:aws:logs:us-west-2:ACCOUNT_ID:log-group:/aws/lambda/drsdemo-*',
+    ]);
+    const sweep = read('cleanup.sh');
+    expect(sweep).toMatch(/--log-group-name-prefix "\/aws\/lambda\/\$\{PROJECT\}-"/);
+    expect(sweep).toMatch(/\[\[ "\$lg" == "\/aws\/lambda\/\$\{PROJECT\}-"\* \]\] \|\| continue/);
+    expect(read('lib/constructs/drs-region-switch-steps.ts')).toContain('removalPolicy: RemovalPolicy.DESTROY');
+  });
+
   test('trust: GitHub OIDC for this repository only, audience sts.amazonaws.com', () => {
     const trust = JSON.parse(read(TRUST));
     expect(trust.Statement).toHaveLength(1);

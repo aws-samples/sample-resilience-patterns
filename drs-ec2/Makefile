@@ -81,7 +81,7 @@ DRS_CTX = -c primaryTargetGroupArn=$(call so,$(PRIMARY_REGION),app-primary,Prima
   -c secondaryRecoveredAppSgId=$(call so,$(SECONDARY_REGION),alb-secondary,RecoveredAppSecurityGroupId)
 
 .PHONY: help check-account lint test synth deploy stacks app-code drs-setup status rehearse rehearse-cycle rehearse-ungraceful tunnel clean \
-        net-1 net-2 net-2b iam db-primary db-secondary app-primary alb-secondary drs-steps plan observer observer-accept net-3 app-final accept-peering
+        net-1 net-2 net-2b iam db-primary db-secondary app-primary alb-secondary drs-steps plan observer net-3 app-final
 
 help: ## Show targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -115,11 +115,10 @@ stacks: net-1 net-2 iam db-primary db-secondary app-primary alb-secondary drs-st
 net-1:  ## 1. both VPCs
 	$(call deploy,net-primary)
 	$(call deploy,net-secondary)
-net-2:  ## 2. peering: primary requests, CLI accepts, secondary routes back
+net-2:  ## 2. peering: primary requests (CloudFormation accepts a same-account peering), secondary routes back
 	$(call deploy,net-primary,-c secondaryVpcId=$(SEC_VPC))
 	$(MAKE) net-2b   # separate expansion: PCX exists only after the line above
 net-2b:
-	$(MAKE) accept-peering REGION=$(SECONDARY_REGION) PCX_ID=$(PCX)
 	$(call deploy,net-secondary,-c primaryVpcId=$(PRI_VPC) -c peeringConnectionId=$(PCX))
 iam:    ## 3. app instance role/profile
 	$(call deploy,iam)
@@ -137,21 +136,14 @@ drs-steps: ## 7. DRS step functions in BOTH regions
 plan:   ## 8. the ARC Region Switch plan
 	$(call deploy,plan,$(DRS_CTX) -c primaryClusterArn=$(call so,$(PRIMARY_REGION),db-primary,PrimaryClusterArn) \
 	  -c secondaryClusterArn=$(call so,$(SECONDARY_REGION),db-secondary,SecondaryClusterArn) -c hostedZoneId=$(HZ_ID))
-observer: ## 9. observer VPC + bastion (third region); accept its peerings
+observer: ## 9. observer VPC + bastion (third region); CloudFormation accepts its two peerings
 	$(call deploy,observer,-c primaryVpcId=$(PRI_VPC) -c secondaryVpcId=$(SEC_VPC))
-	$(MAKE) observer-accept   # separate expansion: peering ids exist only after the line above
-observer-accept:
-	$(MAKE) accept-peering REGION=$(PRIMARY_REGION)   PCX_ID=$(PCX_OBS_P)
-	$(MAKE) accept-peering REGION=$(SECONDARY_REGION) PCX_ID=$(PCX_OBS_S)
 net-3:  ## 9b. return routes to the observer
 	$(call deploy,net-primary,-c secondaryVpcId=$(SEC_VPC) -c observerCidr=$(OBS_CIDR) -c observerPeeringId=$(PCX_OBS_P))
 	$(call deploy,net-secondary,-c primaryVpcId=$(PRI_VPC) -c peeringConnectionId=$(PCX) -c observerCidr=$(OBS_CIDR) -c observerPeeringId=$(PCX_OBS_S))
 app-final: ## 10. bind ARC health checks, associate the zone with all VPCs, open ALBs to the observer
 	$(call deploy,app-primary,$(APP_CTX) -c arcHealthCheckId=$(HC_PRI) -c secondaryVpcId=$(SEC_VPC) -c observerVpcId=$(OBS_VPC) -c demoClientCidr=$(CLIENT_CIDR))
 	$(call deploy,alb-secondary,$(ALB_CTX) -c arcHealthCheckId=$(HC_SEC) -c demoClientCidr=$(CLIENT_CIDR))
-
-accept-peering:  # internal: REGION= PCX_ID=
-	@[ -n "$(PCX_ID)" ] && $(AWS) ec2 accept-vpc-peering-connection --region $(REGION) --vpc-peering-connection-id $(PCX_ID) >/dev/null || true
 
 app-code: check-account ## Upload app/app.py + app/ui.html; refresh a running instance in place (no replacement)
 	@scripts/app-code.sh $(PROFILE_ARG) $(APP_BUCKET)

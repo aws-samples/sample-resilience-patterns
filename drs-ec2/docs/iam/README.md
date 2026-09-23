@@ -20,7 +20,7 @@ Everything else in the policy is what the workflow's own shell steps call direct
 |---|---|---|
 | Stack state and teardown | `DescribeStacks`, `DescribeStackEvents`, `DescribeStackResources`, `DeleteStack` on `drsdemo-*` | `Makefile`, `cleanup.sh`, `scripts/*.sh` |
 | Application code bucket | create, upload, empty, delete `drsdemo-app-code-ACCOUNT_ID-us-east-2` | `scripts/app-code.sh`, `cleanup.sh` |
-| Observer peering | `ec2:AcceptVpcPeeringConnection` | `Makefile` (`net-3`) |
+| Lambda log groups | `logs:DescribeLogGroups`; `logs:DeleteLogGroup` on `/aws/lambda/drsdemo-*` in the two AWS DRS Regions | `cleanup.sh` |
 | AWS DRS set-up | `InitializeService`, replication and launch configuration templates, source-server configuration, `TagResource` | `scripts/drs-setup.sh` |
 | AWS DRS service roles | `iam:CreateRole`, `iam:AttachRolePolicy`, `iam:CreateInstanceProfile`, `iam:AddRoleToInstanceProfile` on the six `AWSElasticDisasterRecovery*Role` names, the six AWS managed policies only | `scripts/create-drs-service-roles.py` |
 | Launch template for recovery | `ec2:CreateLaunchTemplateVersion`, `ec2:ModifyLaunchTemplate` on DRS-managed templates; `iam:PassRole` of `drsdemo-app-instance-role` to EC2 | `scripts/drs-setup.sh` |
@@ -33,6 +33,10 @@ The runner does not call `drs:StartRecovery`, `drs:ReverseReplication` or
 orchestration role (`lib/constructs/drs-region-switch-steps.ts`). That role, not this one,
 carries the forwarded-access DRS actions and the `aws:ViaAWSService` EC2 grants that a
 recovery launch needs.
+
+The runner does not accept VPC peering connections either. All three peerings are in one
+account, and AWS CloudFormation accepts a same-account peering while it creates the
+`AWS::EC2::VPCPeeringConnection`, under the CDK bootstrap execution role.
 
 `test/github-actions-role-policy.test.ts` reads every `aws <service> <operation>` in the
 runner's scripts and the helper's boto3 calls, and fails when the policy does not grant the

@@ -62,13 +62,18 @@
       "Resource": "arn:aws:s3:::drsdemo-app-code-ACCOUNT_ID-us-east-2/*"
     },
     {
-      "Sid": "ObserverPeeringAccepterStep",
+      "Sid": "FindRetainedLambdaLogGroups",
       "Effect": "Allow",
-      "Action": "ec2:AcceptVpcPeeringConnection",
+      "Action": "logs:DescribeLogGroups",
+      "Resource": "*"
+    },
+    {
+      "Sid": "DeleteOnlyTheProjectLambdaLogGroups",
+      "Effect": "Allow",
+      "Action": "logs:DeleteLogGroup",
       "Resource": [
-        "arn:aws:ec2:us-east-1:ACCOUNT_ID:vpc-peering-connection/*",
-        "arn:aws:ec2:us-east-2:ACCOUNT_ID:vpc-peering-connection/*",
-        "arn:aws:ec2:us-west-2:ACCOUNT_ID:vpc-peering-connection/*"
+        "arn:aws:logs:us-east-2:ACCOUNT_ID:log-group:/aws/lambda/drsdemo-*",
+        "arn:aws:logs:us-west-2:ACCOUNT_ID:log-group:/aws/lambda/drsdemo-*"
       ]
     },
     {
