@@ -572,6 +572,11 @@ const patterns: Pattern[] = [
         // stack remains. Run 9 tolerated a failed cleanup and then tried to UPDATE a
         // DELETE_FAILED region stack -- a two-hour teardown followed by an instant
         // ValidationError. Stop here instead, with cleanup's own diagnosis in the log.
+        // SWEEP_STALE_ASSETS: the prefix is SHA-suffixed, so a run cancelled or failed
+        // before its own cleanup strands its buckets under a prefix no later run uses.
+        // The concurrency group makes this the only e2e job in the account, so every
+        // sibling-prefix bucket is stale.
+        env: { SWEEP_STALE_ASSETS: 'true' },
         run: 'chmod +x cleanup.sh && ./cleanup.sh',
       },
       {
@@ -655,6 +660,7 @@ const patterns: Pattern[] = [
       {
         name: 'Cleanup on success',
         if: 'success()',
+        env: { SWEEP_STALE_ASSETS: 'true' },
         run: './cleanup.sh',
       },
     ],

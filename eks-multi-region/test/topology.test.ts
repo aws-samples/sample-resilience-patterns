@@ -424,6 +424,7 @@ describe('GitHub role policy covers every API the rail calls under the runner ro
     's3 rm': ['s3:DeleteObject', 's3:ListBucket'],
     's3 ls': ['s3:ListBucket'],
     's3api head-bucket': ['s3:ListBucket'],
+    's3api list-buckets': ['s3:ListAllMyBuckets'],
     's3api put-public-access-block': ['s3:PutBucketPublicAccessBlock'],
     's3api get-public-access-block': ['s3:GetBucketPublicAccessBlock'],
   };
@@ -7236,5 +7237,121 @@ describe('cleanup.sh drains what the cluster\'s controllers left in the VPC (e2e
     expect(r.out).toContain('FAIL   us-east-2 eks-mr-demo-region-us-east-2 still DELETE_FAILED');
     expect(r.out).toContain('cleanup: FAILED -- stacks remain');
     expect(r.code).toBe(1);
+  });
+});
+
+describe('cleanup.sh sweeps assets buckets stranded by earlier e2e runs (opt-in, 2026-09-23)', () => {
+  // The e2e names its assets buckets eks-multi-region-<sha6>-<region>. A run that fails or is
+  // cancelled before "Cleanup on success" leaves its three buckets under a prefix no later run
+  // computes, so the current-prefix loop never sees them: one day of iteration (2026-09-15)
+  // left 19 empty buckets, and a cancelled run on 2026-09-23 added three more. With
+  // SWEEP_STALE_ASSETS=true cleanup.sh also removes every sibling-prefix bucket in the family.
+  // It is opt-in because an operator sharing an account with another install of this sample
+  // must not lose that install's buckets; only the e2e, whose concurrency group makes it the
+  // only job in the account, turns it on.
+  const root = path.join(__dirname, '..');
+  const cleanup = fs.readFileSync(path.join(root, 'cleanup.sh'), 'utf8');
+  const wf = fs.readFileSync(path.join(root, '..', '.github', 'workflows', 'eks-multi-region-e2e.yml'), 'utf8');
+  const policy = JSON.parse(fs.readFileSync(path.join(root, 'docs', 'iam', 'github-actions-role-policy.json'), 'utf8'));
+
+  // A clean account (no stacks, no repos, no current-prefix buckets) that still holds
+  // buckets from earlier runs. list-buckets ignores --query on purpose: the script must
+  // re-check the family itself and never delete a bucket outside it.
+  function runSweep(sweep: boolean): { code: number; out: string; calls: string[] } {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sweep-'));
+    const calls = path.join(dir, 'calls.log');
+    fs.writeFileSync(
+      path.join(dir, 'aws'),
+      [
+        '#!/bin/bash',
+        'args="$*"; svc="$1"; op="$2"',
+        'case "$svc $op" in',
+        '  "cloudformation describe-stacks"|"cloudformation list-stack-resources"|"eks describe-cluster"|"s3api head-bucket") exit 254;;',
+        '  "cloudformation list-stacks"|"ec2 describe-"*|"elbv2 describe-"*|"ecr describe-repositories") exit 0;;',
+        '  "s3api list-buckets") echo "list-buckets" >> "$CALLS";',
+        '    printf "eks-multi-region-0cf8e4-us-east-2\\teks-multi-region-0cf8e4-us-west-2\\teks-multi-region-test-us-east-1\\teks-multi-region-205296-us-east-1\\tunrelated-eks-multi-region-x\\n"; exit 0;;',
+        '  "s3api get-bucket-location")',
+        '    case "$args" in *0cf8e4-us-east-2*) echo us-east-2;; *0cf8e4-us-west-2*) echo us-west-2;; *) echo None;; esac; exit 0;;',
+        '  "s3 rm") echo "rm $args" >> "$CALLS"; exit 0;;',
+        '  "s3api delete-bucket") echo "delete-bucket $args" >> "$CALLS"; exit 0;;',
+        '  *) echo "unexpected aws call: $args" >&2; exit 254;;',
+        'esac',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      PATH: `${dir}:${process.env.PATH}`,
+      CALLS: calls,
+      ASSETS_BUCKET_PREFIX: 'eks-multi-region-test',
+    };
+    if (sweep) env.SWEEP_STALE_ASSETS = 'true';
+    else delete env.SWEEP_STALE_ASSETS;
+    try {
+      const out = execSync(`bash ${path.join(root, 'cleanup.sh')} 2>&1`, { env }).toString();
+      return { code: 0, out, calls: fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8').trim().split('\n') : [] };
+    } catch (e: any) {
+      return { code: e.status, out: String(e.stdout ?? ''), calls: fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8').trim().split('\n') : [] };
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test('with SWEEP_STALE_ASSETS=true: every sibling-prefix bucket goes, in its own region, and nothing else does', () => {
+    const r = runSweep(true);
+    const deleted = r.calls.filter((c) => c.startsWith('delete-bucket'));
+    expect(deleted).toEqual([
+      'delete-bucket s3api delete-bucket --bucket eks-multi-region-0cf8e4-us-east-2 --region us-east-2',
+      'delete-bucket s3api delete-bucket --bucket eks-multi-region-0cf8e4-us-west-2 --region us-west-2',
+      // us-east-1 reports LocationConstraint "None": the script must map it, not pass "None" as a region
+      'delete-bucket s3api delete-bucket --bucket eks-multi-region-205296-us-east-1 --region us-east-1',
+    ]);
+    // emptied before deleted, each in the bucket's own region
+    for (const d of deleted) {
+      const b = d.match(/--bucket (\S+) --region (\S+)/)!;
+      expect(r.calls).toContain(`rm s3 rm s3://${b[1]} --recursive --region ${b[2]} --quiet`);
+    }
+    // the current run's prefix is the current-prefix loop's business, never the sweep's
+    expect(r.calls.some((c) => c.includes('eks-multi-region-test-'))).toBe(false);
+    // list-buckets returned a bucket outside the family (the fake ignores --query); untouched
+    expect(r.calls.some((c) => c.includes('unrelated-'))).toBe(false);
+    expect(r.out).toContain('(stale prefix)');
+    expect(r.out).toContain('cleanup: done');
+    expect(r.code).toBe(0);
+  });
+
+  test('without it: list-buckets is never called and no bucket outside the current prefix is touched', () => {
+    const r = runSweep(false);
+    expect(r.calls).toEqual([]);
+    expect(r.out).not.toContain('(stale prefix)');
+    expect(r.out).toContain('cleanup: done');
+    expect(r.code).toBe(0);
+  });
+
+  test('the sweep is gated on the literal value true and defaults off', () => {
+    expect(cleanup).toMatch(/if \[ "\$\{SWEEP_STALE_ASSETS:-false\}" = "true" \]; then/);
+    // the family re-check in the shell, independent of the --query filter
+    expect(cleanup).toMatch(/"\$family"-\*\) ;;/);
+  });
+
+  test('only the e2e turns it on: both of its cleanup steps, and no other workflow', () => {
+    const steps = wf.split(/\n {6}- /).filter((s) => /run: .*cleanup\.sh/.test(s));
+    expect(steps).toHaveLength(2); // pre-flight and on-success
+    for (const s of steps) expect(s).toMatch(/SWEEP_STALE_ASSETS: "true"/);
+    const wfDir = path.join(root, '..', '.github', 'workflows');
+    for (const f of fs.readdirSync(wfDir)) {
+      if (f === 'eks-multi-region-e2e.yml') continue;
+      expect(fs.readFileSync(path.join(wfDir, f), 'utf8')).not.toContain('SWEEP_STALE_ASSETS');
+    }
+  });
+
+  test('the runner policy can list buckets account-wide (ListAllMyBuckets only works on Resource "*") and locate them', () => {
+    const list = policy.Statement.find((s: any) => s.Sid === 'ListAssetsBucketFamily');
+    expect(list).toBeDefined();
+    expect([list.Action].flat()).toEqual(['s3:ListAllMyBuckets']);
+    expect(list.Resource).toBe('*');
+    const assets = policy.Statement.find((s: any) => s.Sid === 'AssetsBuckets');
+    for (const a of ['s3:GetBucketLocation', 's3:ListBucket', 's3:DeleteObject', 's3:DeleteBucket']) expect(assets.Action).toContain(a);
+    expect(assets.Resource).toContain('arn:aws:s3:::eks-multi-region-*');
   });
 });
