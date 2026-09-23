@@ -142,8 +142,23 @@ wait
 
 # ---- Residue created at RUNTIME, outside CloudFormation ----
 #  * /drsdemo/db-writer-endpoint in the SECONDARY: written by register_target during a failover
-#    (stack 04 owns only the primary copy). Lambda log groups are CloudFormation-owned (stack 07).
+#    (stack 04 owns only the primary copy).
+#  * /aws/lambda/<project>-* log groups that outlived their stack: stack 07 now deletes its groups,
+#    but a group retained by an earlier deployment, or re-created by Lambda after the stack's group
+#    was gone, keeps the fixed name and makes the next deploy fail with "already exists".
 echo "=== runtime residue: secondary SSM parameter ==="
 aws ssm delete-parameter --region "$SECONDARY" --name "/${PROJECT}/db-writer-endpoint" >/dev/null 2>&1 && echo "   [$SECONDARY] deleted /${PROJECT}/db-writer-endpoint" || true
+
+sweep_lambda_log_groups() { # sweep_lambda_log_groups <region>
+  for lg in $(aws logs describe-log-groups --region "$1" --log-group-name-prefix "/aws/lambda/${PROJECT}-" \
+      --query 'logGroups[].logGroupName' --output text 2>/dev/null); do
+    [[ "$lg" == "/aws/lambda/${PROJECT}-"* ]] || continue   # re-check the family in the shell, never trust the filter alone
+    echo "   [$1] delete log group $lg"
+    aws logs delete-log-group --region "$1" --log-group-name "$lg" >/dev/null 2>&1 || echo "   [$1] $lg not deleted"
+  done
+}
+echo "=== runtime residue: Lambda log groups ==="
+sweep_lambda_log_groups "$PRIMARY"
+sweep_lambda_log_groups "$SECONDARY"
 
 echo "=== teardown complete ==="

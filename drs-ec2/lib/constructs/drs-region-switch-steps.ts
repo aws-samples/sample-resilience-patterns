@@ -17,7 +17,7 @@
  * the EC2 tier. See README "Adding DRS steps to an existing plan".
  */
 import * as path from 'path';
-import { ArnFormat, Duration, Stack, Tags } from 'aws-cdk-lib';
+import { ArnFormat, Duration, RemovalPolicy, Stack, Tags } from 'aws-cdk-lib';
 import * as arc from 'aws-cdk-lib/aws-arcregionswitch';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
@@ -128,6 +128,9 @@ export class DrsRegionSwitchSteps extends Construct {
       const logGroup = new logs.LogGroup(this, `${step.name}-logs`, {
         logGroupName: `/aws/lambda/${name}`,
         retention: retention,
+        // The name is fixed, so the group must leave with the stack: a retained group makes the
+        // next deploy's change set fail early validation with "already exists".
+        removalPolicy: RemovalPolicy.DESTROY,
       });
       const override = props.functionOverrides?.[step.name];
       fns[step.name] = new lambda.Function(this, step.name, {

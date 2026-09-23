@@ -46,6 +46,18 @@ describe('DrsRegionSwitchSteps (per region)', () => {
     t.hasResourceProperties('AWS::Logs::LogGroup', { LogGroupName: '/aws/lambda/drsdemo-drs-retire', RetentionInDays: 1 });
   });
 
+  test('every log group is deleted with its stack (an explicit name that outlives the stack blocks the next deploy)', () => {
+    // CDK's LogGroup default is RemovalPolicy.RETAIN. With a fixed logGroupName that leaves
+    // /aws/lambda/drsdemo-* behind after `make clean`, and the next deploy's change set fails early
+    // validation with "already exists" on all seven groups (live, 2026-09-23, account e2e).
+    const groups = t.findResources('AWS::Logs::LogGroup');
+    expect(Object.keys(groups)).toHaveLength(STEPS.length);
+    for (const [id, res] of Object.entries(groups)) {
+      expect({ id, DeletionPolicy: res.DeletionPolicy, UpdateReplacePolicy: res.UpdateReplacePolicy })
+        .toEqual({ id, DeletionPolicy: 'Delete', UpdateReplacePolicy: 'Delete' });
+    }
+  });
+
   test('environment carries the configuration the handlers read', () => {
     t.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: 'drsdemo-drs-reprotect',
