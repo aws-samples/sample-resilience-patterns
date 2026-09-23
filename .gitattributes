@@ -3,6 +3,7 @@
 * text=auto eol=lf
 *.snap linguist-generated
 /.gitattributes linguist-generated
+/.github/CODEOWNERS linguist-generated
 /.github/dependabot.yml linguist-generated
 /.github/workflows/aurora-build.yml linguist-generated
 /.github/workflows/aurora-cleanup.yml linguist-generated

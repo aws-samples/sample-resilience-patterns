@@ -5,7 +5,8 @@
  * projen — they use `npm ci && npx cdk deploy` from inside a subdirectory.
  *
  * What this file generates:
- *   - .github/workflows/*.yml   (6 files: build, e2e, cleanup per pattern)
+ *   - .github/workflows/*.yml   (build, e2e, cleanup per pattern; Dependabot automation)
+ *   - .github/dependabot.yml, .github/CODEOWNERS
  *   - aurora/package.json, cdk.json, tsconfig.json, .projen/  (CDK subproject scaffolding)
  *   - s3mrap-crr/package.json, cdk.json, tsconfig.json, .projen/  (CDK subproject scaffolding)
  *
@@ -17,7 +18,7 @@
  *
  * To regenerate scaffolding after changes here:  npx projen
  */
-import { typescript, awscdk, javascript, github, YamlFile } from 'projen';
+import { typescript, awscdk, javascript, github, TextFile, YamlFile } from 'projen';
 
 // ---------------------------------------------------------------------------
 // Root project: holds the workflows and is the parent of the two subprojects.
@@ -664,12 +665,18 @@ new YamlFile(root, '.github/dependabot.yml', {
 });
 
 // ---------------------------------------------------------------------------
-// Auto-approve workflow: approves PRs with 'auto-approve' label from trusted
-// actors. Triggered on label, open, sync, ready_for_review events.
+// Auto-approve workflow: approves Dependabot PRs that carry the 'auto-approve'
+// label. Triggered on label, open, sync, ready_for_review events.
+//
+// Uses `pull_request`, not `pull_request_target` (AWS-427). Dependabot-triggered
+// `pull_request` runs get a read-only GITHUB_TOKEN by default; the job-level
+// `permissions` block raises it to what the step needs, which is GitHub's own
+// documented pattern for Dependabot auto-approve. Values from the `github`
+// context reach the shell only through environment variables.
 // ---------------------------------------------------------------------------
 const autoApproveWf = new github.GithubWorkflow(root.github!, 'auto-approve');
 autoApproveWf.on({
-  pullRequestTarget: {
+  pullRequest: {
     types: ['labeled', 'opened', 'synchronize', 'reopened', 'ready_for_review'],
   },
 });
@@ -681,8 +688,12 @@ autoApproveWf.addJobs({
     steps: [
       {
         name: 'Approve PR',
-        env: { GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}' },
-        run: 'gh pr review --approve "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}"',
+        env: {
+          GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}',
+          PR_NUMBER: '${{ github.event.pull_request.number }}',
+          REPO: '${{ github.repository }}',
+        },
+        run: 'gh pr review --approve "$PR_NUMBER" --repo "$REPO"',
       },
     ],
   },
@@ -691,6 +702,8 @@ autoApproveWf.addJobs({
 // ---------------------------------------------------------------------------
 // Auto-merge workflow: enables squash auto-merge on every Dependabot PR.
 // GitHub will merge once required checks pass + approval is present.
+// `pull_request` trigger and env-var indirection for the same reasons as
+// auto-approve above (AWS-427).
 // ---------------------------------------------------------------------------
 const autoMergeWf = new github.GithubWorkflow(root.github!, 'auto-merge');
 autoMergeWf.on({
@@ -700,7 +713,7 @@ autoMergeWf.on({
   // re-tries. Do NOT rely solely on retry-automerge (check_suite:completed) —
   // its conclusion=='success' gate is skipped whenever a neutral/skipped
   // check (e.g. CodeQL "skipping") is present in the suite.
-  pullRequestTarget: {
+  pullRequest: {
     types: ['opened', 'reopened', 'ready_for_review', 'synchronize'],
   },
 });
@@ -715,8 +728,12 @@ autoMergeWf.addJobs({
     steps: [
       {
         name: 'Enable auto-merge',
-        env: { GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}' },
-        run: 'gh pr merge --auto --squash "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}"',
+        env: {
+          GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}',
+          PR_NUMBER: '${{ github.event.pull_request.number }}',
+          REPO: '${{ github.repository }}',
+        },
+        run: 'gh pr merge --auto --squash "$PR_NUMBER" --repo "$REPO"',
       },
     ],
   },
@@ -763,16 +780,42 @@ retryAutoMergeWf.addJobs({
     steps: [
       {
         name: 'Re-enable auto-merge on Dependabot PRs',
-        env: { GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}' },
+        env: {
+          GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}',
+          REPO: '${{ github.repository }}',
+        },
         run: [
-          'for pr in $(gh pr list --repo "${{ github.repository }}" --author "app/dependabot" --json number,autoMergeRequest --jq \'.[] | select(.autoMergeRequest == null) | .number\'); do',
+          'for pr in $(gh pr list --repo "$REPO" --author "app/dependabot" --json number,autoMergeRequest --jq \'.[] | select(.autoMergeRequest == null) | .number\'); do',
           '  echo "Re-enabling auto-merge on PR #$pr"',
-          '  gh pr merge --auto --squash "$pr" --repo "${{ github.repository }}" || true',
+          '  gh pr merge --auto --squash "$pr" --repo "$REPO" || true',
           'done',
         ].join('\n'),
       },
     ],
   },
+});
+
+// ---------------------------------------------------------------------------
+// CODEOWNERS (AWS-427): changes to workflow files, and to this file that
+// generates them, request review from the owning team. The team must hold
+// write access on the repository for GitHub to honour the entry.
+// ---------------------------------------------------------------------------
+const codeOwners = '@aws-samples/aws-cre';
+new TextFile(root, '.github/CODEOWNERS', {
+  marker: false,
+  lines: [
+    '# ~~ Generated by projen. To modify, edit .projenrc.ts and run "npx projen".',
+    '#',
+    '# Requests a review from the owning team whenever these paths change. It does not',
+    '# block a merge: that needs "Require review from Code Owners" in the main branch',
+    '# protection, which stays OFF on purpose. auto-approve and auto-merge approve',
+    '# Dependabot PRs as github-actions[bot], and a bot cannot satisfy a Code Owners',
+    '# review, so turning it on would stall every Dependabot PR.',
+    `*                    ${codeOwners}`,
+    `/.github/            ${codeOwners}`,
+    `/.projenrc.ts        ${codeOwners}`,
+    '',
+  ],
 });
 
 root.synth();
