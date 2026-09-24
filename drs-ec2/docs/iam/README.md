@@ -51,7 +51,13 @@ staging subnet, the default security group and EBS encryption: `ec2:DescribeSubn
 EBS key, and a dry run of `ec2:CreateSecurityGroup` when the default replication-server group
 does not exist yet, which is every run here because the staging VPC is new. IAM authorizes a dry
 run exactly like the real call, so the runner holds `ec2:CreateSecurityGroup` bounded to the two
-AWS DRS Regions. The group itself is created later by AWS DRS under its service-linked role.
+AWS DRS Regions. That dry run also tags the group it would create (`AWSElasticDisasterRecoveryManaged`,
+`aws:drs:managed`, `Name`), and EC2 authorizes tags on creation as a separate `ec2:CreateTags`
+on the new security group, so the runner holds that too, conditioned on
+`ec2:CreateAction = CreateSecurityGroup` so it can never retag an existing resource. When the
+tag grant is missing, AWS DRS reports `no permission for ec2:CreateSecurityGroup`; the CloudTrail
+`errorMessage` on the `CreateSecurityGroup` event names the real action, `ec2:CreateTags`. The
+group itself is created later by AWS DRS under its service-linked role.
 Everything else in the lifecycle (agent registration, replication, recovery launches, teardown)
 runs under the DRS service-linked role, the instance role or the plan's Lambda role.
 

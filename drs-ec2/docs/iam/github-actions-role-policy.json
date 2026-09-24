@@ -109,6 +109,20 @@
       ]
     },
     {
+      "Sid": "DrsSecurityGroupTags",
+      "Effect": "Allow",
+      "Action": "ec2:CreateTags",
+      "Resource": [
+        "arn:aws:ec2:us-east-2:ACCOUNT_ID:security-group/*",
+        "arn:aws:ec2:us-west-2:ACCOUNT_ID:security-group/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "ec2:CreateAction": "CreateSecurityGroup"
+        }
+      }
+    },
+    {
       "Sid": "DrsLaunchTemplate",
       "Effect": "Allow",
       "Action": [

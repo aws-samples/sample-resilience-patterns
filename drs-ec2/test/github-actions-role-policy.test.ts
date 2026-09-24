@@ -124,12 +124,17 @@ describe('github-actions-drs-ec2 policy covers every call the e2e runner makes',
    *    replication-server group is created later under DRS's own service-linked role),
    *    GetEbsDefaultKmsKeyId, kms:DescribeKey on alias/aws/ebs. 2026-09-24 00:22Z the runner was
    *    denied at DescribeSubnets ("Ensure ec2:DescribeSubnets permission is granted").
+   *  - the dry-run CreateSecurityGroup carries a tagSpecificationSet (AWSElasticDisasterRecoveryManaged,
+   *    aws:drs:managed, Name), and EC2 authorizes tag-on-create as a separate ec2:CreateTags on the
+   *    security-group being created (request context ec2:CreateAction=CreateSecurityGroup). 2026-09-24
+   *    13:20Z the runner was denied there: DRS reported "no permission for ec2:CreateSecurityGroup" but
+   *    the CloudTrail errorMessage names ec2:CreateTags on security-group/*. Same tag set on 09-16.
    * Nothing else in the lifecycle runs under the runner's identity: the 2026-09-18 rehearsal and
    * teardown (make clean under Admin) show zero forwarded calls attributed to Admin.
    */
   const SERVICE_FORWARDED = [
     'iam:CreateServiceLinkedRole', 'iam:GetInstanceProfile', 'iam:CreateInstanceProfile', 'iam:AddRoleToInstanceProfile',
-    'ec2:DescribeSubnets', 'ec2:DescribeSecurityGroups', 'ec2:CreateSecurityGroup', 'ec2:GetEbsDefaultKmsKeyId', 'kms:DescribeKey',
+    'ec2:DescribeSubnets', 'ec2:DescribeSecurityGroups', 'ec2:CreateSecurityGroup', 'ec2:CreateTags', 'ec2:GetEbsDefaultKmsKeyId', 'kms:DescribeKey',
   ];
   for (const action of SERVICE_FORWARDED) {
     test(`grants ${action}, which DRS issues under the runner's identity`, () => {
@@ -137,7 +142,7 @@ describe('github-actions-drs-ec2 policy covers every call the e2e runner makes',
     });
   }
 
-  test('the security-group grants are the dry-run probe and cleanup only: Region-bounded, no rule or tag writes', () => {
+  test('the security-group grants are the dry-run probe and cleanup only: Region-bounded, no rule writes', () => {
     const create = policy.Statement.filter((s) => [s.Action].flat().includes('ec2:CreateSecurityGroup'));
     expect(create).toHaveLength(1);
     expect([create[0].Action].flat().sort()).toEqual(['ec2:CreateSecurityGroup', 'ec2:DeleteSecurityGroup']);
@@ -147,12 +152,25 @@ describe('github-actions-drs-ec2 policy covers every call the e2e runner makes',
       'arn:aws:ec2:us-west-2:ACCOUNT_ID:security-group/*',
       'arn:aws:ec2:us-west-2:ACCOUNT_ID:vpc/*',
     ]);
-    for (const a of ['ec2:AuthorizeSecurityGroupIngress', 'ec2:AuthorizeSecurityGroupEgress', 'ec2:RevokeSecurityGroupEgress', 'ec2:CreateTags', 'ec2:RunInstances']) {
+    for (const a of ['ec2:AuthorizeSecurityGroupIngress', 'ec2:AuthorizeSecurityGroupEgress', 'ec2:RevokeSecurityGroupEgress', 'ec2:RunInstances']) {
       expect(granted.has(a)).toBe(false);
     }
     const kms = policy.Statement.filter((s) => [s.Action].flat().some((a) => a.startsWith('kms:')));
     expect(kms).toHaveLength(1);
     expect([kms[0].Action].flat()).toEqual(['kms:DescribeKey']);
+  });
+
+  test('ec2:CreateTags is granted only for the tags on the dry-run CreateSecurityGroup, never on an existing resource', () => {
+    // Without the ec2:CreateAction condition the runner could retag any security group in the two
+    // Regions, including the AWSElasticDisasterRecoveryManaged tag DRS keys its own behaviour on.
+    const tags = policy.Statement.filter((s) => [s.Action].flat().includes('ec2:CreateTags'));
+    expect(tags).toHaveLength(1);
+    expect([tags[0].Action].flat()).toEqual(['ec2:CreateTags']);
+    expect([tags[0].Resource].flat().sort()).toEqual([
+      'arn:aws:ec2:us-east-2:ACCOUNT_ID:security-group/*',
+      'arn:aws:ec2:us-west-2:ACCOUNT_ID:security-group/*',
+    ]);
+    expect(tags[0].Condition).toEqual({ StringEquals: { 'ec2:CreateAction': 'CreateSecurityGroup' } });
   });
 
   for (const [key, where] of [...runnerCliCalls().entries()].sort()) {
