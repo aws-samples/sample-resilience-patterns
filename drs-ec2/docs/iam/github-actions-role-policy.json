@@ -63,6 +63,7 @@
         "ec2:DescribeSubnets",
         "ec2:GetEbsDefaultKmsKeyId",
         "elasticloadbalancing:DescribeTargetGroups",
+        "elasticloadbalancing:DescribeTargetHealth",
         "logs:DescribeLogGroups",
         "ssm:DescribeInstanceInformation",
         "ssm:GetCommandInvocation"
@@ -73,13 +74,11 @@
       "Sid": "ProjectReads",
       "Effect": "Allow",
       "Action": [
-        "elasticloadbalancing:DescribeTargetHealth",
         "iam:GetInstanceProfile",
         "lambda:GetFunctionConfiguration",
         "rds:DescribeGlobalClusters"
       ],
       "Resource": [
-        "arn:aws:elasticloadbalancing:us-west-2:ACCOUNT_ID:targetgroup/drsdemo-secondary-tg/*",
         "arn:aws:iam::ACCOUNT_ID:instance-profile/drsdemo-app-instance-profile",
         "arn:aws:lambda:us-west-2:ACCOUNT_ID:function:drsdemo-drs-reverse-replicate",
         "arn:aws:rds::ACCOUNT_ID:global-cluster:drsdemo-global"

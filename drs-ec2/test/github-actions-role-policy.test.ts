@@ -199,6 +199,34 @@ describe('github-actions-drs-ec2 policy covers every call the e2e runner makes',
     for (const s of policy.Statement) expect([s.Resource].flat().length).toBeGreaterThan(0);
   });
 
+  /**
+   * IAM ignores the Resource element for an action that supports no resource types: the grant
+   * looks right, passes every "is it granted" check, and denies at run time. e2e run
+   * 36051833765 (2026-09-24): elasticloadbalancing:DescribeTargetHealth was granted on the
+   * secondary target group's ARN, the IAM simulator returned implicitDeny for that exact ARN,
+   * and the rehearsal's baseline failed with AccessDenied on its first DescribeTargetHealth.
+   * test/fixtures/action-resource-types.json is the AWS Service Reference's resource-type list
+   * for every action the policy grants ([] = no resource types = Resource "*" only).
+   */
+  describe('resource scoping matches what IAM evaluates for each action', () => {
+    const fixture = JSON.parse(read('test/fixtures/action-resource-types.json')) as { actions: Record<string, string[] | null> };
+    test('every granted action is in the fixture (run test/fixtures/refresh-action-resource-types.mjs after adding one)', () => {
+      const missing = [...granted].filter((a) => !(a in fixture.actions));
+      expect(missing).toEqual([]);
+      const unknown = [...granted].filter((a) => fixture.actions[a] === null);
+      expect(unknown).toEqual([]); // null = the Service Reference has no such action (typo)
+    });
+    for (const s of policy.Statement) {
+      const resources = [s.Resource].flat();
+      if (resources.length === 1 && resources[0] === '*') continue;
+      for (const action of [s.Action].flat()) {
+        test(`${s.Sid}: ${action} is scoped to an ARN, so it must accept resource types`, () => {
+          expect({ action, resourceTypes: fixture.actions[action] }).not.toEqual({ action, resourceTypes: [] });
+        });
+      }
+    }
+  });
+
   test('fits the inline role-policy quota once ACCOUNT_ID is substituted', () => {
     // IAM caps the aggregate inline policy size of a role at 10,240 characters, whitespace
     // excluded (IAM quotas). put-role-policy rejects a larger document, and the README's create

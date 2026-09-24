@@ -110,3 +110,11 @@ use `repo:<owner>/<repo>:pull_request`.
   FAILBACK servers a stateful fail-back creates.
 - `ec2:DeleteSecurityGroup` is bounded by Region. `cleanup.sh` selects the groups by the
   `AWS Elastic Disaster Recovery` name prefix that DRS gives them.
+- Some actions accept no resource types, and IAM then ignores the `Resource` element: the grant
+  looks scoped and denies at run time. `elasticloadbalancing:DescribeTargetHealth` is one (the
+  first rehearsal under the runner failed on it while it was scoped to the target group's ARN),
+  as are the `ec2:Describe*`, `logs:DescribeLogGroups`, `ssm:GetCommandInvocation` and account-level
+  `drs:*` reads; they sit on `Resource: "*"`. `test/fixtures/action-resource-types.json` holds
+  the AWS Service Reference's resource types for every granted action, and the test fails when
+  an action with none is scoped to an ARN. Refresh the fixture after adding an action:
+  `node test/fixtures/refresh-action-resource-types.mjs`.
