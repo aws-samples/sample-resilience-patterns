@@ -5,7 +5,8 @@
 #   2. Wait for the app EC2 (primary region) to exist and register with SSM.
 #   3. Install + run the DRS replication agent on the EC2 via SSM Send-Command, targeting
 #      the DRS endpoint in the secondary region.
-#   4. Wait for a DRS source server to appear and begin replication.
+#   4. Wait for a DRS source server to appear, configure its launch template, tag it, and wait
+#      for forward replication to reach CONTINUOUS (the resting state `make deploy` ends at).
 #
 # Usage: drs-setup.sh [aws-profile|-]   (- or empty = default credential chain)
 set -euo pipefail
@@ -206,6 +207,29 @@ if [[ -n "${SS:-}" && "$SS" != "None" ]]; then
   aws drs tag-resource --region "$SECONDARY" \
     --resource-arn "arn:aws:drs:${SECONDARY}:$(aws sts get-caller-identity --query Account --output text):source-server/${SS}" \
     --tags "drsdemo:role=app" 2>&1 | tail -2 || echo "(tag may need manual apply)"
+
+  # [7] `make deploy` ends at the resting state, which requires forward replication CONTINUOUS.
+  # Initial sync of the 8 GB root volume takes 15 to 25 minutes from agent registration (e2e
+  # 2026-09-24: registered 18:03Z, CREATING_SNAPSHOT at 18:16Z). The rehearsal's baseline
+  # invariant gives the state 5 minutes to settle, which is right after a fail-back and wrong
+  # for a fresh install: run 36028055691 started `rehearse-cycle` 78 s after registration and
+  # failed at "forward replication is INITIAL_SYNC" without ever executing the plan. Wait here,
+  # bounded at 45 min, and fail loud on a state that will not progress on its own.
+  echo "== [7] wait for forward replication CONTINUOUS on $SS =="
+  for i in $(seq 1 90); do
+    ST=$(aws drs describe-source-servers --region "$SECONDARY" --filters sourceServerIDs="$SS" \
+      --query 'items[0].dataReplicationInfo.dataReplicationState' --output text 2>/dev/null || echo UNKNOWN)
+    case "$ST" in
+      CONTINUOUS) echo "replication CONTINUOUS after $((i * 30 / 60)) min"; break;;
+      STALLED|DISCONNECTED|STOPPED|PAUSED)
+        echo "ERROR: replication is $ST and will not progress on its own:"
+        aws drs describe-source-servers --region "$SECONDARY" --filters sourceServerIDs="$SS" \
+          --query 'items[0].dataReplicationInfo.[dataReplicationError,dataReplicationInitiation.steps[?status!=`SUCCEEDED`]]' --output json
+        exit 1;;
+      *) echo "  replication is $ST ($i/90); recheck in 30s"; sleep 30;;
+    esac
+    (( i == 90 )) && { echo "ERROR: replication did not reach CONTINUOUS within 45 min (last state: $ST)"; exit 1; }
+  done
 fi
-echo "Replication will take several minutes to reach CONTINUOUS. Check with:"
+echo "Check replication state at any time with:"
 echo "  aws drs describe-source-servers --region $SECONDARY --query 'items[].dataReplicationInfo.dataReplicationState'"
