@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # drs-ec2 cleanup: delete all stacks, DRS resources and the app-code bucket in all three regions,
-# unattended (~30 min). Safe to re-run after a failure.
+# unattended (~30 min; up to ~50 when DRS is slow to release its replication-server security
+# group, see wave 3). Safe to re-run after a failure.
 #
 # Deletion order. Members of a wave run concurrently; the serialization points are CloudFormation
 # exports (app-primary and db-primary import from net-primary; db-secondary and alb-secondary from
@@ -127,11 +128,28 @@ sweep_drs_sgs() { # sweep_drs_sgs <region> <net-stack>
   local vpc; vpc=$(aws cloudformation describe-stack-resources --region "$1" --stack-name "$2" \
     --query "StackResources[?ResourceType=='AWS::EC2::VPC'].PhysicalResourceId" --output text 2>/dev/null) || return 0
   [[ -z "$vpc" || "$vpc" == None ]] && return 0
-  for sg in $(aws ec2 describe-security-groups --region "$1" --filters Name=vpc-id,Values="$vpc" \
-      --query "SecurityGroups[?starts_with(GroupName,'AWS Elastic Disaster Recovery')].GroupId" --output text); do
-    echo "   [$1] delete DRS-created security group $sg in $vpc"
-    aws ec2 delete-security-group --region "$1" --group-id "$sg" >/dev/null 2>&1 || echo "   [$1] $sg still referenced"
+  # DRS terminates the replication server asynchronously after delete-source-server and can take
+  # over ten minutes (e2e 2026-09-24, run 36040999672: sweep at 19:01:51Z got DependencyViolation,
+  # DRS terminated the replication server at 19:12:44Z, the VPC delete failed "has dependencies"
+  # at 19:31:20Z after 16 minutes of CloudFormation retries). Until the server's ENI is gone the
+  # group cannot be deleted, so retry until every DRS group is gone, bounded at 20 min; the
+  # DependencyViolation is the wait signal, which keeps the runner role at DescribeSecurityGroups
+  # + DeleteSecurityGroup.
+  local i sg sgs
+  for i in $(seq 1 80); do
+    sgs=$(aws ec2 describe-security-groups --region "$1" --filters Name=vpc-id,Values="$vpc" \
+      --query "SecurityGroups[?starts_with(GroupName,'AWS Elastic Disaster Recovery')].GroupId" --output text)
+    [[ -z "$sgs" || "$sgs" == None ]] && return 0
+    for sg in $sgs; do
+      aws ec2 delete-security-group --region "$1" --group-id "$sg" >/dev/null 2>&1 \
+        && echo "   [$1] deleted DRS-created security group $sg in $vpc"
+    done
+    sgs=$(aws ec2 describe-security-groups --region "$1" --filters Name=vpc-id,Values="$vpc" \
+      --query "SecurityGroups[?starts_with(GroupName,'AWS Elastic Disaster Recovery')].GroupId" --output text)
+    [[ -z "$sgs" || "$sgs" == None ]] && return 0
+    echo "   [$1] DRS-created security group(s) still referenced ($i/80): $sgs; recheck in 15s"; sleep 15
   done
+  echo "   [$1] WARN: DRS-created security group(s) still referenced after 20 min: $sgs (VPC delete will fail)"
 }
 echo "=== wave 3: networks ==="
 sweep_drs_sgs "$PRIMARY"   "${PROJECT}-net-primary"
