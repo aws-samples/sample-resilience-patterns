@@ -1,0 +1,75 @@
+# Argo CD server config for the CloudFront front door (step 12).
+#
+# ── Why this file exists instead of an edit to the vendored manifest ─────────────────────
+#
+# Upstream ships `argocd-cmd-params-cm` EMPTY — no `data:` block at all — precisely so
+# operators can populate it. The argocd-server Deployment (argocd-install.yaml line
+# ~32593) already wires ARGOCD_SERVER_INSECURE from this ConfigMap's `server.insecure`
+# key with `optional: true`. So insecure mode is a supported knob, not manifest surgery:
+# this file re-declares the same ConfigMap WITH the data, and because `kubectl apply -f`
+# processes a concatenated manifest in document order, the later declaration wins.
+#
+# THAT IS AN ORDERING DEPENDENCY of exactly the class that produced the namespace defect:
+# this file must render AFTER src/argo/argocd-install.yaml in the installer's pass-1
+# list, or upstream's empty ConfigMap silently erases the setting. A test pins the order.
+#
+# ── Why server.insecure at all ───────────────────────────────────────────────────────────
+#
+# argocd-server multiplexes HTTP and its own self-signed TLS on 8080 and, by default,
+# redirects plain HTTP to HTTPS. Behind CloudFront terminating TLS at the edge
+# (viewer side) and speaking plain HTTP to the origin, that default produces a
+# redirect loop; and pointing CloudFront at Argo's TLS listener instead is ruled out
+# by the recommendation engine's "Encrypt Data in Transit" BEST_PRACTICE ("Do not use
+# self-signed certificates" / "backend TLS listeners do not check the validity of a
+# TLS cert"). Insecure mode serves plain HTTP on 8080 — the standard shape behind an
+# L7 proxy. First-deploy check: verify 3.4.7 actually loops without it (the mechanism
+# is confirmed present; the behaviour is not verifiable offline).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cmd-params-cm
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: argocd-cmd-params-cm
+    app.kubernetes.io/part-of: argocd
+data:
+  server.insecure: "true"
+---
+# The internal NLB CloudFront's VPC origin targets. A SEPARATE Service rather than a
+# mutation of upstream's ClusterIP `argocd-server` Service: upstream owns that object
+# and a future argo:render would silently revert an edit to it.
+#
+# Same in-tree-controller shape as the app's Service in k8s/app.yaml: the cluster runs
+# no AWS Load Balancer Controller, so the in-tree service controller provisions this
+# from the EKS-managed control plane — instance targets on NodePorts, client IP
+# preservation ON. The VPC origin's service-managed ENI lives in this VPC, so its
+# address falls inside the VPC CIDR and the RegionStack's LocalNodePortIngress rule
+# (VPC CIDR → 30000-32767 on the cluster security group) already admits it. No new
+# security group rule.
+#
+# Port 80 → 8080: with server.insecure above, argocd-server serves plain HTTP on 8080,
+# and the FrontDoorStack's VPC origin is pinned to HTTPPort 80 / http-only.
+apiVersion: v1
+kind: Service
+metadata:
+  name: argocd-server-lb
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: argocd-server-lb
+    app.kubernetes.io/part-of: argocd
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    # INTERNAL — the entry point is the operator access door ALB reached through the
+    # observer bastion over SSM, never this load balancer directly. Requires the
+    # kubernetes.io/role/internal-elb subnet tag the
+    # RegionStack applies (same contract as the app's Service).
+    service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: argocd-server
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP

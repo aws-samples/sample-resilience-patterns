@@ -1,0 +1,49 @@
+# Third-party licenses
+
+The sample itself is released under the MIT-0 License (see the repository `LICENSE`).
+It vendors, depends on, or pulls at deploy time the following third-party components.
+Nothing below is modified beyond the rendering described; each retains its own license.
+
+## Vendored manifests (committed under `src/`)
+
+| Component | Files | Upstream | License |
+|---|---|---|---|
+| Argo CD v3.4.7 install manifest | `src/argo/argocd-install.yaml` (namespaced by `src/argo/render.sh`) | https://github.com/argoproj/argo-cd | Apache-2.0 |
+| Karpenter v1.14.1 (controller + CRDs) | `src/karpenter/karpenter.yaml` (rendered from the OCI chart by `src/karpenter/render.sh`) | https://github.com/aws/karpenter-provider-aws | Apache-2.0 |
+| AWS Load Balancer Controller v3.5.0 | `src/lbc/lbc.yaml` (rendered from `eks-charts` by `src/lbc/render.sh`; the chart's self-signed TLS Secret and CA bundles are stripped) | https://github.com/kubernetes-sigs/aws-load-balancer-controller | Apache-2.0 |
+
+## Python dependencies (installed into the application and load-generator images)
+
+| Package | Version | License |
+|---|---|---|
+| pg8000 | 1.31.5 | BSD-3-Clause |
+| boto3 / botocore | 1.43.78 | Apache-2.0 |
+| urllib3 | 2.7.0 | MIT |
+| locust | 2.32.4 | MIT |
+| requests | 2.33.0 | Apache-2.0 |
+
+Transitive dependencies are resolved by `pip` at image build time from the pins above.
+
+## Container images mirrored into your ECR at deploy time (`make mirror`, `src/mirror/images.json`)
+
+These are not redistributed by this repository; `make mirror` copies them from their public
+registries into the deploying account, at the digests pinned in `images.json`.
+
+| Image | Version | Upstream | License |
+|---|---|---|---|
+| argoproj/argocd | v3.4.7 | quay.io/argoproj | Apache-2.0 |
+| valkey/valkey (Argo CD's cache) | 9.0.6-alpine | public.ecr.aws/valkey | BSD-3-Clause |
+| dexidp/dex | v2.45.0 | ghcr.io/dexidp | Apache-2.0 |
+| metrics-server | v0.9.0 | registry.k8s.io | Apache-2.0 |
+| nginx | 1.29-alpine | public.ecr.aws/docker/library/nginx | BSD-2-Clause |
+| karpenter (controller) | 1.14.1 | public.ecr.aws/karpenter | Apache-2.0 |
+| aws-load-balancer-controller | v3.5.0 | public.ecr.aws/eks | Apache-2.0 |
+| aws-for-fluent-bit | 2.34.3 | public.ecr.aws/aws-observability | Apache-2.0 |
+
+Argo CD's upstream install manifest names its cache image as `redis:8.2.3-alpine`. Redis 8 is
+licensed RSALv2 / SSPLv1 / AGPLv3, so `src/argo/render.sh` repoints that one reference at
+Valkey (the Linux Foundation fork of the BSD-3-Clause Redis 7.2 codebase, protocol-compatible);
+no Redis image is mirrored or run by this sample.
+
+Base image for the sample's own containers (application, schema job, load generator):
+`python:3.12-slim` (Python Software Foundation License; Debian base).

@@ -1,0 +1,21 @@
+# Exact pins — a demo that drifts between builds is not a demo you can debug.
+#
+# pg8000 is the runtime authority carried over from the source app
+# (aws-samples/sample-resilience-patterns aurora/lambda/aurora-app). It is a PURE
+# PYTHON PostgreSQL driver, which matters here: there is no C extension and therefore
+# no per-architecture wheel, so the same requirements file builds identically on the
+# arm64 CI runner. psycopg2 would need a compiled wheel and a build toolchain in the
+# image.
+pg8000==1.31.5
+
+# boto3/botocore pinned together. boto3 1.43.78 requires botocore >=1.43.78,<1.44.0, so
+# pinning both to the same version is consistent rather than over-constrained.
+boto3==1.43.78
+botocore==1.43.78
+
+# Pinned EXPLICITLY after an incident, not for tidiness: the attempt-10 image shipped
+# WITHOUT urllib3 even though botocore requires it unconditionally — the pods crashed
+# at import in both regions while the build stayed green. Naming it here makes the
+# dependency direct; the Dockerfile's import smoke test is the enforcement.
+# 2.7.0 satisfies botocore's constraint (>=1.25.4, !=2.2.0, <3).
+urllib3==2.7.0

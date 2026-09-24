@@ -44,3 +44,17 @@ updates:
           - patch
     open-pull-requests-limit: 5
     versioning-strategy: lockfile-only
+  - package-ecosystem: npm
+    directory: /eks-multi-region
+    schedule:
+      interval: weekly
+    labels:
+      - auto-approve
+      - auto-merge
+    groups:
+      all-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+    versioning-strategy: lockfile-only
