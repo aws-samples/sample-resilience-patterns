@@ -83,7 +83,11 @@ export class AppPrimaryStack extends cdk.Stack {
     const bucket = props.appCodeBucket ?? 'appcode-bucket-placeholder';
     const userData = `#!/bin/bash
 set -euxo pipefail
-dnf install -y postgresql15
+# Boot depends on the package repositories, SSM, S3 and Secrets Manager. Under set -e a single
+# transient failure in any of them would end the script before the unit exists, and then there is
+# nothing for systemd to restart. Five attempts, 10 s apart and growing (100 s in total).
+retry() { local n=0; until "$@"; do n=$((n + 1)); if [ "$n" -ge 5 ]; then return 1; fi; echo "retry $n/5: $1" >&2; sleep $((n * 10)); done; }
+retry dnf install -y postgresql15
 # The app's Python deps go in their own venv. On AL2023 the AWS CLI is a system Python package
 # whose python-dateutil (2.8.1 RPM) is older than what pg8000 requires; a bare 'pip3 install'
 # upgrades it out from under the CLI and every later 'aws' call in this script dies with
@@ -91,27 +95,28 @@ dnf install -y postgresql15
 python3 -m venv /opt/app/venv
 # Exact pins: reproducible boots and no drift into an unvetted release. AL2023's python3 is 3.9,
 # which boto3 1.43+ no longer supports; bump these together and keep THIRD-PARTY-LICENSES in step.
-/opt/app/venv/bin/pip install --quiet flask==3.1.3 pg8000==1.31.5 boto3==1.42.97
+retry /opt/app/venv/bin/pip install --quiet flask==3.1.3 pg8000==1.31.5 boto3==1.42.97
 
 REGION="${this.region}"
 PROJECT="${project}"
-DB_ENDPOINT=$(aws ssm get-parameter --region "$REGION" --name "/$PROJECT/db-writer-endpoint" --query Parameter.Value --output text)
+DB_ENDPOINT=$(retry aws ssm get-parameter --region "$REGION" --name "/$PROJECT/db-writer-endpoint" --query Parameter.Value --output text)
 
-aws s3 cp "s3://${bucket}/app/app.py"  /opt/app/app.py  --region "$REGION"
-aws s3 cp "s3://${bucket}/app/ui.html" /opt/app/ui.html --region "$REGION"
+retry aws s3 cp "s3://${bucket}/app/app.py"  /opt/app/app.py  --region "$REGION"
+retry aws s3 cp "s3://${bucket}/app/ui.html" /opt/app/ui.html --region "$REGION"
 
 # Database credentials never touch the shell trace or a world-readable file: xtrace is off while
 # the secret is in flight (set -x would echo it into cloud-init-output.log and the EC2 console
 # output), and the values go straight into a root-only environment file that the unit loads.
 set +x
-(umask 077; aws secretsmanager get-secret-value --region "$REGION" --secret-id "$PROJECT/aurora/master" --query SecretString --output text \
+(umask 077; retry aws secretsmanager get-secret-value --region "$REGION" --secret-id "$PROJECT/aurora/master" --query SecretString --output text \
   | python3 -c 'import sys,json; s=json.load(sys.stdin); print("DB_USER=" + s["username"]); print("DB_PASSWORD=" + s["password"])' > /etc/drsapp.env)
 set -x
 
 cat > /etc/systemd/system/drsapp.service <<EOF
 [Unit]
 Description=${project} app
-After=network.target
+After=network-online.target
+Wants=network-online.target
 [Service]
 Environment=AWS_REGION=$REGION
 Environment=DB_ENDPOINT=$DB_ENDPOINT
