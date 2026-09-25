@@ -2,10 +2,12 @@
 
 Runs in: deactivatingRegion. Mode: BOTH (always the last fail-back step).
 
-Resting-state invariant after this step:
+Resting-state invariant after this step, for THIS workload (other DRS workloads in the account
+are never touched; ownership is derived from the project tag, see ``common.owned_*``):
   * exactly one FAILOVER source server carrying the project tag, protecting the primary EC2,
     CONTINUOUS;
-  * no recovery instances in either region; no FAILBACK-direction source servers;
+  * none of its recovery instances left in either region; no FAILBACK-direction source servers
+    fed by them;
   * the secondary target group is empty;
   * the per-cycle recovery-job tag is cleared.
 
@@ -23,6 +25,7 @@ from . import common as c
 from .recover import job_tag_key
 
 STEP = "drs-retire"
+LIVE = ("RUNNING", "PENDING", "STOPPED", "STOPPING", "SHUTTING-DOWN")
 
 
 def handler(event, context):
@@ -36,17 +39,24 @@ def handler(event, context):
     if c.replication_state(fwd) != "CONTINUOUS":
         raise c.RetryLater("forward protection of the primary is not CONTINUOUS yet; not retiring anything")
 
+    # Ownership: recovery instances launched from this workload's forward server(s), in every EC2
+    # state, and the FAILBACK servers those instances feed. Nothing else in the account is ours.
+    ours_sec = c.owned_recovery_instances(drs_sec, cfg)
+    fb = c.owned_failback_servers(drs_pri, [ri.get("ec2InstanceID") for ri in ours_sec])
+    fb_ids = {s["sourceServerID"] for s in fb}
+    c.log(STEP, "owned", secondaryRecoveryInstances=[ri.get("ec2InstanceID") for ri in ours_sec],
+          failbackServers=sorted(fb_ids), protectedPrimary=keep_ec2)
+
     pending = []
 
     # 1. FAILBACK servers in the primary: stop replication.
-    fb = c.failback_servers(drs_pri)
     for s in fb:
         if c.replication_state(s) not in ("STOPPED", "DISCONNECTED"):
             _try(pending, f"stop_replication {s['sourceServerID']}",
                  lambda s=s: drs_pri.stop_replication(sourceServerID=s["sourceServerID"]))
 
-    # 2. Recovery instances in the secondary: stop failback, terminate.
-    for ri in drs_sec.describe_recovery_instances(filters={}).get("items", []):
+    # 2. Our recovery instances in the secondary: stop failback, terminate.
+    for ri in ours_sec:
         if ri.get("ec2InstanceState") == "TERMINATED":
             continue
         if ri.get("failback", {}).get("state", "FAILBACK_NOT_STARTED") != "FAILBACK_NOT_STARTED":
@@ -56,9 +66,12 @@ def handler(event, context):
              lambda ri=ri: drs_sec.terminate_recovery_instances(recoveryInstanceIDs=[ri["recoveryInstanceID"]]))
         pending.append(f"terminating recovery instance {ri.get('ec2InstanceID')} in {cfg.secondary_region}")
 
-    # 3. Primary: delete recovery RECORDS (never terminate -- may be the live primary), then the FAILBACK servers.
+    # 3. Primary: delete OUR recovery RECORDS (never terminate -- may be the live primary), then the
+    #    FAILBACK servers. A record is ours when a FAILBACK server of ours launched it, or when it is
+    #    the protected primary itself (launch-into-source).
     for ri in drs_pri.describe_recovery_instances(filters={}).get("items", []):
-        if ri.get("ec2InstanceID") == keep_ec2 or ri.get("ec2InstanceState") != "TERMINATED":
+        ours = ri.get("sourceServerID") in fb_ids or ri.get("ec2InstanceID") == keep_ec2
+        if ours and (ri.get("ec2InstanceID") == keep_ec2 or ri.get("ec2InstanceState") != "TERMINATED"):
             _try(pending, f"delete primary recovery record {ri['recoveryInstanceID']}",
                  lambda ri=ri: drs_pri.delete_recovery_instance(recoveryInstanceID=ri["recoveryInstanceID"]))
     for s in fb:
@@ -77,9 +90,10 @@ def handler(event, context):
         _try(pending, "untag recovery-job", lambda: drs_sec.untag_resource(resourceArn=fwd["arn"], tagKeys=[job_tag_key(cfg)]))
 
     leftovers = []
-    if c.recovery_instances(drs_sec, None, states=("RUNNING", "PENDING", "STOPPED", "STOPPING", "SHUTTING-DOWN")):
-        leftovers.append("secondary recovery instance(s) still present")
-    if c.failback_servers(drs_pri):
+    still = c.owned_recovery_instances(drs_sec, cfg, states=LIVE)
+    if still:
+        leftovers.append(f"secondary recovery instance(s) still present: {[ri.get('ec2InstanceID') for ri in still]}")
+    if c.owned_failback_servers(drs_pri, [ri.get("ec2InstanceID") for ri in c.owned_recovery_instances(drs_sec, cfg)]):
         leftovers.append("FAILBACK source server(s) still present in the primary")
     if leftovers or pending:
         raise c.RetryLater("; ".join(leftovers + pending))

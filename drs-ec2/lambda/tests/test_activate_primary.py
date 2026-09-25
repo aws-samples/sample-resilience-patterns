@@ -204,3 +204,80 @@ def test_retire_logs_and_retries_blocking_failures(world, capsys):
     logged = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
     blocking = [r for r in logged if r["message"] == "cleanup call failed" and r["bestEffort"] is False]
     assert blocking and blocking[0]["call"].startswith("terminate i-rec")
+
+
+# ---- ownership: another DRS workload in the same account and Regions is never touched ----------
+
+def _other_workload(world):
+    """A second, unrelated DRS-protected workload mid-fail-back in the same two Regions."""
+    world.source_servers[SECONDARY].append({
+        "sourceServerID": "s-other", "arn": f"arn:aws:drs:{SECONDARY}:1:source-server/s-other",
+        "replicationDirection": "FAILOVER", "tags": {"payroll:role": "app"},
+        "sourceProperties": {"identificationHints": {"awsInstanceID": "i-other-primary"}},
+        "dataReplicationInfo": {"dataReplicationState": "CONTINUOUS", "replicatedDisks": []}})
+    world.recovery_instances[SECONDARY].append(
+        recovery_instance("i-other-rec", "s-other", failback_state="FAILBACK_COMPLETED"))
+    world.source_servers[PRIMARY].append(failback_server(instance_id="i-other-rec", sid="s-other-fb"))
+    world.recovery_instances[PRIMARY].append(recovery_instance("i-zz-other-failedback", "s-other-fb"))
+
+
+def test_retire_never_touches_another_workloads_drs_resources(world):
+    _failover_estate(world, launch_into="i-primary", failback_state="FAILBACK_COMPLETED")
+    world.recovery_instances[PRIMARY] = [recovery_instance("i-primary", "s-fb")]
+    world.targets[SEC_TG] = []
+    _other_workload(world)
+    with pytest.raises(c.RetryLater):
+        retire.handler({}, None)
+    # ours, as before
+    assert world.calls("drs", PRIMARY, "stop_replication") == [("stop_replication", {"sourceServerID": "s-fb"})]
+    assert world.calls("drs", SECONDARY, "terminate_recovery_instances") == \
+        [("terminate_recovery_instances", {"recoveryInstanceIDs": ["ri-i-rec"]})]
+    assert world.calls("drs", PRIMARY, "delete_recovery_instance") == \
+        [("delete_recovery_instance", {"recoveryInstanceID": "ri-i-primary"})]
+    assert world.calls("drs", PRIMARY, "delete_source_server") == [("delete_source_server", {"sourceServerID": "s-fb"})]
+    # theirs, untouched: no call anywhere names s-other-fb, ri-i-other-rec or ri-i-other-failedback
+    for region in (PRIMARY, SECONDARY):
+        for op, kw in world.calls("drs", region):
+            assert "other" not in str(kw), f"{region} {op} touched the other workload: {kw}"
+
+
+def test_retire_does_not_wait_for_another_workloads_leftovers(world):
+    # At rest for us; the other workload's fail-back is still in flight. Not our problem.
+    world.source_servers[SECONDARY] = [forward_server()]
+    _other_workload(world)
+    out = retire.handler({}, None)
+    assert out["status"] == "RETIRED"
+
+
+def test_retire_owns_recovery_instances_of_a_retired_forward_server(world):
+    """After a stateful re-protect the recovery instance was launched from the OLD forward server,
+    now tagged app-retired. It is still ours and must still be retired."""
+    world.source_servers[SECONDARY] = [
+        forward_server(instance_id="i-primary", sid="s-fwd2"),
+        forward_server(instance_id="i-primary", sid="s-fwd-old", tags={"drsdemo:role": "app-retired"}),
+    ]
+    world.recovery_instances[SECONDARY] = [recovery_instance("i-rec", "s-fwd-old", failback_state="FAILBACK_COMPLETED")]
+    world.source_servers[PRIMARY] = [failback_server(instance_id="i-rec")]
+    world.targets[SEC_TG] = []
+    with pytest.raises(c.RetryLater):
+        retire.handler({}, None)
+    assert world.calls("drs", SECONDARY, "terminate_recovery_instances")[0][1] == {"recoveryInstanceIDs": ["ri-i-rec"]}
+    assert world.calls("drs", PRIMARY, "delete_source_server")[0][1] == {"sourceServerID": "s-fb"}
+
+
+def test_register_failback_ignores_another_workloads_failback_instance(world, stateful):
+    _failover_estate(world, launch_into="i-primary")
+    world.recovery_instances[PRIMARY] = [recovery_instance("i-primary", "s-fb")]
+    world.targets[PRI_TG] = [target("i-primary", "healthy")]
+    _other_workload(world)  # i-zz-other-failedback sorts after i-primary: the old max-id pick chose it
+    out = register_failback.handler({}, None)
+    assert out["instanceId"] == "i-primary"
+    assert not world.calls("elbv2", PRIMARY, "register_targets")
+
+
+def test_register_failback_refuses_to_guess_between_two_of_ours(world, stateful):
+    _failover_estate(world, launch_into="i-primary")
+    world.recovery_instances[PRIMARY] = [recovery_instance("i-primary", "s-fb"), recovery_instance("i-stray", "s-fb")]
+    with pytest.raises(c.StepFailed, match="exactly one RUNNING failback recovery instance"):
+        register_failback.handler({}, None)
+    assert not world.calls("elbv2", PRIMARY, "register_targets")

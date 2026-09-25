@@ -17,7 +17,7 @@ Deploy this three-AWS-Region sample in your account to replicate an Amazon EC2 a
 
 **Activate primary (fail back)** activates the original Region. `activePassive` plans have no deactivate step. In stateless mode the plan switches Aurora back, runs `register-failback` and `retire`, then flips DNS back. With `STATEFUL_EC2=true`, the plan also runs `reverse-replicate`, `failback-launch`, and `reprotect`, so the disks that served in the DR Region return to the stopped original instance. See [`docs/failback-stateful.png`](docs/failback-stateful.png).
 
-Every fail-back ends at the same resting state: the original instance is protected again, no recovery instances remain, and the secondary target group is empty. The application reads its Region from the instance metadata service and resolves the DB writer from SSM on every request, so it follows the writer without a restart.
+Every fail-back ends at the same resting state: the original instance is protected again, none of this sample's recovery instances remain, and the secondary target group is empty. The application reads its Region from the instance metadata service and resolves the DB writer from SSM on every request, so it follows the writer without a restart.
 
 ## Reuse the DRS steps
 
@@ -43,7 +43,7 @@ AWS CloudFormation does not create the AWS DRS source server or application-code
 
 ## Prerequisites
 
-Deploy this sample only into a sandbox AWS account that holds nothing else. Do not deploy it into a production account or into an account that runs other AWS DRS workloads. The sample creates account-level AWS DRS settings and IAM roles, peers three VPCs, and its fail-back step retires every AWS DRS recovery instance and FAILBACK source server it finds in the two workload Regions, not only the ones this sample created.
+Deploy this sample only into a sandbox AWS account that holds nothing else. Do not deploy it into a production account. The sample creates account-level AWS DRS settings and IAM roles, peers three VPCs, and its cleanup deletes the AWS DRS security groups and log groups it finds by name. The plan's fail-back and retire steps act only on AWS DRS resources that descend from this sample's tagged source server, so another AWS DRS workload in the same account is not selected, but the account-level settings are shared.
 
 - AWS CDK bootstrapped in `us-east-2`, `us-west-2`, and `us-east-1`.
 - AWS CLI v2. Pass `PROFILE=<name>` to `make`, set `AWS_PROFILE`, or use the default credential chain.

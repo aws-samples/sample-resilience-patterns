@@ -170,6 +170,43 @@ def failback_server_for(drs_origin, ec2_instance_id: str) -> Optional[dict]:
     return None
 
 
+# ---------------------------------------------------------------------------------------------
+# Ownership. An account may run other DRS workloads in the same two Regions; the fail-back and
+# retire steps must never select, stop, terminate or delete anything that is not this plan's.
+# Ownership flows from the project tag on the forward source server(s): recovery instances are
+# owned through the server that launched them, FAILBACK servers through the owned recovery
+# instance that feeds them. No EC2 tag lookups; DRS alone is the source of truth.
+# ---------------------------------------------------------------------------------------------
+
+def project_source_servers(drs_secondary, cfg: Config) -> List[dict]:
+    """Every FAILOVER-direction server this workload created in the secondary: the one the plan
+    recovers (``tag_value``) and any a stateful re-protect left behind (``tag_value-retired``).
+    A recovery instance launched from a retired server still belongs to this workload."""
+    mine = {cfg.tag_value, f"{cfg.tag_value}-retired"}
+    return [s for s in all_source_servers(drs_secondary)
+            if s.get("tags", {}).get(cfg.tag_key) in mine
+            and s.get("replicationDirection", "FAILOVER") == "FAILOVER"]
+
+
+def owned_recovery_instances(drs_secondary, cfg: Config, states=None) -> List[dict]:
+    """Recovery instances launched from this workload's source servers, in any EC2 state unless
+    ``states`` narrows it. TERMINATED records are included on purpose: they are how a FAILBACK
+    server stays linked to this workload across retire retries."""
+    sids = {s["sourceServerID"] for s in project_source_servers(drs_secondary, cfg)}
+    if not sids:
+        return []
+    items = drs_secondary.describe_recovery_instances(filters={"sourceServerIDs": sorted(sids)}).get("items", [])
+    return [ri for ri in items
+            if ri.get("sourceServerID") in sids and (states is None or ri.get("ec2InstanceState") in states)]
+
+
+def owned_failback_servers(drs_origin, owned_recovery_ec2_ids) -> List[dict]:
+    """FAILBACK-direction servers in the origin region whose data source is one of this workload's
+    recovery instances (same key as :func:`failback_server_for`)."""
+    ids = set(owned_recovery_ec2_ids)
+    return [s for s in failback_servers(drs_origin) if protected_instance_id(s) in ids]
+
+
 def recovery_instances(drs, source_server_id: Optional[str] = None, states=("RUNNING",),
                        include_drills: bool = False) -> List[dict]:
     filters = {"sourceServerIDs": [source_server_id]} if source_server_id else {}
