@@ -167,6 +167,27 @@ def _maybe_prune(cur):
 
 @app.route("/health")
 def health():
+    """Target-group health check: proves the data path, not just the process.
+
+    `register-target` waits for this to report healthy before the plan moves on, so a recovered
+    instance whose security group, route or writer endpoint is wrong must answer 503 here. The
+    probe is `SELECT 1` against the endpoint currently published in SSM: it verifies reachability
+    and authentication, and on purpose does not check the writer role (a reader answers too), so
+    the primary does not flap during a planned Aurora switchover.
+    """
+    if pgdb is None:
+        return "pg8000 not installed", 503
+    try:
+        conn = _connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchone()
+            cur.close()
+        finally:
+            conn.close()
+    except Exception as exc:  # the class name is enough for the ALB and the operator; no endpoint details
+        return f"db unreachable ({type(exc).__name__})", 503
     return "ok", 200
 
 
