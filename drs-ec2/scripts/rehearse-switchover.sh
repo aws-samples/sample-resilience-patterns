@@ -72,7 +72,9 @@ run_plan() { # run_plan <action> <target-region> [mode]
       --plan-arn "$PLAN_ARN" --execution-id "$eid" --query 'executionState' --output text 2>/dev/null || echo "?")
     echo "  [$action] state ($i): $st"
     case "$st" in
-      completedWithExceptions) echo "  NOTE: completed with a skipped step -- check stepStates"; return 0 ;;
+      # A skipped step (the only ungraceful behavior a Lambda block has) means the plan finished
+      # without part of the estate, for the DRS steps without the EC2 tier. That is not a pass.
+      completedWithExceptions) echo "  FAIL: completed with skipped step(s):"; aws arc-region-switch get-plan-execution --region "$target" --plan-arn "$PLAN_ARN" --execution-id "$eid" --query "stepStates[?status!=\`completed\`].[name,status]" --output text; return 1 ;;
       *completed*|*COMPLETED*|*SUCCEEDED*) return 0 ;;
       pausedByFailedStep) echo "  step failed -- plan paused; use update-plan-execution-step (skip|switchToUngraceful)"; aws arc-region-switch get-plan-execution --region "$target" --plan-arn "$PLAN_ARN" --execution-id "$eid" --query "stepStates[?status==\`failed\`].[name,status]" --output text; return 1 ;;
       *FAILED*|*CANCEL*|*ERROR*) echo "  step states:"; aws arc-region-switch get-plan-execution --region "$target" --plan-arn "$PLAN_ARN" --execution-id "$eid" --query 'stepStates' --output json | head -40; return 1 ;;
@@ -88,9 +90,13 @@ run_plan activate "$SECONDARY" "$MODE" || { echo "ACTIVATE failed"; exit 1; }
 echo "== [3] verify secondary is serving =="
 sleep 20
 A=$(snapshot); echo "$A"; AR=$(writer_of "$A")
-[[ "$AR" == "$SECONDARY" ]] && echo "PASS: Aurora writer is in $SECONDARY" || echo "WARN: expected writer in $SECONDARY, got $AR"
-echo "$A" | grep -q "secondary_tg: i-[a-z0-9]*:healthy" && echo "PASS: recovered EC2 healthy in secondary TG" || echo "WARN: no healthy target in secondary TG"
-echo "$A" | grep -q "$SECONDARY=healthy" && echo "PASS: ARC health check for $SECONDARY is healthy" || echo "WARN: $SECONDARY ARC check not healthy"
+# Each check is PASS or FAIL. A failure does not stop the script (the fail-back below returns the
+# estate to rest either way) but the rehearsal exits non-zero at the end.
+FAILURES=0
+check() { if eval "$1"; then echo "PASS: $2"; else echo "FAIL: $3"; FAILURES=$((FAILURES + 1)); fi; }
+check '[[ "$AR" == "$SECONDARY" ]]' "Aurora writer is in $SECONDARY" "expected writer in $SECONDARY, got $AR"
+check 'echo "$A" | grep -q "secondary_tg: i-[a-z0-9]*:healthy"' "recovered EC2 healthy in secondary TG" "no healthy target in secondary TG"
+check 'echo "$A" | grep -q "$SECONDARY=healthy"' "ARC health check for $SECONDARY is healthy" "$SECONDARY ARC check not healthy"
 
 echo "== [4] FAIL BACK: activate $PRIMARY via the plan =="
 run_plan activate "$PRIMARY" || { echo "FAIL-BACK failed -- environment may be mid-switch, investigate"; exit 1; }
@@ -98,6 +104,7 @@ run_plan activate "$PRIMARY" || { echo "FAIL-BACK failed -- environment may be m
 echo "== [5] re-verify primary serving =="
 sleep 20
 P=$(snapshot); echo "$P"; PR=$(writer_of "$P")
-[[ "$PR" == "$PRIMARY" ]] && echo "PASS: Aurora writer back in $PRIMARY" || echo "WARN: expected writer in $PRIMARY, got $PR"
+check '[[ "$PR" == "$PRIMARY" ]]' "Aurora writer back in $PRIMARY" "expected writer in $PRIMARY, got $PR"
 echo "post-fail-back region (primary ALB): $PR"
 echo "=== rehearsal complete. baseline=$(writer_of "$B") activated=$AR failedBack=$PR ==="
+if (( FAILURES )); then echo "=== rehearsal FAILED: $FAILURES check(s) failed (see FAIL lines above) ==="; exit 1; fi

@@ -105,7 +105,8 @@ for i in $(seq 1 30); do
   [[ "$PING" == "Online" ]] && break
   echo "  waiting for SSM Online ($i): ${PING:-none}"; sleep 20
 done
-echo "SSM ping: ${PING:-unknown}"
+[[ "${PING:-}" == "Online" ]] || { echo "ERROR: $IID is not SSM Online after 10 min (last: ${PING:-none}); the agent install and the app refresh both run through SSM"; exit 1; }
+echo "SSM ping: $PING"
 
 # A CloudFormation instance REPLACEMENT (UserData or AMI change) leaves the old instance's source
 # server behind, still tagged ${PROJECT}:role=app. The plan's Lambdas select the source server by
@@ -169,6 +170,10 @@ for i in $(seq 1 30); do
   [[ -n "$SS" && "$SS" != "None" ]] && { echo "source server registered: $SS"; break; }
   echo "  no source server yet ($i)"; sleep 30
 done
+# Everything after this point (launch template, replication config, the tag the plan selects by,
+# the wait for CONTINUOUS) needs the source server. Without it `make deploy` used to print
+# "DRS setup done" and exit 0 with nothing protected.
+[[ -n "${SS:-}" && "$SS" != "None" ]] || { echo "ERROR: no DRS source server registered for $IID within 15 min; the agent install reported success but DRS never saw the server"; exit 1; }
 # [5] Configure the DRS launch template. DRS auto-creates one per source server with NO
 #     subnet/SG/instance-profile -- a recovery launch then FAILS silently (job log shows
 #     SNAPSHOT_END -> JOB_END with no error; launchStatus=FAILED). Proven live 2026-09-10.
@@ -204,9 +209,17 @@ if [[ -n "${SS:-}" && "$SS" != "None" ]]; then
 fi
 echo "=== DRS setup done. Tag the source server so the recover Lambda finds it: ==="
 if [[ -n "${SS:-}" && "$SS" != "None" ]]; then
+  # The tag is the contract between this script and the plan: common.tagged_source_server() fails
+  # the execution unless exactly one FAILOVER server carries it. So the write must not be
+  # best-effort, and the read-back proves it landed.
+  ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
   aws drs tag-resource --region "$SECONDARY" \
-    --resource-arn "arn:aws:drs:${SECONDARY}:$(aws sts get-caller-identity --query Account --output text):source-server/${SS}" \
-    --tags "drsdemo:role=app" 2>&1 | tail -2 || echo "(tag may need manual apply)"
+    --resource-arn "arn:aws:drs:${SECONDARY}:${ACCOUNT_ID}:source-server/${SS}" \
+    --tags "${PROJECT}:role=app"
+  TAGGED=$(aws drs describe-source-servers --region "$SECONDARY" --filters sourceServerIDs="$SS" \
+    --query "items[0].tags.\"${PROJECT}:role\"" --output text)
+  [[ "$TAGGED" == "app" ]] || { echo "ERROR: ${PROJECT}:role=app is not on $SS after tag-resource (read back: ${TAGGED:-none})"; exit 1; }
+  echo "tagged $SS with ${PROJECT}:role=app"
 
   # [7] `make deploy` ends at the resting state, which requires forward replication CONTINUOUS.
   # Initial sync of the 8 GB root volume takes 15 to 25 minutes from agent registration (e2e

@@ -107,7 +107,7 @@ synth: ## Synthesize every stack with placeholder context (CI build)
 # ---------------------------------------------------------------------------------------------
 # deploy -- deployment order, one target per step so each can read the previous step's outputs
 # ---------------------------------------------------------------------------------------------
-deploy: check-account stacks app-code drs-setup status ## Deploy all 11 stacks (3 regions), upload app code, set up DRS, run the resting-state check (~60 min)
+deploy: check-account stacks app-code drs-setup status ## Deploy all 11 stacks (3 regions), upload app code, set up DRS, print the resting-state view (~75 min from empty)
 
 stacks: net-1 net-2 iam db-primary db-secondary app-primary alb-secondary drs-steps plan observer net-3 app-final ## Deploy the 11 stacks in dependency order (~50 min from an empty account)
 	@echo "observer bastion: $(call so,$(OBSERVER_REGION),observer,BastionInstanceId) in $(OBSERVER_REGION) -- make tunnel"
@@ -148,10 +148,10 @@ app-final: ## 10. bind ARC health checks, associate the zone with all VPCs, open
 app-code: check-account ## Upload app/app.py + app/ui.html; refresh a running instance in place (no replacement)
 	@scripts/app-code.sh $(PROFILE_ARG) $(APP_BUCKET)
 
-drs-setup: check-account ## Initialize DRS in both regions, configure templates, install the agent via SSM, tag the source server, wait for CONTINUOUS (~12 min)
+drs-setup: check-account ## Initialize DRS in both regions, configure templates, install the agent via SSM, tag the source server, wait for CONTINUOUS (15 to 25 min)
 	@scripts/drs-setup.sh $(PROFILE_ARG)
 
-status: check-account ## Resting-state check
+status: check-account ## Resting-state view (informational, always exits 0; rehearse-cycle asserts the invariant)
 	@scripts/status.sh $(PROFILE_ARG)
 
 rehearse: check-account ## One graceful round trip via the plan (MODE=ungraceful for a forced Aurora failover on the way out)
