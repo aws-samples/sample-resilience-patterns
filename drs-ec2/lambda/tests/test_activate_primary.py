@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from drs_region_switch import common as c
@@ -170,3 +172,35 @@ def test_retire_returns_at_resting_state_and_clears_job_tag(world):
     out = retire.handler({}, None)
     assert out["status"] == "RETIRED" and out["protectedPrimary"] == "i-primary"
     assert world.calls("drs", SECONDARY, "untag_resource")[0][1]["tagKeys"] == ["drsdemo:recovery-job"]
+
+
+def test_retire_logs_best_effort_failures_without_blocking(world, capsys):
+    """stop_failback may fail while DRS is already tearing the instance down. It must be logged
+    (before this pin it was discarded through a throwaway list) but must not stop the terminate."""
+    _failover_estate(world, launch_into="i-primary", failback_state="FAILBACK_COMPLETED")
+    world.targets[SEC_TG] = []
+    drs_sec = world.client("drs", SECONDARY)
+
+    def boom(**_):
+        raise Exception("StopFailback refused: failback already stopping")
+    drs_sec.stop_failback = boom
+    with pytest.raises(c.RetryLater) as ex:
+        retire.handler({}, None)
+    logged = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
+    failures = [r for r in logged if r["message"] == "cleanup call failed"]
+    assert failures and failures[0]["bestEffort"] is True and "stop_failback ri-i-rec" == failures[0]["call"]
+    assert "StopFailback refused" in failures[0]["error"]
+    # best-effort: not part of the retry reason, and the terminate still happened
+    assert "stop_failback" not in str(ex.value)
+    assert world.calls("drs", SECONDARY, "terminate_recovery_instances")
+
+
+def test_retire_logs_and_retries_blocking_failures(world, capsys):
+    _failover_estate(world, launch_into="i-primary", failback_state="FAILBACK_COMPLETED")
+    world.targets[SEC_TG] = []
+    world.refuse_terminate = True
+    with pytest.raises(c.RetryLater, match="terminate i-rec"):
+        retire.handler({}, None)
+    logged = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
+    blocking = [r for r in logged if r["message"] == "cleanup call failed" and r["bestEffort"] is False]
+    assert blocking and blocking[0]["call"].startswith("terminate i-rec")

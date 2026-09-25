@@ -50,7 +50,8 @@ def handler(event, context):
         if ri.get("ec2InstanceState") == "TERMINATED":
             continue
         if ri.get("failback", {}).get("state", "FAILBACK_NOT_STARTED") != "FAILBACK_NOT_STARTED":
-            _try([], "stop_failback", lambda ri=ri: drs_sec.stop_failback(recoveryInstanceID=ri["recoveryInstanceID"]))
+            _try(pending, f"stop_failback {ri.get('recoveryInstanceID')}",
+                 lambda ri=ri: drs_sec.stop_failback(recoveryInstanceID=ri["recoveryInstanceID"]), best_effort=True)
         _try(pending, f"terminate {ri.get('ec2InstanceID')} (failback winding down)",
              lambda ri=ri: drs_sec.terminate_recovery_instances(recoveryInstanceIDs=[ri["recoveryInstanceID"]]))
         pending.append(f"terminating recovery instance {ri.get('ec2InstanceID')} in {cfg.secondary_region}")
@@ -61,7 +62,8 @@ def handler(event, context):
             _try(pending, f"delete primary recovery record {ri['recoveryInstanceID']}",
                  lambda ri=ri: drs_pri.delete_recovery_instance(recoveryInstanceID=ri["recoveryInstanceID"]))
     for s in fb:
-        _try([], "disconnect", lambda s=s: drs_pri.disconnect_source_server(sourceServerID=s["sourceServerID"]))
+        _try(pending, f"disconnect {s['sourceServerID']}",
+             lambda s=s: drs_pri.disconnect_source_server(sourceServerID=s["sourceServerID"]), best_effort=True)
         _try(pending, f"delete FAILBACK server {s['sourceServerID']}",
              lambda s=s: drs_pri.delete_source_server(sourceServerID=s["sourceServerID"]))
 
@@ -86,8 +88,14 @@ def handler(event, context):
     return {"status": "RETIRED", "protectedPrimary": keep_ec2, "forwardSourceServer": fwd["sourceServerID"]}
 
 
-def _try(pending, what, fn):
+def _try(pending, what, fn, best_effort=False):
+    """Run one cleanup call. Every failure is logged; unless ``best_effort``, it is also appended to
+    ``pending`` so the step raises RetryLater and ARC retries. Best-effort calls (stop-failback on an
+    instance DRS is already tearing down, disconnect before delete) are allowed to fail without
+    blocking the retire, but never silently."""
     try:
         fn()
     except Exception as e:  # DRS is winding down; report and let ARC retry
-        pending.append(f"{what}: {e}")
+        c.log(STEP, "cleanup call failed", call=what, error=str(e), bestEffort=best_effort)
+        if not best_effort:
+            pending.append(f"{what}: {e}")
