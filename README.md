@@ -4,6 +4,7 @@
 ![s3mrap-crr e2e](https://github.com/aws-samples/sample-resilience-patterns/actions/workflows/s3mrap-crr-e2e.yml/badge.svg)
 ![aurora build](https://github.com/aws-samples/sample-resilience-patterns/actions/workflows/aurora-build.yml/badge.svg)
 ![aurora e2e](https://github.com/aws-samples/sample-resilience-patterns/actions/workflows/aurora-e2e.yml/badge.svg)
+![drs-ec2 build](https://github.com/aws-samples/sample-resilience-patterns/actions/workflows/drs-ec2-build.yml/badge.svg)
 
 A collection of sample implementations demonstrating resilient architectures for common AWS services and patterns. Each subdirectory is a standalone, fully deployable reference implementation.
 
@@ -17,6 +18,7 @@ These samples show how to build resilient, multi-region, and fault-tolerant syst
 |-----------|-------------|
 | [`s3mrap-crr/`](s3mrap-crr/) | S3 Multi-Region Access Points with bidirectional Cross-Region Replication, ARC-based failover, CloudWatch observability, and replication latency load testing |
 | [`aurora/`](aurora/) | Aurora Global Database + Aurora DSQL multi-region resilience with ARC Region Switch failover, CloudWatch Synthetics, RPO monitoring, post-failover reconciliation, FIS chaos testing, and load generation |
+| [`drs-ec2/`](drs-ec2/) | Amazon EC2 disaster recovery with AWS Elastic Disaster Recovery (AWS DRS) orchestrated by Amazon Application Recovery Controller (ARC) Region switch, with Amazon Aurora Global Database and Amazon Route 53 failover; reusable AWS CDK construct and Terraform module for the AWS DRS plan steps; failover and fail-back rehearsals, including stateful fail-back onto the original instance |
 
 ## Technology
 
