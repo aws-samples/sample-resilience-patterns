@@ -12,7 +12,7 @@ Deploy this three-AWS-Region sample in your account to replicate an Amazon EC2 a
 
 1. Aurora Global Database switchover through the native ARC `GlobalAuroraConfig` block. `switchoverOnly` gives zero data loss. You can select `ungraceful: failover` when you start the execution.
 2. `recover`: calls `StartRecovery` for the tagged source server, waits for the launch job, and adopts the recovery instance.
-3. `register-target`: points the DB-writer SSM parameter at the new writer, registers the recovered instance in the secondary target group, and waits for `healthy`.
+3. `register-target`: points the DB-writer SSM parameter at the new writer, registers the recovered instance in the secondary target group, and waits for `healthy`. The target group probes `/health`, which runs `SELECT 1` against the published writer endpoint, so `healthy` means the recovered instance reaches the database, not only that the process is up.
 4. DNS flip through the native ARC `Route53HealthCheck` block, which switches the health checks bound to the Route 53 failover record pair.
 
 **Activate primary (fail back)** activates the original Region. `activePassive` plans have no deactivate step. In stateless mode the plan switches Aurora back, runs `register-failback` and `retire`, then flips DNS back. With `STATEFUL_EC2=true`, the plan also runs `reverse-replicate`, `failback-launch`, and `reprotect`, so the disks that served in the DR Region return to the stopped original instance. See [`docs/failback-stateful.png`](docs/failback-stateful.png).
@@ -43,6 +43,8 @@ AWS CloudFormation does not create the AWS DRS source server or application-code
 
 ## Prerequisites
 
+Deploy this sample only into a sandbox AWS account that holds nothing else. Do not deploy it into a production account or into an account that runs other AWS DRS workloads. The sample creates account-level AWS DRS settings and IAM roles, peers three VPCs, and its fail-back step retires every AWS DRS recovery instance and FAILBACK source server it finds in the two workload Regions, not only the ones this sample created.
+
 - AWS CDK bootstrapped in `us-east-2`, `us-west-2`, and `us-east-1`.
 - AWS CLI v2. Pass `PROFILE=<name>` to `make`, set `AWS_PROFILE`, or use the default credential chain.
 - Node.js 20+, Python 3.12+ (for the Lambda unit tests), `make`, and the Session Manager plugin for the AWS CLI.
@@ -59,7 +61,7 @@ make status PROFILE=<aws-profile>
 make help
 ```
 
-From an empty account, `make deploy` takes ~60 min. The 11 stacks take ~50 min, including two Aurora clusters. AWS DRS takes ~12 min to reach `CONTINUOUS`. Re-running refreshes the application through SSM instead of replacing the instance. Set `STATEFUL_EC2=true` for stateful fail-back. Use `make stacks` for stacks only.
+From an empty account, `make deploy` takes ~75 min. The 11 stacks take ~50 min, including two Aurora clusters. AWS DRS takes 15 to 25 min from agent registration to `CONTINUOUS` for the 8 GB root volume, and `make deploy` waits for it. Re-running refreshes the application through SSM instead of replacing the instance. Set `STATEFUL_EC2=true` for stateful fail-back. Use `make stacks` for stacks only.
 
 **Cost:** You incur charges while the sample runs. Run cleanup after testing.
 
@@ -98,6 +100,8 @@ You can also run `./cleanup.sh`. Cleanup takes ~30 min. Re-run it after a failur
 Report security issues through Security issue notifications in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 This demo uses HTTP through internal Application Load Balancers, password authentication, disabled deletion protection, no Application Load Balancer access logs, no VPC flow logs, no detailed monitoring, and no secret rotation. AWS DRS replicates the root volume as-is.
+
+Three more choices keep the demo small and are not suitable for production. The application runs as root under systemd and connects to Aurora as the master user; a production deployment runs the service as a dedicated OS user and connects as a database role with only the grants it needs. The demo console at `/ui` has no authentication: any client that can reach an internal Application Load Balancer can read the control-plane view and start the plan through `POST /api/failover`. Use it in a sandbox account behind the Session Manager tunnel, and remove or protect it before reusing the application code.
 
 The cdk-nag exceptions document these demo choices: `AwsSolutions-IAM4`, `AwsSolutions-IAM5`, `AwsSolutions-EC23`, `AwsSolutions-EC26`, `AwsSolutions-EC28`, `AwsSolutions-EC29`, `AwsSolutions-ELB2`, `AwsSolutions-RDS6`, `AwsSolutions-RDS10`, `AwsSolutions-RDS11`, `AwsSolutions-SMG4`, `AwsSolutions-VPC7`, and `AwsSolutions-L1`. `AwsSolutions-IAM4` covers documented service policies. `AwsSolutions-IAM5` covers caller-credential AWS DRS permissions. `AwsSolutions-RDS6` uses Secrets Manager. `AwsSolutions-L1` uses Python 3.12.
 
