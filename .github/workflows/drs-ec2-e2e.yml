@@ -22,7 +22,7 @@ jobs:
           node-version: "20"
       - uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::563688183446:role/github-actions-drs-ec2
+          role-to-assume: arn:aws:iam::${{ vars.E2E_ACCOUNT_ID }}:role/github-actions-drs-ec2
           aws-region: us-east-2
           role-duration-seconds: 14400
       - run: npm ci
@@ -38,7 +38,7 @@ jobs:
       - name: Refresh AWS credentials (pre-cleanup)
         uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::563688183446:role/github-actions-drs-ec2
+          role-to-assume: arn:aws:iam::${{ vars.E2E_ACCOUNT_ID }}:role/github-actions-drs-ec2
           aws-region: us-east-2
       - name: Cleanup on success
         if: success()

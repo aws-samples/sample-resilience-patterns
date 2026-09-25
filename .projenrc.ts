@@ -120,7 +120,11 @@ const SHARED_CDK_CONFIG = {
   gitignore: ['cdk.out.*/', '/temporary/'],
 };
 
-const E2E_ACCOUNT = '563688183446';
+// The e2e account id lives in the repository variable E2E_ACCOUNT_ID (Settings > Secrets and
+// variables > Actions > Variables), not in source: the public workflow YAML then carries no account
+// id, and a fork points the same workflows at its own account by setting the variable. GitHub
+// resolves `vars` before the step runs; the expression sits in a `with:` value, never in `run:`.
+const E2E_ACCOUNT = '${{ vars.E2E_ACCOUNT_ID }}';
 
 const patterns: Pattern[] = [
   // -------------------------------------------------------------------------
