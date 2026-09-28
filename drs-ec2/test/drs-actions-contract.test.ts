@@ -17,7 +17,7 @@ const IAM_TF = path.join(__dirname, '..', 'terraform', 'iam.tf');
  * DRS calls these itself, under the caller's identity (forwarded access session), while it services
  * StartRecovery and StartFailbackLaunch. IAM evaluates them against the orchestration role, but no
  * Lambda source line names them, so a code-derived list cannot see them. Evidence: CloudTrail for the
- * 2026-09-18 rehearsals in account 563688183446, eventSource drs.amazonaws.com, userIdentity.invokedBy
+ * 2026-09-18 rehearsals in the e2e account, eventSource drs.amazonaws.com, userIdentity.invokedBy
  * drs.amazonaws.com, sessionIssuer = the orchestration role, sessions drsdemo-drs-recover-ec2,
  * drsdemo-drs-failback-launch, drsdemo-drs-reverse-replicate and drsdemo-drs-reprotect.
  */
