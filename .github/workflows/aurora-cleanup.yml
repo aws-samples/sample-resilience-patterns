@@ -16,6 +16,6 @@ jobs:
       - uses: actions/checkout@v6
       - uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::563688183446:role/github-actions-aurora
+          role-to-assume: arn:aws:iam::${{ vars.E2E_ACCOUNT_ID }}:role/github-actions-aurora
           aws-region: us-east-1
       - run: ./cleanup.sh

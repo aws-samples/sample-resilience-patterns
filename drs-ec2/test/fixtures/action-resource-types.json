@@ -1,0 +1,277 @@
+{
+ "_source": "https://servicereference.us-east-1.amazonaws.com/v1/<service>/<service>.json (AWS Service Reference, the data behind the IAM Service Authorization Reference), fetched 2026-09-24. Value = the resource types IAM accepts for the action; [] means the action supports no resource-level permission and must be granted on Resource \"*\". Refresh: node test/fixtures/refresh-action-resource-types.mjs",
+ "actions": {
+  "arc-region-switch:GetPlanEvaluationStatus": [
+   "plan"
+  ],
+  "arc-region-switch:GetPlanExecution": [
+   "plan"
+  ],
+  "arc-region-switch:ListRoute53HealthChecks": [
+   "plan"
+  ],
+  "arc-region-switch:StartPlanExecution": [
+   "plan"
+  ],
+  "cloudformation:DeleteStack": [
+   "stack"
+  ],
+  "cloudformation:DescribeStackEvents": [
+   "stack"
+  ],
+  "cloudformation:DescribeStackResources": [
+   "stack"
+  ],
+  "cloudformation:DescribeStacks": [
+   "stack"
+  ],
+  "drs:CreateLaunchConfigurationTemplate": [],
+  "drs:CreateReplicationConfigurationTemplate": [],
+  "drs:DeleteSourceServer": [
+   "SourceServerResource"
+  ],
+  "drs:DescribeLaunchConfigurationTemplates": [],
+  "drs:DescribeRecoveryInstances": [],
+  "drs:DescribeReplicationConfigurationTemplates": [],
+  "drs:DescribeSourceServers": [],
+  "drs:DisconnectSourceServer": [
+   "SourceServerResource"
+  ],
+  "drs:GetLaunchConfiguration": [
+   "SourceServerResource"
+  ],
+  "drs:GetReplicationConfiguration": [
+   "SourceServerResource"
+  ],
+  "drs:InitializeService": [],
+  "drs:RetryDataReplication": [
+   "SourceServerResource"
+  ],
+  "drs:StopFailback": [
+   "RecoveryInstanceResource"
+  ],
+  "drs:StopReplication": [
+   "SourceServerResource"
+  ],
+  "drs:TagResource": [
+   "JobResource",
+   "LaunchConfigurationTemplateResource",
+   "RecoveryInstanceResource",
+   "RecoveryPlanExecutionResource",
+   "RecoveryPlanResource",
+   "ReplicationConfigurationTemplateResource",
+   "SourceNetworkResource",
+   "SourceServerResource"
+  ],
+  "drs:TerminateRecoveryInstances": [
+   "RecoveryInstanceResource"
+  ],
+  "drs:UpdateLaunchConfiguration": [
+   "SourceServerResource"
+  ],
+  "drs:UpdateLaunchConfigurationTemplate": [
+   "LaunchConfigurationTemplateResource"
+  ],
+  "drs:UpdateReplicationConfiguration": [
+   "SourceServerResource"
+  ],
+  "drs:UpdateReplicationConfigurationTemplate": [
+   "ReplicationConfigurationTemplateResource"
+  ],
+  "ec2:CreateLaunchTemplateVersion": [
+   "launch-template"
+  ],
+  "ec2:CreateSecurityGroup": [
+   "security-group",
+   "vpc"
+  ],
+  "ec2:CreateTags": [
+   "application-status-check",
+   "capacity-block",
+   "capacity-manager-data-export",
+   "capacity-reservation",
+   "capacity-reservation-cancellation-quote",
+   "capacity-reservation-fleet",
+   "carrier-gateway",
+   "client-vpn-endpoint",
+   "coip-pool",
+   "customer-gateway",
+   "declarative-policies-report",
+   "dedicated-host",
+   "dhcp-options",
+   "egress-only-internet-gateway",
+   "elastic-gpu",
+   "elastic-ip",
+   "export-image-task",
+   "export-instance-task",
+   "fleet",
+   "fpga-image",
+   "host-reservation",
+   "image",
+   "image-usage-report",
+   "import-image-task",
+   "import-snapshot-task",
+   "instance",
+   "instance-connect-endpoint",
+   "instance-event-window",
+   "internet-gateway",
+   "ipam",
+   "ipam-external-resource-verification-token",
+   "ipam-internet-registry-association",
+   "ipam-policy",
+   "ipam-pool",
+   "ipam-pool-allocation",
+   "ipam-prefix-list-resolver",
+   "ipam-prefix-list-resolver-target",
+   "ipam-resource-discovery",
+   "ipam-resource-discovery-association",
+   "ipam-scope",
+   "ipv4pool-ec2",
+   "ipv6pool-ec2",
+   "key-pair",
+   "launch-template",
+   "local-gateway",
+   "local-gateway-route-table",
+   "local-gateway-route-table-virtual-interface-group-association",
+   "local-gateway-route-table-vpc-association",
+   "local-gateway-virtual-interface",
+   "local-gateway-virtual-interface-group",
+   "natgateway",
+   "network-acl",
+   "network-insights-access-scope",
+   "network-insights-access-scope-analysis",
+   "network-insights-analysis",
+   "network-insights-path",
+   "network-interface",
+   "placement-group",
+   "prefix-list",
+   "replace-root-volume-task",
+   "reserved-instances",
+   "route-server",
+   "route-server-endpoint",
+   "route-server-peer",
+   "route-table",
+   "secondary-interface",
+   "secondary-network",
+   "secondary-subnet",
+   "security-group",
+   "security-group-rule",
+   "snapshot",
+   "spot-fleet-request",
+   "spot-instances-request",
+   "subnet",
+   "subnet-cidr-reservation",
+   "traffic-mirror-filter",
+   "traffic-mirror-filter-rule",
+   "traffic-mirror-session",
+   "traffic-mirror-target",
+   "transit-gateway",
+   "transit-gateway-attachment",
+   "transit-gateway-connect-peer",
+   "transit-gateway-metering-policy",
+   "transit-gateway-multicast-domain",
+   "transit-gateway-policy-table",
+   "transit-gateway-route-table",
+   "transit-gateway-route-table-announcement",
+   "verified-access-endpoint",
+   "verified-access-endpoint-target",
+   "verified-access-group",
+   "verified-access-instance",
+   "verified-access-policy",
+   "verified-access-trust-provider",
+   "volume",
+   "vpc",
+   "vpc-block-public-access-exclusion",
+   "vpc-encryption-control",
+   "vpc-endpoint",
+   "vpc-endpoint-connection",
+   "vpc-endpoint-service",
+   "vpc-endpoint-service-permission",
+   "vpc-flow-log",
+   "vpc-peering-connection",
+   "vpn-concentrator",
+   "vpn-connection",
+   "vpn-gateway"
+  ],
+  "ec2:DeleteSecurityGroup": [
+   "security-group"
+  ],
+  "ec2:DescribeSecurityGroups": [],
+  "ec2:DescribeSubnets": [],
+  "ec2:GetEbsDefaultKmsKeyId": [],
+  "ec2:ModifyLaunchTemplate": [
+   "launch-template"
+  ],
+  "elasticloadbalancing:DescribeTargetGroups": [],
+  "elasticloadbalancing:DescribeTargetHealth": [],
+  "iam:AddRoleToInstanceProfile": [
+   "instance-profile"
+  ],
+  "iam:AttachRolePolicy": [
+   "role"
+  ],
+  "iam:CreateInstanceProfile": [
+   "instance-profile"
+  ],
+  "iam:CreateRole": [
+   "role"
+  ],
+  "iam:CreateServiceLinkedRole": [
+   "role"
+  ],
+  "iam:GetInstanceProfile": [
+   "instance-profile"
+  ],
+  "iam:PassRole": [
+   "role"
+  ],
+  "kms:DescribeKey": [
+   "key"
+  ],
+  "lambda:GetFunctionConfiguration": [
+   "function"
+  ],
+  "logs:DeleteLogGroup": [
+   "log-group"
+  ],
+  "logs:DescribeLogGroups": [],
+  "rds:DescribeGlobalClusters": [
+   "global-cluster"
+  ],
+  "s3:CreateBucket": [
+   "bucket"
+  ],
+  "s3:DeleteBucket": [
+   "bucket"
+  ],
+  "s3:DeleteObject": [
+   "accesspointobject",
+   "object"
+  ],
+  "s3:ListBucket": [
+   "accesspoint",
+   "bucket"
+  ],
+  "s3:PutBucketPublicAccessBlock": [
+   "bucket"
+  ],
+  "s3:PutObject": [
+   "accesspointobject",
+   "object"
+  ],
+  "ssm:DeleteParameter": [
+   "parameter"
+  ],
+  "ssm:DescribeInstanceInformation": [],
+  "ssm:GetCommandInvocation": [],
+  "ssm:SendCommand": [
+   "bucket",
+   "document",
+   "instance",
+   "managed-instance"
+  ],
+  "sts:AssumeRole": [
+   "role"
+  ]
+ }
+}

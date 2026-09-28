@@ -45,6 +45,9 @@ test-reports/
 !/.github/workflows/s3mrap-crr-build.yml
 !/.github/workflows/s3mrap-crr-e2e.yml
 !/.github/workflows/s3mrap-crr-cleanup.yml
+!/.github/workflows/drs-ec2-build.yml
+!/.github/workflows/drs-ec2-e2e.yml
+!/.github/workflows/drs-ec2-cleanup.yml
 !/.github/dependabot.yml
 !/.github/workflows/auto-approve.yml
 !/.github/workflows/auto-merge.yml

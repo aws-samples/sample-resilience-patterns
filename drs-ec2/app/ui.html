@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>drs-ec2 — region switch console</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#0f1720; --panel:#172230; --line:#26364a; --text:#e6edf3; --muted:#8b9bb0;
+          --east:#3b82f6; --west:#f59e0b; --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444; --red:#e5484d; }
+  * { box-sizing:border-box }
+  body { margin:0; font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text) }
+  header { display:flex; align-items:center; gap:16px; padding:14px 22px; border-bottom:1px solid var(--line) }
+  header h1 { font-size:17px; margin:0; font-weight:600 }
+  header .sub { color:var(--muted); font-size:12px }
+  main { display:grid; grid-template-columns: 1.2fr 1fr; gap:16px; padding:18px 22px; max-width:1500px }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px }
+  .panel h2 { margin:0 0 10px; font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted) }
+  .serving { display:flex; align-items:center; gap:18px }
+  .badge { font-size:34px; font-weight:700; padding:10px 22px; border-radius:12px; color:#0b0f14; min-width:170px; text-align:center }
+  .badge.east { background:var(--east) } .badge.west { background:var(--west) } .badge.none { background:var(--line); color:var(--muted) }
+  .kv { display:grid; grid-template-columns:auto 1fr; gap:3px 14px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px }
+  .kv div:nth-child(odd) { color:var(--muted) }
+  .cols { display:grid; grid-template-columns:1fr 1fr; gap:12px }
+  .region { border:1px solid var(--line); border-radius:8px; padding:10px 12px }
+  .region h3 { margin:0 0 6px; font-size:13px; display:flex; justify-content:space-between }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; vertical-align:middle }
+  .ok{background:var(--ok)} .warn{background:var(--warn)} .bad{background:var(--bad)} .dim{background:var(--line)}
+  table { width:100%; border-collapse:collapse; font-size:12.5px }
+  td,th { padding:4px 6px; text-align:left; border-bottom:1px solid var(--line); vertical-align:top }
+  th { color:var(--muted); font-weight:500 }
+  .steps li { list-style:none; display:flex; gap:10px; align-items:baseline; padding:4px 0; border-bottom:1px dashed var(--line) }
+  .steps { margin:0; padding:0 }
+  .steps .name { flex:1 } .steps .t { color:var(--muted); font-family:ui-monospace,monospace; font-size:12px }
+  .ctl { display:flex; gap:10px; align-items:center; flex-wrap:wrap }
+  button { background:#22314a; color:var(--text); border:1px solid #33507a; border-radius:8px; padding:8px 14px; font-weight:600; cursor:pointer }
+  button.danger { background:#4a1f22; border-color:#7a3338 }
+  button:disabled { opacity:.45; cursor:not-allowed }
+  select { background:#0f1720; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px }
+  .hist { font-family:ui-monospace,monospace; font-size:12px; color:var(--muted); max-height:150px; overflow:auto }
+  .err { color:var(--bad); font-size:12px }
+  footer { color:var(--muted); font-size:12px; padding:0 22px 20px }
+</style>
+</head>
+<body>
+<header>
+  <h1>drs-ec2 — DRS + ARC Region Switch</h1>
+  <span class="sub" id="via">observing via <span id="via-host">…</span></span>
+</header>
+<main>
+  <section class="panel">
+    <h2>What this browser is being served by</h2>
+    <div class="serving">
+      <div class="badge none" id="serving-badge">—</div>
+      <div class="kv" id="serving-kv"></div>
+    </div>
+    <div class="hist" id="hist"></div>
+  </section>
+
+  <section class="panel">
+    <h2>ARC Region Switch plan</h2>
+    <div class="kv" id="plan-kv"></div>
+    <ul class="steps" id="steps"></ul>
+    <div class="ctl" style="margin-top:12px">
+      <select id="mode"><option value="graceful">graceful (Aurora switchover)</option><option value="ungraceful">ungraceful (Aurora failover)</option></select>
+      <button id="btn-west" class="danger">Fail over → us-west-2</button>
+      <button id="btn-east">Fail back → us-east-2</button>
+      <span class="err" id="ctl-msg"></span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Regions</h2>
+    <div class="cols">
+      <div class="region"><h3>us-east-2 <span id="hc-east"></span></h3><div class="kv" id="reg-east"></div></div>
+      <div class="region"><h3>us-west-2 <span id="hc-west"></span></h3><div class="kv" id="reg-west"></div></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>DRS replication</h2>
+    <table id="drs"><thead><tr><th>region</th><th>source server</th><th>protects</th><th>direction</th><th>state</th><th>lag</th></tr></thead><tbody></tbody></table>
+    <div class="err" id="errors"></div>
+  </section>
+</main>
+<footer>App responses are polled every 2 s through the Route 53 failover record — the badge changes when DNS flips. Control-plane state every 5 s via <code>/api/status</code> (cached 5 s server-side).</footer>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const fmt = (s) => s ? new Date(s).toLocaleTimeString() : "";
+const dur = (a, b) => (a && b) ? Math.round((new Date(b) - new Date(a)) / 1000) + "s" : "";
+const regionClass = (r) => r === "us-east-2" ? "east" : r === "us-west-2" ? "west" : "none";
+$("via-host").textContent = location.host;
+
+let lastRegion = null;
+async function pollApp() {
+  try {
+    const r = await fetch("/?_=" + Date.now(), {cache: "no-store"});
+    const j = await r.json();
+    const b = $("serving-badge"); b.textContent = j.region || "?"; b.className = "badge " + regionClass(j.region);
+    $("serving-kv").innerHTML = `<div>instance</div><div>${j.instance_id||""}</div>
+      <div>db writer</div><div>${(j.db_writer_endpoint||"").split(".")[0]}</div>
+      <div>db</div><div>${j.db||""}</div>
+      <div>last write id</div><div>${j.last_write_id ?? ""} <span style="color:var(--muted)">(rows ${j.total_rows ?? ""})</span></div>`;
+    if (j.region && j.region !== lastRegion) {
+      const h = $("hist"); h.innerHTML = `${new Date().toLocaleTimeString()}  serving region → <b>${j.region}</b> (${j.instance_id})<br>` + h.innerHTML;
+      lastRegion = j.region;
+    }
+  } catch (e) {
+    const b = $("serving-badge"); b.textContent = "unreachable"; b.className = "badge none";
+  }
+}
+
+const dot = (ok) => `<span class="dot ${ok === true ? "ok" : ok === false ? "bad" : "dim"}"></span>`;
+async function pollStatus() {
+  let s;
+  try { s = await (await fetch("/api/status", {cache: "no-store"})).json(); } catch (e) { $("errors").textContent = "status: " + e; return; }
+  const ex = s.execution || {};
+  $("plan-kv").innerHTML = `<div>execution</div><div>${ex.executionId||"—"}</div>
+    <div>action</div><div>${ex.action||""} ${ex.region||""} <span style="color:var(--muted)">${ex.mode||""}</span></div>
+    <div>state</div><div><b>${ex.state||""}</b> ${fmt(ex.startTime)}${ex.endTime ? " → " + fmt(ex.endTime) + " (" + dur(ex.startTime, ex.endTime) + ")" : ""}</div>
+    <div>evaluation</div><div>${Object.entries(s.plan?.evaluation||{}).map(([r,v])=>`${r}: ${v}`).join(" · ")}</div>`;
+  $("steps").innerHTML = (ex.steps||[]).map(st => {
+    const ok = st.status === "completed" ? true : (st.status === "failed" ? false : null);
+    const run = st.status === "running";
+    return `<li>${dot(ok)}<span class="name" style="${run?'font-weight:600':''}">${st.name}</span><span class="t">${st.status} ${dur(st.startTime, st.endTime || (run ? new Date().toISOString() : null))}</span></li>`;
+  }).join("");
+  const running = ex.state === "inProgress";
+  $("btn-west").disabled = running; $("btn-east").disabled = running;
+
+  const hc = s.plan?.healthChecks || {};
+  $("hc-east").innerHTML = dot(hc["us-east-2"] === "healthy") + (hc["us-east-2"]||"");
+  $("hc-west").innerHTML = dot(hc["us-west-2"] === "healthy") + (hc["us-west-2"]||"");
+  const writer = (s.aurora?.members||[]).find(m => m.writer)?.region;
+  for (const [id, region] of [["reg-east","us-east-2"],["reg-west","us-west-2"]]) {
+    const m = (s.aurora?.members||[]).find(x => x.region === region) || {};
+    const tgs = s.targets?.[region] || {};
+    const tgHtml = Object.entries(tgs).filter(([k])=>k!=="error").map(([tg, ts]) => ts.length ? ts.map(t=>`${dot(t.state==="healthy")}${t.id} ${t.state}`).join("<br>") : `${dot(null)}empty`).join("<br>") || (tgs.error || "");
+    const recs = (s.drs?.[region]?.recoveryInstances||[]).map(r=>`${r.instance} ${r.state}`).join("<br>") || "none";
+    $(id).innerHTML = `<div>aurora</div><div>${m.writer ? "<b>writer</b>" : "reader"} <span style="color:var(--muted)">${m.sync||""}</span></div>
+      <div>alb targets</div><div>${tgHtml}</div>
+      <div>recovery ec2</div><div>${recs}</div>`;
+  }
+  const rows = [];
+  for (const region of ["us-east-2","us-west-2"]) for (const ss of (s.drs?.[region]?.sourceServers||[]))
+    rows.push(`<tr><td>${region}</td><td>${ss.id}</td><td>${ss.instance||""} <span style="color:var(--muted)">${ss.role||""}</span></td><td>${ss.direction||""}</td><td>${dot(ss.state==="CONTINUOUS")}${ss.state||""}</td><td>${ss.lag||""}</td></tr>`);
+  $("drs").querySelector("tbody").innerHTML = rows.join("") || `<tr><td colspan="6" style="color:var(--muted)">no source servers</td></tr>`;
+  $("errors").textContent = (s.errors||[]).join(" | ");
+}
+
+async function run(target) {
+  const mode = $("mode").value;
+  if (!confirm(`Start ARC plan: activate ${target} (${mode})?`)) return;
+  $("ctl-msg").textContent = "starting…";
+  try {
+    const r = await fetch("/api/failover", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({target, mode})});
+    const j = await r.json();
+    $("ctl-msg").textContent = r.ok ? `started ${j.executionId}` : (j.error || r.statusText);
+  } catch (e) { $("ctl-msg").textContent = String(e); }
+  setTimeout(pollStatus, 1500);
+}
+$("btn-west").onclick = () => run("us-west-2");
+$("btn-east").onclick = () => run("us-east-2");
+
+pollApp(); pollStatus();
+setInterval(pollApp, 2000); setInterval(pollStatus, 5000);
+</script>
+</body>
+</html>

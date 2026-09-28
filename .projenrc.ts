@@ -87,6 +87,14 @@ interface Pattern {
   cleanupTimeoutMinutes?: number;
   /** Optional env block applied to the e2e workflow. */
   e2eEnv?: Record<string, string>;
+  /** Optional aws-cdk-lib floor when a pattern needs newer L1s than SHARED_CDK_CONFIG. */
+  cdkVersion?: string;
+  /** Optional TypeScript pin (new subprojects otherwise resolve TS 6, whose tsconfig defaults drop @types/*). */
+  typescriptVersion?: string;
+  /** Optional dependency overrides appended after SHARED_CDK_CONFIG.deps (e.g. pin cdk-nag major). */
+  deps?: string[];
+  /** Optional extra .gitignore patterns for the subproject (e.g. Python byte-code for patterns with Lambda code). */
+  gitignore?: string[];
 }
 
 // Common CDK app config — shared across all patterns.
@@ -112,7 +120,11 @@ const SHARED_CDK_CONFIG = {
   gitignore: ['cdk.out.*/', '/temporary/'],
 };
 
-const E2E_ACCOUNT = '563688183446';
+// The e2e account id lives in the repository variable E2E_ACCOUNT_ID (Settings > Secrets and
+// variables > Actions > Variables), not in source: the public workflow YAML then carries no account
+// id, and a fork points the same workflows at its own account by setting the variable. GitHub
+// resolves `vars` before the step runs; the expression sits in a `with:` value, never in `run:`.
+const E2E_ACCOUNT = '${{ vars.E2E_ACCOUNT_ID }}';
 
 const patterns: Pattern[] = [
   // -------------------------------------------------------------------------
@@ -465,6 +477,71 @@ const patterns: Pattern[] = [
       },
     ],
   },
+  // -------------------------------------------------------------------------
+  // drs-ec2 — DRS-replicated EC2 + Aurora Global + ARC Region Switch, with a
+  // reusable DRS step construct (fail-over, stateful fail-back onto the original
+  // instance, resting-state retire). Needs aws-cdk-lib >= 2.215 for the typed
+  // aws_arcregionswitch L1 (CfnPlan.StepProperty).
+  // -------------------------------------------------------------------------
+  {
+    outdir: 'drs-ec2',
+    cdkVersion: '2.215.0',
+    typescriptVersion: '~5.9.3',
+    deps: ['cdk-nag@^2.37.55'], // same major as the other patterns; 3.x moved NagSuppressions
+    gitignore: ['__pycache__/', '*.pyc'], // app/ and lambda/ are Python; byte-code must never be committed
+    e2eRoleArn: `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-drs-ec2`,
+    awsRegion: 'us-east-2',
+    e2eTimeoutMinutes: 300,
+    buildSteps: [
+      { uses: 'actions/checkout@v6' },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-python@v5', with: { 'python-version': '3.12' } },
+      { run: 'npm ci' },
+      { run: 'npx projen test' },
+      { name: 'Lambda unit tests', run: 'pip install -q boto3 pytest ruff && (cd lambda && ruff check . && python -m pytest -q)' },
+      { run: 'npx cdk synth --all' },
+    ],
+    cleanupSteps: [
+      { uses: 'actions/checkout@v6' },
+      {
+        uses: 'aws-actions/configure-aws-credentials@v6',
+        with: {
+          'role-to-assume': `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-drs-ec2`,
+          'aws-region': 'us-east-2',
+        },
+      },
+      { run: 'chmod +x cleanup.sh && ./cleanup.sh' },
+    ],
+    e2eSteps: [
+      { uses: 'actions/checkout@v6' },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      {
+        uses: 'aws-actions/configure-aws-credentials@v6',
+        with: {
+          'role-to-assume': `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-drs-ec2`,
+          'aws-region': 'us-east-2',
+          'role-duration-seconds': 14400,
+        },
+      },
+      { run: 'npm ci' },
+      { run: 'npx projen test' },
+      { name: 'Pre-flight cleanup (idempotent)', run: 'chmod +x cleanup.sh && ./cleanup.sh || true' },
+      // Full deploy: stacks in three regions + DRS agent install + wait for CONTINUOUS (~60 min).
+      { name: 'Deploy', run: 'make deploy' },
+      { name: 'Resting state', run: 'make status' },
+      // Two legs (out and back) with the resting-state invariant asserted after the fail-back.
+      { name: 'Fail-over / fail-back cycle', run: 'make rehearse-cycle LEGS=2' },
+      {
+        name: 'Refresh AWS credentials (pre-cleanup)',
+        uses: 'aws-actions/configure-aws-credentials@v6',
+        with: {
+          'role-to-assume': `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-drs-ec2`,
+          'aws-region': 'us-east-2',
+        },
+      },
+      { name: 'Cleanup on success', if: 'success()', run: './cleanup.sh' },
+    ],
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -480,19 +557,24 @@ for (const p of patterns) {
     outdir: p.outdir,
     name: p.outdir,
     ...SHARED_CDK_CONFIG,
+    ...(p.cdkVersion ? { cdkVersion: p.cdkVersion } : {}),
+    ...(p.typescriptVersion ? { typescriptVersion: p.typescriptVersion } : {}),
+    ...(p.deps ? { deps: p.deps } : {}),
   });
   // licensed:false makes projen set "license": "UNLICENSED" in package.json.
   // Override to "MIT" so package.json matches the repo's root LICENSE.
   subproject.package.addField('license', 'MIT');
+  if (p.gitignore) subproject.gitignore.addPatterns(...p.gitignore);
 
   // ----------- Build workflow ---------------------------------------------
   const buildWf = new github.GithubWorkflow(root.github!, `${p.outdir}-build`);
+  // Runs on every branch, main included: the README badge reports the
+  // workflow's latest run on the default branch, so a build that never runs
+  // on main leaves the badge pinned to the last manual dispatch there.
   buildWf.on({
     push: { paths: [`${p.outdir}/**`] },
     workflowDispatch: {},
   });
-  // projen's PushOptions doesn't expose `branches-ignore`, so inject directly.
-  buildWf.file?.addOverride('on.push.branches-ignore', ['main']);
   // Preserve the original GitHub Actions display name (matters for branch
   // protection required-check names: 'aurora: build / build').
   buildWf.file?.addOverride('name', `${p.outdir}: build`);

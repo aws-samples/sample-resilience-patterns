@@ -22,7 +22,7 @@ jobs:
           node-version: "20"
       - uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::563688183446:role/github-actions-aurora
+          role-to-assume: arn:aws:iam::${{ vars.E2E_ACCOUNT_ID }}:role/github-actions-aurora
           aws-region: us-east-1
           role-duration-seconds: 7200
       - run: npm ci
@@ -52,7 +52,7 @@ jobs:
       - name: Refresh AWS credentials (pre-failover)
         uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::563688183446:role/github-actions-aurora
+          role-to-assume: arn:aws:iam::${{ vars.E2E_ACCOUNT_ID }}:role/github-actions-aurora
           aws-region: us-east-1
           role-duration-seconds: 7200
       - name: Load test + failover exercise
@@ -115,7 +115,7 @@ jobs:
         if: always()
         uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::563688183446:role/github-actions-aurora
+          role-to-assume: arn:aws:iam::${{ vars.E2E_ACCOUNT_ID }}:role/github-actions-aurora
           aws-region: us-east-1
           role-duration-seconds: 7200
       - name: Cleanup on success
