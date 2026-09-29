@@ -1,0 +1,153 @@
+# Karpenter EC2NodeClass + NodePool (step 11c).
+#
+# Applied SEPARATELY from src/karpenter/karpenter.yaml and AFTER it, because these are
+# CUSTOM RESOURCES whose CRDs that file installs. `kubectl apply -f` does not wait for a
+# CRD to become established, so putting both in one file races: the CRs fail with
+# "no matches for kind" even though the CRDs are earlier in the same document. The
+# installer waits for establishment between the two applies.
+#
+# Placeholders are substituted by build/render-manifest.py, which FAILS on any it cannot
+# resolve — an empty instance profile or security group would otherwise apply cleanly and
+# produce an EC2NodeClass that never becomes Ready.
+---
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: default
+spec:
+  # PRE-CREATED, and this field is why. Karpenter normally manages its own instance profile
+  # via the IAM API, which is unreachable from these isolated subnets: IAM interface
+  # endpoints exist only in each partition's control-plane region (us-east-1, cn-north-1,
+  # us-gov-west-1) and this demo runs in us-east-2 / us-west-2. Karpenter documents
+  # spec.instanceProfile as REQUIRED for exactly this case; spec.role would make it try.
+  instanceProfile: ${KARPENTER_INSTANCE_PROFILE}
+
+  # BORN ARMED. FIS targets instances by ChaosAllowed=true, and the cockpit's arm gesture
+  # tags them at arm time — but a Karpenter node launched MID-DEMO (a scale-up during the
+  # fault) would arrive untagged and be silently immune, thinning the fault under load,
+  # exactly when the chart is being watched. spec.tags applies at LAUNCH: Karpenter's
+  # controller policy allows arbitrary tags at creation (its ec2:CreateTags at-creation
+  # statement has no tag-key allowlist), while its on-EXISTING-resources statement
+  # allowlists only its own keys — so this is the ONLY mechanism that arms Karpenter nodes
+  # without an IAM change, and it CANNOT retro-tag nodes already running (the cockpit's
+  # arm action covers those). Measured 2026-09-01: 3 of 5 nodes were Karpenter-launched
+  # and immune to every fault while the managed node group carried the injection alone.
+  tags:
+    ChaosAllowed: "true"
+
+  amiSelectorTerms:
+    # AL2023 to match the managed node group's AL2023_ARM_64_STANDARD, so a pod behaves the
+    # same wherever it lands. The alias resolves through an SSM parameter, which is why the
+    # controller needs ssm:GetParameter and why the SSM VPC endpoint is not optional.
+    - alias: al2023@latest
+
+  subnetSelectorTerms:
+    # Tag-based, matching the karpenter.sh/discovery tag applied to every isolated subnet by
+    # the KarpenterIam construct.
+    - tags:
+        karpenter.sh/discovery: ${KARPENTER_CLUSTER_NAME}
+
+  securityGroupSelectorTerms:
+    # BY ID, not by tag, and deliberately.
+    #
+    # Karpenter nodes need the EKS-created CLUSTER security group specifically — that is
+    # where the NodePort 30000-32767 ingress rules live (steps 4a and 4c). Without them the
+    # in-tree load balancer cannot reach a surge pod, so under Option C the pods ARC scales
+    # up would be unreachable while every health signal looked fine.
+    #
+    # That security group is owned by EKS, so CloudFormation cannot add a discovery tag to
+    # it. Selecting by the tag EKS applies itself would work but was not verifiable offline,
+    # and an unresolvable selector leaves the EC2NodeClass not Ready with nothing
+    # provisioning. The ID travels the same CfnOutput -> dotenv rail as every other
+    # deploy-time value, so it costs nothing extra and removes the assumption.
+    - id: ${KARPENTER_SECURITY_GROUP_ID}
+
+  metadataOptions:
+    httpEndpoint: enabled
+    httpTokens: required
+    # 2, NOT Karpenter's default of 1.
+    #
+    # This is a real divergence with a real consequence. EKS managed node groups default to
+    # 2; Karpenter defaults to 1, which stops pods that are NOT on the host network from
+    # reaching IMDS. Our application reads the failure-injection knob from SSM using the
+    # NODE role's credentials, which it obtains from IMDS (see knob.grantRead(nodeRole) in
+    # region-stack.ts). At hop limit 1 that read fails on Karpenter nodes but keeps working
+    # on managed-node-group nodes — so the injection would appear to work at baseline and
+    # silently not apply to surge pods, which is the worst possible split for a demo whose
+    # whole point is a measured availability band.
+    httpPutResponseHopLimit: 2
+
+  # No spec.tags. Karpenter applies kubernetes.io/cluster/<name>=owned and
+  # karpenter.sh/nodepool itself, and those exact tags are what the controller policy's
+  # conditions key on. Setting cluster tags by hand risks tripping the policy's scoped
+  # tagging statement rather than helping.
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: default
+spec:
+  template:
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: default
+      requirements:
+        # arm64 ONLY, and this is not a preference.
+        #
+        # The application image is arm64-only because kaniko cannot cross-build (see
+        # build/build-docker.sh). An amd64 node would be provisioned happily, accept the
+        # pod, and CrashLoopBackOff with "exec format error" — which reads as an
+        # application fault rather than an architecture mismatch.
+        - key: kubernetes.io/arch
+          operator: In
+          values: ['arm64']
+        - key: kubernetes.io/os
+          operator: In
+          values: ['linux']
+        # On-demand only. Spot would be cheaper but introduces interruptions, and there is
+        # no SQS interruption queue here (no SQS VPC endpoint), so an interruption would be
+        # an unhandled node disappearance in the middle of a demo.
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ['on-demand']
+        # A SMALL explicit set, matching the managed node group's instance type.
+        #
+        # Two reasons beyond predictability. Karpenter normally ranks 60 instance types by
+        # price, and on-demand pricing comes from api.pricing.us-east-1.amazonaws.com, which
+        # has NO VPC endpoint — so that call cannot succeed here and Karpenter falls back to
+        # embedded static pricing. Constraining the set means pricing is not needed to make
+        # a correct choice. It also keeps a surge node the same shape as a baseline node, so
+        # the demo does not have to explain why capacity is heterogeneous.
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values: ['m7g.large', 'm7g.xlarge']
+      # Never, rather than the 720h default. Node rotation is a good production practice and
+      # an unwanted surprise in a demo that may be left running for days.
+      expireAfter: Never
+
+  # A ceiling, so a runaway scheduling loop cannot provision the account into a quota wall.
+  # 16 vCPU is 8 m7g.large — comfortably above the 2 surge nodes Option C needs.
+  limits:
+    cpu: '16'
+
+  disruption:
+    # WhenEmpty, not the WhenEmptyOrUnderutilized default. Karpenter would otherwise see the
+    # standby's idle pods as underutilized and consolidate them onto fewer nodes, evicting
+    # application pods mid-demo. WhenEmpty never touches a node that carries a pod, so
+    # recordings and live runs are safe by construction.
+    consolidationPolicy: WhenEmpty
+    # 5m, not Never. Proven live 2026-08-29: after an ARC failover scaled to 12 pods and the
+    # restore script rightsized back to 3, EIGHT empty Karpenter nodes per region sat billing
+    # indefinitely because nothing was allowed to reap them. Five minutes of emptiness is
+    # long enough to ride out a rolling restart's transient churn and short enough that a
+    # post-failover stand-down actually returns the fleet to baseline cost.
+    consolidateAfter: 5m
+    # One node at a time. The original budget of '0' made disruption fully inert -- Karpenter
+    # could PROVISION but never voluntarily DISRUPT -- which was the right call until the
+    # empty-node cost of the failover/restore cycle showed up. '1' keeps disruption slow and
+    # observable while still converging: with WhenEmpty above, the only thing this budget
+    # ever permits is removing one EMPTY node per evaluation.
+    budgets:
+      - nodes: '1'

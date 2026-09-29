@@ -1,0 +1,161 @@
+# In-cluster Helm chart repository (step 10c).
+#
+# nginx serving the chart archive and index.yaml that build/package-chart.py produced, out of
+# a ConfigMap. Argo CD's repo-server adds this as an ordinary HTTP Helm repository.
+#
+# ── WHY THIS EXISTS AND NOT SOMETHING MORE OBVIOUS ──────────────────────────────────────
+#
+# Argo CD accepts git, HTTP Helm, or OCI sources. These subnets have no NAT, so the
+# repo-server cannot reach any external git host -- git is out. ECR would work and is the
+# production-shaped answer, but upstream Argo CD authenticates to a registry with a STATIC
+# username/password Secret (verified against Argo's own OCI docs: no IAM, no credential
+# helper), and an ECR authorization token expires after 12 hours. That needs a refresher
+# CronJob whose failure mode is "Argo cannot sync" -- on stage, indistinguishable from the
+# very conflict this demo exists to disprove. So: no credentials at all, nothing to expire.
+#
+# BE HONEST ON STAGE: this is a stand-in for the customer's real GitLab or ECR. The claim
+# under test -- whether Argo's selfHeal reverts ARC's scaling -- is completely independent of
+# where the chart came from. Worth saying out loud rather than implying a git webhook loop
+# that does not exist here. The EKS Capability for Argo CD does support credential-free ECR
+# and is the answer for a customer who has AWS Identity Center.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chart-repo
+  namespace: argocd
+  labels:
+    app: chart-repo
+spec:
+  # One replica, deliberately. This serves a few KB of static content to one in-cluster
+  # client; a second replica would consume a pod slot on a two-node cluster that is already
+  # running Argo CD, Karpenter, metrics-server and the app for no availability gain that
+  # matters to the demo.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chart-repo
+  template:
+    metadata:
+      labels:
+        app: chart-repo
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      # Serves static chart files from a volume; never touches the Kubernetes API.
+      automountServiceAccountToken: false
+      containers:
+        - name: nginx
+          # Read-only root is safe because the only paths nginx writes -- /var/cache/nginx
+          # and /var/run -- are emptyDir mounts below (added for exactly this reason).
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # From the private ECR mirror, at the ARM64 CHILD digest. The mirror copies only
+          # linux/arm64, so the multi-platform index digest is ABSENT from our ECR and a pod
+          # pinned to one fails with "manifest unknown" -- which reads as a mirror that never
+          # ran rather than a digest mismatch. Kept in sync with src/mirror/images.json by a
+          # test.
+          image: ${MIRROR_REGISTRY}/nginx:1.29-alpine@sha256:7dd09a6c4f8cab9a2d2cb98fb39790f220e8bc2ea106b2cebde64b90405e0be8
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          # 8080, not 80. The container runs as UID 101 (non-root) and cannot bind a
+          # privileged port; the stock nginx.conf listens on 80, so it is replaced below.
+          # Left at 80 the pod CrashLoopBackOffs with a permission error that looks nothing
+          # like a port problem.
+          volumeMounts:
+            - name: charts
+              mountPath: /usr/share/nginx/html
+              readOnly: true
+            - name: conf
+              mountPath: /etc/nginx/conf.d
+              readOnly: true
+            # nginx writes its pid and caches under /var; with a read-only mount layout it
+            # needs writable emptyDirs or it fails at startup.
+            - name: cache
+              mountPath: /var/cache/nginx
+            - name: run
+              mountPath: /var/run
+          readinessProbe:
+            httpGet:
+              path: /index.yaml
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          # Probes index.yaml, not /. If the ConfigMap failed to mount, `/` would still
+          # answer (nginx serves a directory listing or its own 403) while the repository is
+          # useless -- and Argo's failure would then be a confusing "chart not found".
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: charts
+          configMap:
+            # Created by build/package-chart.py and applied alongside this file. It holds
+            # index.yaml plus the chart archive as binaryData.
+            name: chart-repo-content
+        - name: conf
+          configMap:
+            name: chart-repo-nginx-conf
+        - name: cache
+          emptyDir: {}
+        - name: run
+          emptyDir: {}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chart-repo-nginx-conf
+  namespace: argocd
+data:
+  default.conf: |
+    server {
+      listen 8080;
+      server_name _;
+      root /usr/share/nginx/html;
+      # autoindex off: a Helm client only ever fetches index.yaml and a named archive, and a
+      # directory listing would be the only thing a misconfigured mount still served
+      # successfully -- masking the failure.
+      autoindex off;
+      location / {
+        try_files $uri =404;
+      }
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chart-repo
+  namespace: argocd
+spec:
+  # ClusterIP. Nothing outside the cluster has any business reading this, and the demo's
+  # only client is Argo CD's repo-server in the same namespace.
+  type: ClusterIP
+  selector:
+    app: chart-repo
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+# The Argo CD Application (step 10d) will point at:
+#   repoURL: http://chart-repo.argocd.svc.cluster.local
+#   chart: orders-api
+#   targetRevision: '*'
+#
+# targetRevision '*' is required, not stylistic: the repo-server caches resolved manifests by
+# chart VERSION, so republishing one version with new bytes can be served from cache
+# indefinitely. package-chart.py emits a monotonically increasing version and '*' always
+# resolves the newest.

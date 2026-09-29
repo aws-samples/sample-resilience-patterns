@@ -5,6 +5,8 @@ on:
   pull_request:
     paths:
       - drs-ec2/**
+      - "!drs-ec2/**.md"
+      - "!drs-ec2/docs/**"
   workflow_dispatch: {}
 jobs:
   e2e:

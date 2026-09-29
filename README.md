@@ -5,6 +5,7 @@
 ![aurora build](https://github.com/aws-samples/sample-resilience-patterns/actions/workflows/aurora-build.yml/badge.svg)
 ![aurora e2e](https://github.com/aws-samples/sample-resilience-patterns/actions/workflows/aurora-e2e.yml/badge.svg)
 ![drs-ec2 build](https://github.com/aws-samples/sample-resilience-patterns/actions/workflows/drs-ec2-build.yml/badge.svg)
+![eks-multi-region build](https://github.com/aws-samples/sample-resilience-patterns/actions/workflows/eks-multi-region-build.yml/badge.svg)
 
 A collection of sample implementations demonstrating resilient architectures for common AWS services and patterns. Each subdirectory is a standalone, fully deployable reference implementation.
 
@@ -19,6 +20,7 @@ These samples show how to build resilient, multi-region, and fault-tolerant syst
 | [`s3mrap-crr/`](s3mrap-crr/) | S3 Multi-Region Access Points with bidirectional Cross-Region Replication, ARC-based failover, CloudWatch observability, and replication latency load testing |
 | [`aurora/`](aurora/) | Aurora Global Database + Aurora DSQL multi-region resilience with ARC Region Switch failover, CloudWatch Synthetics, RPO monitoring, post-failover reconciliation, FIS chaos testing, and load generation |
 | [`drs-ec2/`](drs-ec2/) | Amazon EC2 disaster recovery with AWS Elastic Disaster Recovery (AWS DRS) orchestrated by Amazon Application Recovery Controller (ARC) Region switch, with Amazon Aurora Global Database and Amazon Route 53 failover; reusable AWS CDK construct and Terraform module for the AWS DRS plan steps; failover and fail-back rehearsals, including stateful fail-back onto the original instance |
+| [`eks-multi-region/`](eks-multi-region/) | Multi-region EKS behind ARC Region Switch (EKS scaling + Aurora Global writer move + Route 53 health checks), Argo CD coexisting with ARC, single-AZ gray-failure injection with FIS from a resilience cockpit, a self-healing write pool, NAT-free isolated node subnets with a mirrored image registry, and an SSM-only observer bastion instead of any public ingress |
 
 ## Technology
 

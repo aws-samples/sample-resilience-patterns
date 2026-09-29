@@ -48,6 +48,9 @@ test-reports/
 !/.github/workflows/drs-ec2-build.yml
 !/.github/workflows/drs-ec2-e2e.yml
 !/.github/workflows/drs-ec2-cleanup.yml
+!/.github/workflows/eks-multi-region-build.yml
+!/.github/workflows/eks-multi-region-e2e.yml
+!/.github/workflows/eks-multi-region-cleanup.yml
 !/.github/dependabot.yml
 !/.github/workflows/auto-approve.yml
 !/.github/workflows/auto-merge.yml

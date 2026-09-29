@@ -5,6 +5,8 @@ on:
   pull_request:
     paths:
       - aurora/**
+      - "!aurora/**.md"
+      - "!aurora/docs/**"
   workflow_dispatch: {}
 jobs:
   e2e:

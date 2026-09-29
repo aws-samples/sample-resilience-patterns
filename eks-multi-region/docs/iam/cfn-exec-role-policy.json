@@ -1,0 +1,110 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ResourceServicesTheTemplatesDeclare",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:*",
+        "eks:*",
+        "elasticloadbalancing:*",
+        "rds:*",
+        "route53:*",
+        "arc-region-switch:*",
+        "fis:*",
+        "codebuild:*",
+        "ecs:*",
+        "lambda:*",
+        "logs:*",
+        "cloudwatch:*",
+        "s3:*",
+        "ssm:*",
+        "secretsmanager:*",
+        "kms:*",
+        "ecr:*",
+        "cloudformation:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "IamRolesPoliciesAndProfilesTheStacksCreate",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:GetRole",
+        "iam:UpdateRole",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:GetRolePolicy",
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:ListRolePolicies",
+        "iam:ListAttachedRolePolicies",
+        "iam:CreatePolicy",
+        "iam:DeletePolicy",
+        "iam:GetPolicy",
+        "iam:CreatePolicyVersion",
+        "iam:DeletePolicyVersion",
+        "iam:ListPolicyVersions",
+        "iam:CreateInstanceProfile",
+        "iam:DeleteInstanceProfile",
+        "iam:GetInstanceProfile",
+        "iam:AddRoleToInstanceProfile",
+        "iam:RemoveRoleFromInstanceProfile"
+      ],
+      "Resource": [
+        "arn:aws:iam::ACCOUNT_ID:role/eks-mr-demo-*",
+        "arn:aws:iam::ACCOUNT_ID:policy/eks-mr-demo-*",
+        "arn:aws:iam::ACCOUNT_ID:instance-profile/eks-mr-demo-*"
+      ]
+    },
+    {
+      "Sid": "IamOidcProviderForIrsa",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateOpenIDConnectProvider",
+        "iam:DeleteOpenIDConnectProvider",
+        "iam:GetOpenIDConnectProvider",
+        "iam:TagOpenIDConnectProvider"
+      ],
+      "Resource": "arn:aws:iam::ACCOUNT_ID:oidc-provider/oidc.eks.*.amazonaws.com/id/*"
+    },
+    {
+      "Sid": "IamServiceLinkedRolesAndListing",
+      "Effect": "Allow",
+      "Action": "iam:CreateServiceLinkedRole",
+      "Resource": "arn:aws:iam::ACCOUNT_ID:role/aws-service-role/*"
+    },
+    {
+      "Sid": "IamListRolesHasNoResourceType",
+      "Effect": "Allow",
+      "Action": "iam:ListRoles",
+      "Resource": "*"
+    },
+    {
+      "Sid": "PassRolesTheStacksCreateToTheirServices",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::ACCOUNT_ID:role/eks-mr-demo-*",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": [
+            "eks.amazonaws.com",
+            "ec2.amazonaws.com",
+            "codebuild.amazonaws.com",
+            "lambda.amazonaws.com",
+            "ecs-tasks.amazonaws.com",
+            "fis.amazonaws.com",
+            "arc-region-switch.amazonaws.com",
+            "rds.amazonaws.com",
+            "monitoring.rds.amazonaws.com"
+          ]
+        }
+      }
+    }
+  ]
+}
