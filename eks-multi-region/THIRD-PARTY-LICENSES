@@ -10,7 +10,7 @@ Nothing below is modified beyond the rendering described; each retains its own l
 |---|---|---|---|
 | Argo CD v3.4.7 install manifest | `src/argo/argocd-install.yaml` (namespaced by `src/argo/render.sh`) | https://github.com/argoproj/argo-cd | Apache-2.0 |
 | Karpenter v1.14.1 (controller + CRDs) | `src/karpenter/karpenter.yaml` (rendered from the OCI chart by `src/karpenter/render.sh`) | https://github.com/aws/karpenter-provider-aws | Apache-2.0 |
-| AWS Load Balancer Controller v3.5.0 | `src/lbc/lbc.yaml` (rendered from `eks-charts` by `src/lbc/render.sh`; the chart's self-signed TLS Secret and CA bundles are stripped) | https://github.com/kubernetes-sigs/aws-load-balancer-controller | Apache-2.0 |
+| AWS Load Balancer Controller v3.6.0 | `src/lbc/lbc.yaml` (rendered from `eks-charts` by `src/lbc/render.sh`; the chart's self-signed TLS Secret and CA bundles are stripped) | https://github.com/kubernetes-sigs/aws-load-balancer-controller | Apache-2.0 |
 
 ## Python dependencies (installed into the application and load-generator images)
 
@@ -37,7 +37,7 @@ registries into the deploying account, at the digests pinned in `images.json`.
 | metrics-server | v0.9.0 | registry.k8s.io | Apache-2.0 |
 | nginx | 1.29-alpine | public.ecr.aws/docker/library/nginx | BSD-2-Clause |
 | karpenter (controller) | 1.14.1 | public.ecr.aws/karpenter | Apache-2.0 |
-| aws-load-balancer-controller | v3.5.0 | public.ecr.aws/eks | Apache-2.0 |
+| aws-load-balancer-controller | v3.6.0 | public.ecr.aws/eks | Apache-2.0 |
 | aws-for-fluent-bit | 2.34.3 | public.ecr.aws/aws-observability | Apache-2.0 |
 
 Argo CD's upstream install manifest names its cache image as `redis:8.2.3-alpine`. Redis 8 is

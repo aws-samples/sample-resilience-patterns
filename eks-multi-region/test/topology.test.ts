@@ -4549,8 +4549,12 @@ describe('third-party image mirror (step 10a)', () => {
     expect(pin('IMAGE_DIGEST')).not.toBe(lbc!.digest);
 
     // And the COMMITTED manifest must actually have been re-rendered against those pins --
-    // agreeing pins with a stale manifest is the same defect one step later.
-    expect(manifest).toContain(`:${lbc!.tag}@${lbc!.arm64Digest}`);
+    // agreeing pins with a stale manifest is the same defect one step later. The assertion
+    // names the Deployment's image line, not just the digest: the chart has no digest value,
+    // and the generated header alone once satisfied a looser check while the controller
+    // pulled a mutable tag.
+    expect(manifest).toContain(`image: "\${LBC_IMAGE_REPO}:${lbc!.tag}@${lbc!.arm64Digest}"`);
+    expect(manifest).not.toMatch(/image: "\$\{LBC_IMAGE_REPO\}:[^"@]+"/);
     expect(manifest).toContain(`chart:  https://aws.github.io/eks-charts  aws-load-balancer-controller  ${pin('CHART_VERSION')}`);
 
     // The Service mutator webhook is what injects spec.loadBalancerClass on CREATE, and that

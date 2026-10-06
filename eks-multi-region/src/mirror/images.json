@@ -114,12 +114,12 @@
     {
       "name": "aws-load-balancer-controller",
       "upstream": "public.ecr.aws/eks/aws-load-balancer-controller",
-      "tag": "v3.5.0",
-      "digest": "sha256:298acdff5a571731276aaea3d5cc450a264e4ad710a5bddf3e518f68a3f9f6cb",
-      "arm64Digest": "sha256:1ee3cc54fb62248bd56f2157f7be79baba2be8f0bbf2d926e2650d7ba710ee5f",
+      "tag": "v3.6.0",
+      "digest": "sha256:337a9bf9a99bbac372c8da20afad7b059e0bc89034f1087e325455b28c7fd488",
+      "arm64Digest": "sha256:c0d5da9e7986475a7cbfbbb76ecc5651fe4d3cd67ba0f0a10f908079310b3546",
       "arm64": true,
       "neededBy": "single-AZ",
-      "note": "AWS Load Balancer Controller. Replaces the in-tree service controller so the app NLB gets ip targets, cross-zone load balancing and ARC zonal shift -- none of which the in-tree controller can enable, and without which a zonal shift reports ACTIVE and moves nothing measurable. Runs IN-CLUSTER (unlike the in-tree controller, which runs on the AWS-managed control plane), so it needs both this mirror and the elasticloadbalancing VPC endpoint. Digests resolved from the live registry 2026-09-01; publishes linux/amd64 and linux/arm64 only. Chart 3.5.0 -> appVersion v3.5.0; tag and arm64Digest must equal IMAGE_TAG and IMAGE_DIGEST in src/lbc/render.sh, asserted by a test."
+      "note": "AWS Load Balancer Controller. Replaces the in-tree service controller so the app NLB gets ip targets, cross-zone load balancing and ARC zonal shift -- none of which the in-tree controller can enable, and without which a zonal shift reports ACTIVE and moves nothing measurable. Runs IN-CLUSTER (unlike the in-tree controller, which runs on the AWS-managed control plane), so it needs both this mirror and the elasticloadbalancing VPC endpoint. Re-pinned from v3.5.0 on 2026-10-06 to clear the 8 Amazon Inspector findings against v3.5.0 (1 critical, 5 high). There is no v3.5.x patch, so the fix is the next minor, released 2026-10-05: fresher than the argocd and valkey rule of taking the previous minor's last patch, and taken anyway because its changes sit in Gateway API, cross-account TargetGroupBinding and Ingress features this service does not use (it runs one NLB Service), and its upstream IAM policy is byte-identical to v3.5.0's. Digests resolved from the live registry 2026-10-06, the index digest cross-checked as the sha256 of the manifest bytes; publishes linux/amd64 and linux/arm64 only. Chart 3.6.0 -> appVersion v3.6.0; tag and arm64Digest must equal IMAGE_TAG and IMAGE_DIGEST in src/lbc/render.sh, asserted by a test."
     },
     {
       "name": "aws-for-fluent-bit",
