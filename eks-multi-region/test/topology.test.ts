@@ -4606,7 +4606,8 @@ describe('third-party image mirror (step 10a)', () => {
 
   test('Argo CD, its dependencies, metrics-server and the chart server are all covered', () => {
     // Derived from the upstream install manifests, not guessed: argo-cd v3.4.9's
-    // install.yaml references exactly argocd + redis + dex, metrics-server's
+    // install.yaml references argocd + redis + dex, and render.sh drops the dex objects (no
+    // SSO is configured), so Argo CD needs argocd and the redis stand-in. metrics-server's
     // components.yaml references metrics-server, and 10c's chart repo needs nginx.
     // A missing entry means a pod in an isolated subnet with nothing to pull.
     //
@@ -4624,7 +4625,7 @@ describe('third-party image mirror (step 10a)', () => {
     }
     for (const names of Object.values(byStep)) names.sort();
     expect(byStep).toEqual({
-      '10b': ['argocd', 'dex', 'metrics-server', 'valkey'],
+      '10b': ['argocd', 'metrics-server', 'valkey'],
       '10c': ['nginx'],
       '11': ['karpenter-controller'],
       // The AWS Load Balancer Controller runs IN-CLUSTER, unlike the in-tree service
@@ -5541,7 +5542,7 @@ describe('vendored Argo CD and metrics-server (step 10b)', () => {
     // absent from our ECR and the pod fails with "manifest unknown". Tied to images.json so a
     // mirror bump that forgets to re-render fails the build.
     for (const [text, name] of [
-      [argo, 'argocd'], [argo, 'valkey'], [argo, 'dex'], [ms, 'metrics-server'],
+      [argo, 'argocd'], [argo, 'valkey'], [ms, 'metrics-server'],
     ] as Array<[string, string]>) {
       const e = img(name);
       expect(text).toContain(`\${MIRROR_REGISTRY}/${name}:${e.tag}@${e.arm64Digest}`);
@@ -5605,6 +5606,64 @@ describe('vendored Argo CD and metrics-server (step 10b)', () => {
     };
     walk('build');
     expect(reach.join('\n')).not.toContain('argo/render.sh');
+  });
+
+  test('Argo CD\'s bundled Dex is dropped, not mirrored: no SSO is configured', () => {
+    // Dex does work only when argocd-cm carries dex.config; without it the wrapper logs "dex is
+    // not configured" and never starts the Dex binary. Its image still carried more Inspector
+    // findings than any other image we mirror, and no release fixed them. So render.sh drops
+    // Dex's six objects BY LABEL and images.json no longer mirrors it. Three halves, each of
+    // which would fail on its own:
+    //  - a manifest that still carried a Dex Deployment would pull an image nobody mirrors;
+    //  - a mirror entry with no consumer would keep a scanned image alive for nothing;
+    //  - a cluster installed before the drop keeps its Dex objects, because a server-side
+    //    apply never prunes, unless the installer deletes them.
+    const docs = argo.split(/^---\s*$/m);
+    const dexDocs = docs.filter((d) =>
+      /^ {4}app\.kubernetes\.io\/name:\s*argocd-dex-server\s*$/m.test(
+        d.match(/^metadata:\n((?:[ \t].*\n|\n)*)/m)?.[1] ?? ''));
+    expect(dexDocs).toEqual([]);
+    expect(argo).not.toMatch(/^\s+image: .*\/dex[:@]/m);
+    expect(argo).not.toContain('ghcr.io/dexidp');
+    expect(mirror.images.map((i) => i.name)).not.toContain('dex');
+    // The drop is recorded where a reviewer of the vendored file sees it.
+    expect(argo).toMatch(/^# {3}6 argocd-dex-server object\(s\) dropped: this deployment configures no SSO\.$/m);
+    // Nothing left in the install NEEDS the dropped objects. argocd-server keeps two upstream
+    // hooks for an optional Dex, both harmless without it: its server.dex.* env vars read
+    // argocd-cmd-params-cm keys marked optional (and this repo sets none of them), and its
+    // argocd-dex-server-tls volume is an OPTIONAL Secret mount that no document creates, so it
+    // was already empty before the drop. Pin both as optional, pin that no document creates
+    // the Secret, and pin that argocd-cm configures no SSO.
+    const tlsVolume = argo.match(/^ {6}- name: argocd-dex-server-tls\n {8}secret:\n((?: {10}.*\n)+)/m)?.[1] ?? '';
+    expect(tlsVolume).toMatch(/^ {10}optional: true$/m);
+    expect(argo).not.toMatch(/^kind: Secret\nmetadata:\n(?: {2}.*\n)*? {2}name: argocd-dex-server-tls$/m);
+    const dexEnvRefs = [...argo.matchAll(/key: server\.dex\.[\w.]+\n\s+name: argocd-cmd-params-cm\n\s+optional: (\w+)/g)];
+    expect(dexEnvRefs.length).toBeGreaterThan(0);
+    expect(dexEnvRefs.every((m) => m[1] === 'true')).toBe(true);
+    const cm = docs.find((d) => /^kind: ConfigMap$/m.test(d) && /^ {2}name: argocd-cm$/m.test(d)) ?? '';
+    expect(cm).not.toMatch(/dex\.config|oidc\.config/);
+
+    const installerSource = fs.readFileSync(
+      path.join(__dirname, '..', 'src', 'cdk', 'lib', 'app-installer.ts'), 'utf8');
+    // Comment lines stripped: the comment above the command quotes it, and a command that
+    // survives only in a comment must not pass.
+    const installer = installerSource.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+    const retire = 'kubectl -n "$ARGOCD_NAMESPACE" delete deploy,service,serviceaccount,role,rolebinding,networkpolicy -l app.kubernetes.io/name=argocd-dex-server --ignore-not-found';
+    // Anchored to the opening quote so the command cannot survive only inside a longer literal.
+    expect(installer).toContain(`'${retire}'`);
+    expect(installer.indexOf(retire)).toBeLessThan(
+      installer.indexOf('kubectl apply --server-side --force-conflicts -f /tmp/manifest.yaml'));
+  });
+
+  test('render.sh drops Dex by label and asserts the count, so an upstream change fails loudly', () => {
+    // A drop keyed on a name that silently matched nothing (or matched more than Dex) would ship
+    // a manifest nobody reviewed. The count is v3.4.9's footprint: ServiceAccount, Role,
+    // RoleBinding, Service, Deployment, NetworkPolicy.
+    const render = fs.readFileSync(path.join(__dirname, '..', 'src', 'argo', 'render.sh'), 'utf8');
+    expect(render).toContain('"argocd-install.yaml": ("argocd-dex-server", 6),');
+    expect(render).toContain('if dropped != expected:');
+    // Dex digests are no longer read from the lockfile, so its removal there cannot break a render.
+    expect(render).not.toContain('imgs["dex"]');
   });
 });
 

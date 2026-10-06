@@ -286,6 +286,14 @@ export class AppInstaller extends Construct {
               // over the same Application CR after the fixed apply. Idempotent:
               // matches nothing on a healthy cluster.
               'kubectl -n default delete deploy,statefulset,service,configmap,secret,serviceaccount,role,rolebinding,networkpolicy -l app.kubernetes.io/part-of=argocd --ignore-not-found',
+              // RETIRE ARGO CD'S BUNDLED DEX. src/argo/render.sh drops Dex's six objects from
+              // the manifest because no SSO is configured, but a server-side apply never
+              // prunes objects that are missing from its input -- so a cluster installed
+              // before the drop would keep an argocd-dex-server Deployment still pulling the
+              // dex image from a mirror repository that no longer receives it. Deleted by
+              // the same label render.sh drops them by, with the same six kinds. Idempotent:
+              // matches nothing on a fresh install or a rerun.
+              'kubectl -n "$ARGOCD_NAMESPACE" delete deploy,service,serviceaccount,role,rolebinding,networkpolicy -l app.kubernetes.io/name=argocd-dex-server --ignore-not-found',
               'kubectl apply --server-side --force-conflicts -f /tmp/manifest.yaml',
               // Custom resources go in a SECOND apply, after their CRDs are established.
               //

@@ -28,7 +28,7 @@
     "1500 MB per region (3000 MB across both), against 309 MB per region (619 MB) for",
     "linux/arm64 alone -- 4.8x the data. The surplus is amd64, 386, ppc64le, s390x,",
     "arm/v6, arm/v7 and riscv64, none of which this node group can run. Flattening also",
-    "sidesteps the attestation manifests that dex and nginx each carry (5 and 8 entries",
+    "sidesteps the attestation manifests that nginx carries (8 entries",
     "with architecture \"unknown\"; the valkey index carries none), which are a known",
     "source of ECR push friction.",
     "",
@@ -40,7 +40,7 @@
     "",
     "THE IMAGE LIST IS DERIVED, NOT GUESSED. It comes from the upstream install",
     "manifests for the pinned versions:",
-    "  argo-cd      manifests/install.yaml at v3.4.9   -> argocd, redis (served by valkey), dex",
+    "  argo-cd      manifests/install.yaml at v3.4.9   -> argocd, redis (served by valkey); its dex objects are dropped by src/argo/render.sh (no SSO configured)",
     "  metrics-server components.yaml at v0.9.0        -> metrics-server",
     "One argocd image backs FIVE workloads (server, repo-server,",
     "application-controller, applicationset-controller, notifications-controller), so",
@@ -70,16 +70,6 @@
       "arm64": true,
       "neededBy": "10b",
       "note": "Serves the cache that argo-cd v3.4.9's install.yaml names as redis:8.2.3-alpine. Redis 8 is licensed RSALv2 / SSPLv1 / AGPLv3, none of them a permissive license; Valkey is the Linux Foundation fork of the BSD-3-Clause Redis 7.2 codebase and speaks the same protocol, and Argo CD uses the cache only through standard commands (its repo-server and application-controller hold no Redis-8-only features). src/argo/render.sh repoints the manifest's redis reference at this entry; the image ships redis-server/redis-cli compatibility names and the same uid 999 the Deployment runs as. 9.0.6 chosen over 9.1.x for the same reason as argocd: last patch of the previous minor. Digest COMPUTED as sha256 of the manifest bytes (ECR Public returns no docker-content-digest header) and cross-checked 2026-09-17 against Docker Hub's header for the same tag -- identical."
-    },
-    {
-      "name": "dex",
-      "upstream": "ghcr.io/dexidp/dex",
-      "tag": "v2.45.0",
-      "digest": "sha256:b8469881d3cb3a73001506f0d3aaefecb9c45d2311c1e0f405d8ac538316c59d",
-      "arm64Digest": "sha256:9d3022571fd71a152a76038f30aa19cedff742b1b2d150d2035ca5f04ab10dd0",
-      "arm64": true,
-      "neededBy": "10b",
-      "note": "Mirrored even though the demo configures no SSO. Deleting the dex Deployment from the vendored upstream manifest would save one image but means editing vendored upstream, and a wrong edit there fails at install time. Mirroring costs one row here and keeps install.yaml unmodified."
     },
     {
       "name": "metrics-server",

@@ -39,17 +39,16 @@ mkdir -p "$OUT_DIR" "$WORK"
 # irrelevant here: the rewrite matches the redis reference by repository, whatever its
 # tag, and repoints it at the valkey tag + digest the lockfile pins.
 
-read -r ARGOCD_DIGEST VALKEY_TAG VALKEY_DIGEST DEX_TAG DEX_DIGEST MS_DIGEST <<EOF
+read -r ARGOCD_DIGEST VALKEY_TAG VALKEY_DIGEST MS_DIGEST <<EOF
 $(python3 - "$REPO_ROOT/src/mirror/images.json" <<'PY'
 import json, sys
 imgs = {i["name"]: i for i in json.load(open(sys.argv[1]))["images"]}
-need = ["argocd", "valkey", "dex", "metrics-server"]
+need = ["argocd", "valkey", "metrics-server"]
 missing = [n for n in need if n not in imgs]
 if missing:
     sys.exit(f"ERROR: images.json is missing {missing}")
 print(imgs["argocd"]["arm64Digest"],
       imgs["valkey"]["tag"], imgs["valkey"]["arm64Digest"],
-      imgs["dex"]["tag"], imgs["dex"]["arm64Digest"],
       imgs["metrics-server"]["arm64Digest"])
 PY
 )
@@ -58,7 +57,6 @@ EOF
 echo "Digests from src/mirror/images.json:"
 echo "  argocd         $ARGOCD_VERSION @ $ARGOCD_DIGEST"
 echo "  valkey         $VALKEY_TAG @ $VALKEY_DIGEST   (serves Argo CD's redis reference)"
-echo "  dex            $DEX_TAG @ $DEX_DIGEST"
 echo "  metrics-server $METRICS_SERVER_VERSION @ $MS_DIGEST"
 
 # ---- fetch -----------------------------------------------------------------
@@ -90,6 +88,20 @@ curl -fsSL \
 # every manifest names its namespace, so a regenerate that dropped this would fail the
 # build -- but the generator must produce the file the tests pass against, not rely on a
 # hand-edit after the fact.
+#
+# DEX IS DROPPED, NOT MIRRORED. Upstream install.yaml always ships Argo CD's bundled Dex, the
+# SSO broker that only does anything when argocd-cm carries dex.config. This deployment
+# configures no SSO, so Dex's wrapper logs "dex is not configured" and never starts the Dex
+# binary -- yet its image carried more Inspector findings than any other we mirror, none of
+# them fixable by a release. The drop is BY LABEL (app.kubernetes.io/name=argocd-dex-server),
+# not a hand edit of the vendored file, and it ASSERTS its own count: exactly the six objects
+# v3.4.9 ships (ServiceAccount, Role, RoleBinding, Service, Deployment, NetworkPolicy). A
+# different count means upstream changed Dex's footprint and the drop must be re-reviewed
+# rather than silently removing more or less. argocd-server keeps two upstream hooks for an
+# optional Dex, both harmless without it: its server.dex.* env vars read argocd-cmd-params-cm
+# keys marked optional, and its argocd-dex-server-tls volume is an optional Secret mount that
+# no document creates. argocd-server registers its Dex handlers only when SSO is configured.
+# Adding SSO later means restoring the drop and the dex entry in images.json together.
 # The heredoc is QUOTED so the shell performs no expansion — an unquoted one tries to expand
 # the Python f-strings and `${{...}}` and dies with "bad substitution". Values arrive through
 # the environment instead.
@@ -97,7 +109,6 @@ ARGOCD_VERSION="$ARGOCD_VERSION" \
 METRICS_SERVER_VERSION="$METRICS_SERVER_VERSION" \
 ARGOCD_DIGEST="$ARGOCD_DIGEST" \
 VALKEY_TAG="$VALKEY_TAG" VALKEY_DIGEST="$VALKEY_DIGEST" \
-DEX_TAG="$DEX_TAG" DEX_DIGEST="$DEX_DIGEST" \
 MS_DIGEST="$MS_DIGEST" \
 WORK_DIR="$WORK" OUT_DIR="$OUT_DIR" \
 python3 - <<'PY'
@@ -117,8 +128,6 @@ REWRITES = {
          f"{M}/argocd:{E['ARGOCD_VERSION']}@{E['ARGOCD_DIGEST']}"),
         (r"public\.ecr\.aws/docker/library/redis:[^\s@]+",
          f"{M}/valkey:{E['VALKEY_TAG']}@{E['VALKEY_DIGEST']}"),
-        (re.escape(f"ghcr.io/dexidp/dex:{E['DEX_TAG']}"),
-         f"{M}/dex:{E['DEX_TAG']}@{E['DEX_DIGEST']}"),
     ],
     "metrics-server.yaml": [
         (re.escape(f"registry.k8s.io/metrics-server/metrics-server:{E['METRICS_SERVER_VERSION']}"),
@@ -160,6 +169,34 @@ def inject_namespace(text, namespace):
     return "".join(parts), injected
 
 
+# Objects dropped from each manifest, by top-level app.kubernetes.io/name label, with the
+# exact count upstream ships. See the DEX IS DROPPED note above the heredoc.
+DROP = {
+    "argocd-install.yaml": ("argocd-dex-server", 6),
+}
+
+
+def drop_by_name_label(text, label, expected):
+    """Remove every document whose TOP-LEVEL metadata carries
+    app.kubernetes.io/name: <label>, together with the separator that follows it."""
+    parts = re.split(r"(?m)^(---[ \t]*)$", text)
+    kept, dropped = [], 0
+    for i in range(0, len(parts), 2):
+        doc = parts[i]
+        sep = parts[i + 1] if i + 1 < len(parts) else ""
+        m = re.search(r"(?m)^metadata:\n((?:[ \t].*\n|\n)*)", doc)
+        if m and re.search(rf"(?m)^    app\.kubernetes\.io/name:\s*{re.escape(label)}\s*$", m.group(1)):
+            dropped += 1
+            continue
+        kept.append(doc + sep)
+    if dropped != expected:
+        sys.exit(
+            f"ERROR: expected to drop {expected} {label} object(s), found {dropped}. Upstream "
+            f"changed that component's footprint; review the drop before regenerating."
+        )
+    return "".join(kept), dropped
+
+
 HEADERS = {
     "argocd-install.yaml":
         f"Argo CD {E['ARGOCD_VERSION']}, vendored from argoproj/argo-cd manifests/install.yaml",
@@ -170,6 +207,11 @@ HEADERS = {
 
 for name, pairs in REWRITES.items():
     text = (work / name).read_text()
+    dropped_note = []
+    if name in DROP:
+        label, expected = DROP[name]
+        text, dropped = drop_by_name_label(text, label, expected)
+        dropped_note = [f"#   {dropped} {label} object(s) dropped: this deployment configures no SSO."]
     total = 0
     for pattern, new in pairs:
         text, n = re.subn(pattern, new, text)
@@ -190,6 +232,7 @@ for name, pairs in REWRITES.items():
         "#",
         f"#   {HEADERS[name]}",
         f"#   {total} image reference(s) repointed at the private ECR mirror.",
+        *dropped_note,
         "#",
         "# Digests are the ARM64 CHILD digests from src/mirror/images.json, NOT index",
         "# digests: the mirror copies only linux/arm64, so an index digest is absent from",
