@@ -4605,7 +4605,7 @@ describe('third-party image mirror (step 10a)', () => {
   });
 
   test('Argo CD, its dependencies, metrics-server and the chart server are all covered', () => {
-    // Derived from the upstream install manifests, not guessed: argo-cd v3.4.7's
+    // Derived from the upstream install manifests, not guessed: argo-cd v3.4.9's
     // install.yaml references exactly argocd + redis + dex, metrics-server's
     // components.yaml references metrics-server, and 10c's chart repo needs nginx.
     // A missing entry means a pod in an isolated subnet with nothing to pull.
@@ -5198,6 +5198,27 @@ describe('Karpenter EC2NodeClass, NodePool and installer wiring (step 11c)', () 
       'utf8',
     );
     expect(reqs).toMatch(/^urllib3==/m);
+  });
+
+  test('the runtime app image carries no pip', () => {
+    // python:3.12-slim bundles pip, and Amazon Inspector files the bundled pip's advisories
+    // against every app image pushed. Nothing at runtime installs packages, so the image drops
+    // pip once requirements are installed and the import smoke test has passed.
+    const dockerfile = fs.readFileSync(
+      path.join(__dirname, '..', 'src', 'app', 'Dockerfile'),
+      'utf8',
+    );
+    const uninstall = dockerfile.search(/^RUN python -m pip uninstall --yes pip$/m);
+    const install = dockerfile.indexOf('pip install --no-cache-dir -r requirements.txt');
+    const smokeTest = dockerfile.indexOf('import server, schema');
+    // The anchors must exist, or the ordering checks below pass vacuously against -1.
+    expect(install).toBeGreaterThan(-1);
+    expect(smokeTest).toBeGreaterThan(-1);
+    expect(uninstall).toBeGreaterThan(-1);
+    expect(uninstall).toBeGreaterThan(install);
+    expect(uninstall).toBeGreaterThan(smokeTest);
+    // Nothing after the uninstall may need pip again.
+    expect(dockerfile.slice(uninstall + 1)).not.toMatch(/pip install/);
   });
 
   test('BOTH regions install Karpenter and stage the CR manifest', () => {

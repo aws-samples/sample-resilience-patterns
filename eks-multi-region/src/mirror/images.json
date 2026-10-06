@@ -40,7 +40,7 @@
     "",
     "THE IMAGE LIST IS DERIVED, NOT GUESSED. It comes from the upstream install",
     "manifests for the pinned versions:",
-    "  argo-cd      manifests/install.yaml at v3.4.7   -> argocd, redis (served by valkey), dex",
+    "  argo-cd      manifests/install.yaml at v3.4.9   -> argocd, redis (served by valkey), dex",
     "  metrics-server components.yaml at v0.9.0        -> metrics-server",
     "One argocd image backs FIVE workloads (server, repo-server,",
     "application-controller, applicationset-controller, notifications-controller), so",
@@ -54,12 +54,12 @@
     {
       "name": "argocd",
       "upstream": "quay.io/argoproj/argocd",
-      "tag": "v3.4.7",
-      "digest": "sha256:39784d097bd553cca5ba984aaacd1b063819e72ec93652e095217f3cd8e37756",
-      "arm64Digest": "sha256:2e0990d21d6c9edd294e7cd299bce63886df35cc259a04023611a80ecfaa2ea3",
+      "tag": "v3.4.9",
+      "digest": "sha256:17eee82f0b98809a80c37db330ff9d852e425d54e02cc97359ee4141f398c123",
+      "arm64Digest": "sha256:1f01338c2288ed0cbb917db66c8eec75137a43a8f0a1c0ac47c235e5fa2f5775",
       "arm64": true,
       "neededBy": "10b",
-      "note": "Backs argocd-server, repo-server, application-controller, applicationset-controller and notifications-controller. v3.4.7 chosen over v3.5.1: last patch of the previous minor, so it carries seven patches of field exposure rather than one. An Argo defect on stage would look like the very conflict this demo disproves."
+      "note": "Backs argocd-server, repo-server, application-controller, applicationset-controller and notifications-controller. v3.4.9 chosen over v3.5.3: last patch of the previous minor, so it carries nine patches of field exposure rather than three. Re-pinned from v3.4.7 on 2026-09-28 to clear Amazon Inspector findings: v3.4.9's install.yaml differs from v3.4.7's only in the argocd image tag, and a linux/arm64 scan shows 45 fewer CVE ids with none added. Digests resolved from quay.io 2026-09-28 and cross-checked as the sha256 of the manifest bytes. An Argo failure on stage would look like the very conflict this demo disproves."
     },
     {
       "name": "valkey",
@@ -69,7 +69,7 @@
       "arm64Digest": "sha256:835ee0f9aca385f81c349696b5e7030ac9c4d15dbccfcee24299ca5c01c174b3",
       "arm64": true,
       "neededBy": "10b",
-      "note": "Serves the cache that argo-cd v3.4.7's install.yaml names as redis:8.2.3-alpine. Redis 8 is licensed RSALv2 / SSPLv1 / AGPLv3, none of them a permissive license; Valkey is the Linux Foundation fork of the BSD-3-Clause Redis 7.2 codebase and speaks the same protocol, and Argo CD uses the cache only through standard commands (its repo-server and application-controller hold no Redis-8-only features). src/argo/render.sh repoints the manifest's redis reference at this entry; the image ships redis-server/redis-cli compatibility names and the same uid 999 the Deployment runs as. 9.0.6 chosen over 9.1.x for the same reason as argocd: last patch of the previous minor. Digest COMPUTED as sha256 of the manifest bytes (ECR Public returns no docker-content-digest header) and cross-checked 2026-09-17 against Docker Hub's header for the same tag -- identical."
+      "note": "Serves the cache that argo-cd v3.4.9's install.yaml names as redis:8.2.3-alpine. Redis 8 is licensed RSALv2 / SSPLv1 / AGPLv3, none of them a permissive license; Valkey is the Linux Foundation fork of the BSD-3-Clause Redis 7.2 codebase and speaks the same protocol, and Argo CD uses the cache only through standard commands (its repo-server and application-controller hold no Redis-8-only features). src/argo/render.sh repoints the manifest's redis reference at this entry; the image ships redis-server/redis-cli compatibility names and the same uid 999 the Deployment runs as. 9.0.6 chosen over 9.1.x for the same reason as argocd: last patch of the previous minor. Digest COMPUTED as sha256 of the manifest bytes (ECR Public returns no docker-content-digest header) and cross-checked 2026-09-17 against Docker Hub's header for the same tag -- identical."
     },
     {
       "name": "dex",
@@ -124,12 +124,12 @@
     {
       "name": "aws-for-fluent-bit",
       "upstream": "public.ecr.aws/aws-observability/aws-for-fluent-bit",
-      "tag": "2.34.3",
-      "digest": "sha256:0ad1aba85776401eb397eab81524aee10c6dfafc19ba0a54dc6788ad2ccf06ac",
-      "arm64Digest": "sha256:cae481d800b15f4d87ab40c5174d1da6a4764ce7522553e65c39b8c81b9996d7",
+      "tag": "2.34.3.20260918",
+      "digest": "sha256:cb8ddc965dbe5bc47e0bfdd24280d6e60907090c2c26bc911a386acb647948de",
+      "arm64Digest": "sha256:c92a920c0d7aa0aaa46932bfb18512dd72a405ff2ce5f1a5836d1daca9e26c65",
       "arm64": true,
       "neededBy": "log-shipping",
-      "note": "Cluster-wide pod log shipper (k8s/fluent-bit.yaml). Runs IN-CLUSTER on nodes in isolated subnets with NO NAT, so public.ecr.aws is unreachable at runtime and this mirror is mandatory rather than an optimisation -- reachability to CloudWatch Logs comes from the pre-existing CLOUDWATCH_LOGS interface endpoint. Digests resolved from the live registry 2026-09-09: the index digest was computed as the sha256 of the manifest-list bytes because public.ecr.aws returns no Docker-Content-Digest header for this repo, which is authoritative since a manifest digest IS the hash of those bytes. Publishes linux/amd64 and linux/arm64 only. arm64Digest is the CHILD manifest and is what the manifest references (docs/lessons.md #10: the arm64-only copy means the INDEX digest never lands in ECR, so referencing it fails as a pull timeout that reads like a network fault). tag and arm64Digest must equal the image line in k8s/fluent-bit.yaml -- asserted by a test."
+      "note": "Cluster-wide pod log shipper (k8s/fluent-bit.yaml). Runs IN-CLUSTER on nodes in isolated subnets with NO NAT, so public.ecr.aws is unreachable at runtime and this mirror is mandatory rather than an optimisation -- reachability to CloudWatch Logs comes from the pre-existing CLOUDWATCH_LOGS interface endpoint. Re-pinned 2026-09-28 from 2.34.3 to the dated rebuild 2.34.3.20260918 (the digest the `stable` tag points at that day): same Fluent Bit 1.9.10, with the Go plugins rebuilt on go1.27.1 and the Amazon Linux 2 packages refreshed, clearing Amazon Inspector findings against 2.34.3 (go/stdlib 1.25.5, openssl, python, vim). The 2.34.x line is still Amazon Linux 2, so Inspector's end-of-support finding for that base remains until a 3.x (Amazon Linux 2023) migration. Digests resolved from the live registry 2026-09-28: the index digest was computed as the sha256 of the manifest-list bytes because public.ecr.aws returns no Docker-Content-Digest header for this repo, which is authoritative since a manifest digest IS the hash of those bytes. Publishes linux/amd64 and linux/arm64 only. arm64Digest is the CHILD manifest and is what the manifest references (docs/lessons.md #10: the arm64-only copy means the INDEX digest never lands in ECR, so referencing it fails as a pull timeout that reads like a network fault). tag and arm64Digest must equal the image line in k8s/fluent-bit.yaml -- asserted by a test."
     }
   ]
 }

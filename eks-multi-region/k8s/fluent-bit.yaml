@@ -267,7 +267,7 @@ spec:
           # Mirrored into private ECR and pinned by digest. The node groups sit in
           # isolated subnets with no NAT, so public.ecr.aws is unreachable at
           # runtime; only private ECR resolves, over the interface endpoints.
-          image: ${FLUENTBIT_IMAGE_REPO}:2.34.3@sha256:cae481d800b15f4d87ab40c5174d1da6a4764ce7522553e65c39b8c81b9996d7
+          image: ${FLUENTBIT_IMAGE_REPO}:2.34.3.20260918@sha256:c92a920c0d7aa0aaa46932bfb18512dd72a405ff2ce5f1a5836d1daca9e26c65
           imagePullPolicy: IfNotPresent
           env:
             - name: FLB_LOG_LEVEL
