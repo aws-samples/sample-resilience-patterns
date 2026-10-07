@@ -136,8 +136,8 @@ the cluster API endpoint is private. `k8s/namespaces.yaml` applies first; everyt
 namespaced names its namespace explicitly. Pod logs for every namespace ship to CloudWatch
 Logs via a fluent-bit DaemonSet.
 
-Third-party images (Argo CD with its dex and metrics-server components, and the Valkey image
-that serves as Argo CD's cache; see `THIRD-PARTY-LICENSES`) are **mirrored into your own
+Third-party images (Argo CD and metrics-server, and the Valkey image that serves as
+Argo CD's cache; see `THIRD-PARTY-LICENSES`) are **mirrored into your own
 ECR** by `make mirror` from the digest-pinned list in `src/mirror/images.json`. The mirror is
 required rather than optional because the node subnets have no route to the internet, and it
 is also what lets the cluster run with no NAT and no egress at all.

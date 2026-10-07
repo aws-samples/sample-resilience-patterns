@@ -63,6 +63,10 @@ COPY common.py server.py schema.py error_rate.py ./
 RUN AWS_REGION=smoke DB_SECRET_NAME=smoke DB_READ_HOST=smoke DB_WRITE_HOST=smoke \
     ERROR_RATE_PARAM=smoke python -c "import server, schema"
 
+# pip is needed only to install requirements above; the application never calls it. Removing
+# it keeps the base image's bundled pip, and the advisories filed against it, out of the image.
+RUN python -m pip uninstall --yes pip
+
 # Run unprivileged. The pod also sets runAsNonRoot, and the two must agree or the
 # kubelet refuses to start the container.
 RUN useradd --create-home --uid 10001 appuser
