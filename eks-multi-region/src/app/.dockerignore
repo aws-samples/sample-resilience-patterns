@@ -1,0 +1,5 @@
+# The app image's build context. Both region stacks fingerprint this directory to name
+# the image, and CDK stages what it does not ignore as the build context, so neither
+# should see what a local run of the Python modules leaves behind.
+**/__pycache__
+**/*.pyc

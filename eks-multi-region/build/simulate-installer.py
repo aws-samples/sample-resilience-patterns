@@ -243,6 +243,9 @@ def main():
         return
     if ' delete deploy,statefulset,service,' in ' ' + line:
         return  # argocd default-ns cleanup: modeled as a no-op
+    if re.match(r'-n \S+ delete deploy,service,serviceaccount,role,rolebinding,networkpolicy '
+                r'-l app\.kubernetes\.io/name=argocd-dex-server --ignore-not-found$', line):
+        return  # retired Dex objects from an earlier install: modeled as a no-op
 
     m = re.match(r'-n (\S+) get svc (\S+) -o jsonpath=\{\.spec\.loadBalancerClass\}$', line)
     if m:

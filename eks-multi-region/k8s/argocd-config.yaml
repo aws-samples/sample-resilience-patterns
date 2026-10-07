@@ -22,7 +22,7 @@
 # by the recommendation engine's "Encrypt Data in Transit" BEST_PRACTICE ("Do not use
 # self-signed certificates" / "backend TLS listeners do not check the validity of a
 # TLS cert"). Insecure mode serves plain HTTP on 8080 — the standard shape behind an
-# L7 proxy. First-deploy check: verify 3.4.7 actually loops without it (the mechanism
+# L7 proxy. First-deploy check: verify 3.4.9 actually loops without it (the mechanism
 # is confirmed present; the behaviour is not verifiable offline).
 apiVersion: v1
 kind: ConfigMap

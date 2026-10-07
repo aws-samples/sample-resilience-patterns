@@ -1094,7 +1094,7 @@ export class RegionStack extends cdk.Stack {
     // script so the account and region come from the deploying stack instead of being
     // string-built at deploy time.
     // The mirror PREFIX, for manifests that repoint several images at once (Argo CD's
-    // install references argocd, valkey and dex). KarpenterImageRepo below is the same idea
+    // install references argocd and valkey). KarpenterImageRepo below is the same idea
     // at finer granularity -- a full repo path including the image name. Both exist because
     // Karpenter's manifest was rendered before this prefix did; the prefix is the better
     // pattern for anything referencing more than one image.
