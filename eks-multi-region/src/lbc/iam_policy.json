@@ -2,7 +2,10 @@
   "$comment": [
     "VENDORED from the upstream AWS Load Balancer Controller IAM policy, pinned to the",
     "controller version this repo runs:",
-    "  https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v3.5.0/docs/install/iam_policy.json",
+    "  https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v3.6.0/docs/install/iam_policy.json",
+    "Re-checked for v3.6.0 on 2026-10-06: the upstream file is byte-identical to v3.5.0's",
+    "(sha256 16f232c9d9f79366fe949c4550ad517a202380058a9e48d45a4e215044a20a6a), so the",
+    "statements below did not change; only this pointer moved.",
     "",
     "WHY VENDORED RATHER THAN HAND-WRITTEN. 80 actions across 8 services. Hand-transcribing",
     "that is exactly how a spec value that does not exist in reality gets introduced",

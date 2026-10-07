@@ -19,7 +19,18 @@
 # `exec format error` — a CrashLoopBackOff with no clue as to why. The CDK asset declares
 # Platform.LINUX_ARM64 and the node group uses AL2023_ARM_64_STANDARD on Graviton so all
 # three agree.
-FROM python:3.12-slim
+#
+# BASE PINNED BY DIGEST. The region stacks name this image by fingerprinting src/app, so it is
+# rebuilt only when a file here changes. With a bare tag the base was whatever python:3.12-slim
+# pointed at on the day of the last source change: base-image security fixes never arrived on
+# their own, and two builds of one commit could differ. With the digest, a base bump is this one
+# reviewed line, and because the line is in the fingerprint the next deploy rebuilds the image
+# and rolls the pods. The tag stays for readers; the digest is what resolves. To re-pin, take
+# the multi-platform index digest (kaniko selects linux/arm64 from it):
+#   crane digest index.docker.io/library/python:3.12-slim
+# Resolved 2026-10-06; its linux/arm64 child is
+# sha256:16bf2b5c59a08523519d3c8589deca849285dee1d62a3653e124c3dba340f15e.
+FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
