@@ -99,7 +99,7 @@ jobs:
         env:
           SWEEP_STALE_ASSETS: "true"
         run: ./cleanup.sh
-    timeout-minutes: 180
+    timeout-minutes: 240
 env:
   AWS_REGION: us-east-2
   AWS_DEFAULT_REGION: us-east-2
