@@ -586,7 +586,12 @@ const patterns: Pattern[] = [
       // --role-arn on every change-set when set.
       ROLE_ARN: `arn:aws:iam::${E2E_ACCOUNT}:role/eks-multi-region-cfn-exec`,
     },
-    e2eTimeoutMinutes: 180,
+    // The job deploys both Regions and then tears everything down, so this limit covers
+    // both. Three runs on 2026-10-06/07 took 2h40m, 2h44m and 2h53m (deploy 1h28m-1h44m,
+    // teardown 65-70 min), the last only 7 minutes under 3 hours. A job that hits its
+    // limit is stopped mid-teardown and leaves its stacks behind until the next run's
+    // pre-flight cleanup, so the limit sits about an hour above the slowest run seen.
+    e2eTimeoutMinutes: 240,
     cleanupTimeoutMinutes: 60,
     buildSteps: [
       { uses: 'actions/checkout@v6' },
