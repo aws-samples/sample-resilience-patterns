@@ -2,23 +2,81 @@
 
 name: retry-automerge
 on:
-  check_suite:
-    types:
-      - completed
+  schedule:
+    - cron: 23 * * * *
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Only print what would be merged
+        required: false
+        default: false
+        type: boolean
 jobs:
   retry-auto-merge:
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
-    if: github.event.check_suite.app.slug == 'github-actions'
+      checks: read
+      statuses: read
     steps:
-      - name: Re-enable auto-merge on Dependabot PRs
+      - name: Merge Dependabot PRs whose checks passed
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          E2E_WORKFLOWS: '["aurora: e2e","s3mrap-crr: e2e","drs-ec2: e2e","eks-multi-region: e2e"]'
         run: |-
-          for pr in $(gh pr list --repo "$REPO" --author "app/dependabot" --json number,autoMergeRequest --jq '.[] | select(.autoMergeRequest == null) | .number'); do
-            echo "Re-enabling auto-merge on PR #$pr"
-            gh pr merge --auto --squash "$pr" --repo "$REPO" || true
-          done
+          set -euo pipefail
+          gh pr list --repo "$REPO" --author app/dependabot --label auto-merge --state open --limit 100 \
+            --json number,headRefOid,reviewDecision,mergeable,autoMergeRequest,files,statusCheckRollup \
+            > "$RUNNER_TEMP/prs.json"
+          cat > "$RUNNER_TEMP/decide.jq" <<'JQ'
+          def check:
+            if .__typename == "CheckRun" then
+              {workflow: (.workflowName // ""), name, done: (.status == "COMPLETED"),
+               ok: ((.conclusion // "") | IN("SUCCESS", "NEUTRAL", "SKIPPED")),
+               success: (.conclusion == "SUCCESS"), at: (.completedAt // "")}
+            else
+              {workflow: "", name: .context, done: (.state | IN("PENDING", "EXPECTED") | not),
+               ok: (.state == "SUCCESS"), success: (.state == "SUCCESS"), at: (.createdAt // "")}
+            end;
+          def title: if .workflow == "" then .name else "\(.workflow) / \(.name)" end;
+          .[]
+          | select(.autoMergeRequest == null)
+          | ([.statusCheckRollup[] | check
+              | select(.workflow | IN("auto-approve", "auto-merge", "retry-automerge") | not)]
+             | group_by([.workflow, .name])
+             | map(if any(.[]; .done | not) then .[0] + {done: false} else max_by(.at) end)) as $checks
+          | ([.files[].path | split("/")[0]] | unique | map(. + ": e2e") | map(select(IN($e2e[])))) as $need
+          | ([$checks[] | select(.done and (.ok | not)) | title]) as $failed
+          | ([$checks[] | select(.done | not) | title]) as $running
+          | ([$need[] | . as $w | select(any($checks[]; .workflow == $w and .success) | not)]) as $missing
+          | (if .reviewDecision != "APPROVED" then "not approved"
+             elif .mergeable != "MERGEABLE" then "mergeable is \(.mergeable)"
+             elif ($checks | length) == 0 then "no checks reported yet"
+             elif ($failed | length) > 0 then "failed: \($failed | join(", "))"
+             elif ($running | length) > 0 then "still running: \($running | join(", "))"
+             elif ($missing | length) > 0 then "no passing run of \($missing | join(", "))"
+             else "" end) as $why
+          | {number, head: .headRefOid, merge: ($why == ""),
+             reason: (if $why == "" then "all checks passed" else $why end)}
+          JQ
+          jq -c --argjson e2e "$E2E_WORKFLOWS" -f "$RUNNER_TEMP/decide.jq" "$RUNNER_TEMP/prs.json" \
+            > "$RUNNER_TEMP/decisions.jsonl"
+          while read -r d; do
+            number=$(jq -r .number <<<"$d")
+            reason=$(jq -r .reason <<<"$d")
+            if [ "$(jq -r .merge <<<"$d")" != true ]; then
+              echo "#$number: waiting ($reason)"
+            elif [ "$DRY_RUN" = true ]; then
+              echo "#$number: would merge ($reason)"
+            else
+              echo "#$number: merging ($reason)"
+              gh pr merge "$number" --repo "$REPO" --squash --match-head-commit "$(jq -r .head <<<"$d")" \
+                || echo "::warning::#$number did not merge; the next run tries again"
+            fi
+          done < "$RUNNER_TEMP/decisions.jsonl"
+concurrency:
+  group: retry-automerge
+  cancel-in-progress: false
