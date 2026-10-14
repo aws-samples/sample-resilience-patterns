@@ -963,18 +963,17 @@ autoApproveWf.addJobs({
 
 // ---------------------------------------------------------------------------
 // Auto-merge workflow: enables squash auto-merge on every Dependabot PR.
-// GitHub will merge once required checks pass + approval is present.
+// GitHub merges once required checks pass + approval is present. Main has no
+// required checks, so in practice that is as soon as auto-approve approves.
 // `pull_request` trigger and env-var indirection for the same reasons as
 // auto-approve above (AWS-427).
 // ---------------------------------------------------------------------------
 const autoMergeWf = new github.GithubWorkflow(root.github!, 'auto-merge');
 autoMergeWf.on({
   // 'synchronize' re-arms auto-merge on every push to the Dependabot branch
-  // (initial open + any rebase/force-push). This is the primary durable
-  // safety net: if the arming call flakes once at open time, the next push
-  // re-tries. Do NOT rely solely on retry-automerge (check_suite:completed) —
-  // its conclusion=='success' gate is skipped whenever a neutral/skipped
-  // check (e.g. CodeQL "skipping") is present in the suite.
+  // (initial open + any rebase/force-push), so a PR that failed to arm at open
+  // time tries again on its next rebase. A PR that never gets another push is
+  // picked up by retry-automerge below.
   pullRequest: {
     types: ['opened', 'reopened', 'ready_for_review', 'synchronize'],
   },
@@ -1018,40 +1017,113 @@ depReviewWf.addJobs({
 });
 
 // ---------------------------------------------------------------------------
-// Retry auto-merge: re-enables auto-merge on Dependabot PRs after a check
-// suite completes (catches PRs where the initial auto-merge didn't stick due
-// to transient conflicts or incomplete checks at open time).
+// Retry auto-merge: merges Dependabot PRs whose auto-merge never got armed,
+// once every check on them has passed.
+//
+// How a PR gets stuck: auto-approve and auto-merge run side by side. When the
+// approval lands first there is nothing left for auto-merge to wait on, so
+// GitHub refuses to arm it ("unstable status"), or gh merges directly and loses
+// a race with another Dependabot PR merging that second ("Base branch was
+// modified"). The failed enable-auto-merge check then keeps the PR UNSTABLE, so
+// nothing merges it (two PRs from 2026-10-08 sat open for six days).
+//
+// Why a schedule: this used to run on check_suite:completed, but GitHub does not
+// start workflows from check suites that GitHub Actions created (that would let
+// workflows trigger each other in a loop). The only suites that reached it were
+// CodeQL's, which its app filter then skipped, so it never ran.
+//
+// "Passed" means every check except this machinery's own (auto-approve,
+// auto-merge, retry-automerge) completed as success, neutral or skipped, and
+// every pattern the PR touches has a successful run of its e2e. A queued
+// eks-multi-region e2e cancelled by a newer one leaves no check row at all, so
+// a missing e2e is not a pass. Anything else leaves the PR open for a person.
 // ---------------------------------------------------------------------------
+const retryAutoMergeScript = String.raw`set -euo pipefail
+gh pr list --repo "$REPO" --author app/dependabot --label auto-merge --state open --limit 100 \
+  --json number,headRefOid,reviewDecision,mergeable,autoMergeRequest,files,statusCheckRollup \
+  > "$RUNNER_TEMP/prs.json"
+cat > "$RUNNER_TEMP/decide.jq" <<'JQ'
+def check:
+  if .__typename == "CheckRun" then
+    {workflow: (.workflowName // ""), name, done: (.status == "COMPLETED"),
+     ok: ((.conclusion // "") | IN("SUCCESS", "NEUTRAL", "SKIPPED")),
+     success: (.conclusion == "SUCCESS"), at: (.completedAt // "")}
+  else
+    {workflow: "", name: .context, done: (.state | IN("PENDING", "EXPECTED") | not),
+     ok: (.state == "SUCCESS"), success: (.state == "SUCCESS"), at: (.createdAt // "")}
+  end;
+def title: if .workflow == "" then .name else "\(.workflow) / \(.name)" end;
+.[]
+| select(.autoMergeRequest == null)
+| ([.statusCheckRollup[] | check
+    | select(.workflow | IN("auto-approve", "auto-merge", "retry-automerge") | not)]
+   | group_by([.workflow, .name])
+   | map(if any(.[]; .done | not) then .[0] + {done: false} else max_by(.at) end)) as $checks
+| ([.files[].path | split("/")[0]] | unique | map(. + ": e2e") | map(select(IN($e2e[])))) as $need
+| ([$checks[] | select(.done and (.ok | not)) | title]) as $failed
+| ([$checks[] | select(.done | not) | title]) as $running
+| ([$need[] | . as $w | select(any($checks[]; .workflow == $w and .success) | not)]) as $missing
+| (if .reviewDecision != "APPROVED" then "not approved"
+   elif .mergeable != "MERGEABLE" then "mergeable is \(.mergeable)"
+   elif ($checks | length) == 0 then "no checks reported yet"
+   elif ($failed | length) > 0 then "failed: \($failed | join(", "))"
+   elif ($running | length) > 0 then "still running: \($running | join(", "))"
+   elif ($missing | length) > 0 then "no passing run of \($missing | join(", "))"
+   else "" end) as $why
+| {number, head: .headRefOid, merge: ($why == ""),
+   reason: (if $why == "" then "all checks passed" else $why end)}
+JQ
+jq -c --argjson e2e "$E2E_WORKFLOWS" -f "$RUNNER_TEMP/decide.jq" "$RUNNER_TEMP/prs.json" \
+  > "$RUNNER_TEMP/decisions.jsonl"
+while read -r d; do
+  number=$(jq -r .number <<<"$d")
+  reason=$(jq -r .reason <<<"$d")
+  if [ "$(jq -r .merge <<<"$d")" != true ]; then
+    echo "#$number: waiting ($reason)"
+  elif [ "$DRY_RUN" = true ]; then
+    echo "#$number: would merge ($reason)"
+  else
+    echo "#$number: merging ($reason)"
+    gh pr merge "$number" --repo "$REPO" --squash --match-head-commit "$(jq -r .head <<<"$d")" \
+      || echo "::warning::#$number did not merge; the next run tries again"
+  fi
+done < "$RUNNER_TEMP/decisions.jsonl"`;
+
 const retryAutoMergeWf = new github.GithubWorkflow(root.github!, 'retry-automerge');
 retryAutoMergeWf.on({
-  checkSuite: { types: ['completed'] },
+  schedule: [{ cron: '23 * * * *' }],
+  workflowDispatch: {
+    inputs: {
+      dry_run: {
+        description: 'Only print what would be merged',
+        required: false,
+        default: false,
+        type: 'boolean',
+      },
+    },
+  },
 });
+// One run at a time, so a manual run and the hourly one never merge in parallel.
+retryAutoMergeWf.file?.addOverride('concurrency', { group: 'retry-automerge', 'cancel-in-progress': false });
 retryAutoMergeWf.addJobs({
   'retry-auto-merge': {
     runsOn: ['ubuntu-latest'],
     permissions: {
       contents: github.workflows.JobPermission.WRITE,
       pullRequests: github.workflows.JobPermission.WRITE,
+      checks: github.workflows.JobPermission.READ,
+      statuses: github.workflows.JobPermission.READ,
     },
-    // Only gate on the source app, NOT on conclusion == 'success'. A neutral/
-    // skipped check (e.g. CodeQL "skipping") makes the suite conclusion
-    // 'neutral', which previously skipped this job on every run. Enabling
-    // auto-merge is safe regardless: GitHub still only completes the merge
-    // once required checks pass + branch protection is satisfied.
-    if: "github.event.check_suite.app.slug == 'github-actions'",
     steps: [
       {
-        name: 'Re-enable auto-merge on Dependabot PRs',
+        name: 'Merge Dependabot PRs whose checks passed',
         env: {
           GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}',
           REPO: '${{ github.repository }}',
+          DRY_RUN: '${{ inputs.dry_run }}',
+          E2E_WORKFLOWS: JSON.stringify(patterns.map((p) => `${p.outdir}: e2e`)),
         },
-        run: [
-          'for pr in $(gh pr list --repo "$REPO" --author "app/dependabot" --json number,autoMergeRequest --jq \'.[] | select(.autoMergeRequest == null) | .number\'); do',
-          '  echo "Re-enabling auto-merge on PR #$pr"',
-          '  gh pr merge --auto --squash "$pr" --repo "$REPO" || true',
-          'done',
-        ].join('\n'),
+        run: retryAutoMergeScript,
       },
     ],
   },
