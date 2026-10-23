@@ -30,6 +30,19 @@ export interface FailoverStackProps extends cdk.StackProps {
 }
 
 /**
+ * Every managed node group of a cluster, as an IAM resource pattern, from the cluster's ARN.
+ *
+ *   cluster    arn:aws:eks:<region>:<account>:cluster/<cluster>
+ *   node group arn:aws:eks:<region>:<account>:nodegroup/<cluster>/<name>/<uuid>
+ *
+ * The cluster ARN arrives as a CfnParameter, so this is a deploy-time Fn::Split/Fn::Join.
+ */
+const nodegroupArnPattern = (clusterArn: string): string => {
+  const [prefix, clusterName] = [0, 1].map((i) => cdk.Fn.select(i, cdk.Fn.split(':cluster/', clusterArn)));
+  return cdk.Fn.join('', [prefix, ':nodegroup/', clusterName, '/*']);
+};
+
+/**
  * The ARC Region Switch plan, its two roles, and the primary cluster's access entry
  * (step 7 — the SKELETON; step 8 fills in the real failover sequence).
  *
@@ -214,19 +227,64 @@ export class FailoverStack extends cdk.Stack {
     this.executionRole.addToPrincipalPolicy(
       new iam.PolicyStatement({
         sid: 'EksScaling',
-        actions: [
-          'eks:DescribeCluster',
-          'eks:ListNodegroups',
-          'eks:DescribeNodegroup',
-          'eks:UpdateNodegroupConfig',
-        ],
-        resources: clusterArns.flatMap((p) => [
-          p.valueAsString,
-          // Node groups are children of the cluster ARN.
-          `${p.valueAsString}/*`,
-        ]),
+        // No node group actions. The scaling step scales the Deployment through Kubernetes
+        // (the access entries below) and never changes a node group; Karpenter adds the
+        // nodes. This statement used to grant DescribeNodegroup and UpdateNodegroupConfig on
+        // '<cluster ARN>/*', which matches no node group (a node group's ARN is
+        // ...:nodegroup/<cluster>/<name>/<uuid>), so the scaling step has always run without
+        // them. The service quota check's own reads are in ServiceQuotaCheckReads below.
+        actions: ['eks:DescribeCluster', 'eks:ListNodegroups'],
+        resources: clusterArns.map((p) => p.valueAsString),
       }),
     );
+
+    // ---- service quota checks --------------------------------------------------------
+    //
+    // The plan sets ServiceQuotaChecksEnabled (see the plan below). ARC then compares,
+    // between the two Regions, the quotas the EKS step's managed node groups use (On-Demand
+    // vCPUs for their instance family, EBS storage and IOPS, network interfaces), within
+    // 30 minutes of a plan create or update and then once a day. A quota that is lower in
+    // one Region is listed as a warning by ListServiceQuotaWarnings and on the console's
+    // Service quota warnings tab. Plan evaluation shows only a missing permission for these
+    // reads, never a quota mismatch.
+    //
+    // What the comparison covers here: the node group is t4g and Karpenter's NodePool is
+    // on-demand m7g, and both families count against the same On-Demand Standard vCPU
+    // quota, the one a failover scale-up draws on. What it does not cover: whether m7g
+    // capacity is available in an AZ, the NodePool's own CPU limit, and headroom. It
+    // compares the two Regions' quotas with each other, not with what is running.
+    //
+    // Reads only. Without servicequotas:RequestServiceQuotaIncrease ARC cannot file an
+    // increase, so it never opens an AWS Support case in the account this is deployed to.
+    //
+    // A separate policy so the plan can depend on it. The plan references only the role's
+    // ARN, so nothing else makes CloudFormation create or update the role's policies before
+    // the plan, and a quota check that ran before these reads existed might not run again
+    // for a day.
+    const quotaCheckReads = new iam.Policy(this, 'ServiceQuotaCheckReads', {
+      roles: [this.executionRole],
+      statements: [
+        new iam.PolicyStatement({
+          sid: 'QuotaCheckClusterReads',
+          // ListNodegroups is also in EksScaling; repeated so this policy holds every
+          // read the check needs and does not depend on that statement.
+          actions: ['eks:ListNodegroups', 'eks:ListFargateProfiles'],
+          resources: clusterArns.map((p) => p.valueAsString),
+        }),
+        new iam.PolicyStatement({
+          sid: 'QuotaCheckNodegroupReads',
+          actions: ['eks:DescribeNodegroup'],
+          resources: clusterArns.map((p) => nodegroupArnPattern(p.valueAsString)),
+        }),
+        new iam.PolicyStatement({
+          sid: 'QuotaCheckQuotaReads',
+          actions: ['servicequotas:GetServiceQuota'],
+          // Read-only. Which quotas ARC reads depends on the node groups' instance families
+          // and is not documented per quota code, so the quota ARNs are not known here.
+          resources: ['*'],
+        }),
+      ],
+    });
     this.executionRole.addToPrincipalPolicy(
       new iam.PolicyStatement({
         sid: 'Route53RecordShift',
@@ -654,6 +712,28 @@ export class FailoverStack extends cdk.Stack {
         // (the buildspec, the KUBECTL_S3_URI per-run override, selectPolicy-not-
         // minReplicas) survives there, pinned by tests.
       ],
+    });
+    // Service quota checks on, set explicitly: the default depends on when a plan was
+    // created (plans created before the 2026-10-14 launch have them off), and an update
+    // that leaves the field out keeps whatever the plan had. An override because
+    // aws-cdk-lib 2.268.0's CfnPlan has no serviceQuotaChecksEnabled (2.273.0 adds it);
+    // the name and type are the deployed resource schema's (describe-type
+    // AWS::ARCRegionSwitch::Plan in us-east-2 and us-west-2, 2026-10-23: boolean, neither
+    // create-only nor read-only, so an existing plan updates in place). What the check
+    // reads, and why the reads sit in their own policy, is under ServiceQuotaCheckReads.
+    plan.addPropertyOverride('ServiceQuotaChecksEnabled', true);
+    plan.node.addDependency(quotaCheckReads);
+    // The synth-time validator (CloudFormation Validate, failing synth because cdk.json sets
+    // validateAgainstDefaultRules) checks against schemas bundled in aws-cdk-lib; 2.268.0's
+    // predate this property and report F3002, additional properties not allowed. aws-cdk-lib
+    // matches an acknowledgement by rule id alone, so this one covers the whole app, not only
+    // this resource. Misspelled property names are still caught: by the TypeScript types of
+    // the L1 props, and by cfn-lint's E3002 on every resource, this plan included (1.58.0,
+    // the version CI pins, knows ServiceQuotaChecksEnabled). The test 'the plan turns the
+    // checks on explicitly' pins this property's name.
+    cdk.Validations.of(plan).acknowledge({
+      id: 'CloudFormation-Validate::F3002',
+      reason: 'ServiceQuotaChecksEnabled is in the deployed AWS::ARCRegionSwitch::Plan schema but not in the schemas bundled with aws-cdk-lib 2.268.0.',
     });
 
     // ---- the DNS records this plan shifts -------------------------------------------

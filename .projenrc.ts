@@ -599,7 +599,9 @@ const patterns: Pattern[] = [
       { uses: 'actions/setup-python@v6', with: { 'python-version': '3.12' } },
       // Pinned so a new cfn-lint rule cannot fail the build unannounced; the gate
       // script FAILS (not skips) when the linter is missing because CFN_LINT_REQUIRED=1.
-      { name: 'Install cfn-lint (template lint gate)', run: 'pip install cfn-lint==1.45.0' },
+      // 1.58.0, not 1.45: 1.45 does not know the Region Switch plan's
+      // ServiceQuotaChecksEnabled and reported a false E3018 on its ReportConfiguration.
+      { name: 'Install cfn-lint (template lint gate)', run: 'pip install cfn-lint==1.58.0' },
       { name: 'Install app deps (in-image smoke test)', run: 'pip install -r src/app/requirements.txt' },
       { run: 'corepack enable && yarn install --immutable' },
       {
@@ -626,7 +628,7 @@ const patterns: Pattern[] = [
       { uses: 'actions/checkout@v6' },
       { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
       { uses: 'actions/setup-python@v6', with: { 'python-version': '3.12' } },
-      { run: 'pip install cfn-lint==1.45.0 && pip install -r src/app/requirements.txt' },
+      { run: 'pip install cfn-lint==1.58.0 && pip install -r src/app/requirements.txt' },
       { run: 'corepack enable && yarn install --immutable' },
       { name: 'Build gate', env: { CFN_LINT_REQUIRED: '1' }, run: 'yarn ci:build:cdk' },
       {

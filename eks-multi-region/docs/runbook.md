@@ -65,6 +65,7 @@ Leave it closed. If you open it to your address for diagnosis, close it afterwar
 | `kubectl get ec2nodeclass default -o wide` is **Ready** (including `InstanceProfileReady`), `kubectl get nodepool default` is Ready | Otherwise Karpenter provisions nothing and the scale-up in §5 stalls. |
 | 3 app pods, one per AZ, on different nodes | Anti-affinity and the zone-scoped topology spread are `required`; pods sharing a node mean the constraints are not matching and Karpenter is never asked for capacity. |
 | On-Demand Standard vCPU quota headroom in **both** regions | Plan evaluation checks running capacity, **not quota headroom**. The failover scales the standby to 150% of the primary's 24-hour maximum. |
+| No service quota warnings: the plan's **Service quota warnings** tab, or `aws arc-region-switch list-service-quota-warnings --region us-east-2 --plan-arns <plan-arn>` (AWS CLI 2.37.4 or later; needs `arc-region-switch:ListServiceQuotaWarnings`) | The plan has service quota checks on. Within 30 minutes of a deploy, and then daily, ARC lists any quota that is lower in one region than in the other for what the managed node groups use. An empty list means the two regions' quotas match, not that either has room for the scale-up. |
 | The load generator is emitting `ClientSuccess` | Every chart and alarm in the demo is fed by the load generator. No data means nothing is driving traffic. |
 | Error-rate knob at `0` in both regions, no FIS experiment running, no `ChaosAllowed` tags left from the last run | Start from a clean baseline. |
 

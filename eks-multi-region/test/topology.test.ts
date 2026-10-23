@@ -3818,19 +3818,21 @@ describe('ARC Region Switch skeleton (step 7)', () => {
     }
   });
 
-  test('the execution role can scale EKS, scoped to the two clusters', () => {
+  test('the execution role reads the two clusters and can change no node group', () => {
     const policies = Object.values(
       synthAll().get(rsName)!.findResources('AWS::IAM::Policy'),
     ).map((p: any) => p.Properties);
     const statements = policies.flatMap((p) => p.PolicyDocument.Statement);
     const eksStatement = statements.find((s: any) => s.Sid === 'EksScaling');
     expect(eksStatement).toBeDefined();
-    // UpdateNodegroupConfig is the action the scaling block needs; without it the step
-    // fails at execution with an IAM error after the human has already approved.
-    expect(eksStatement.Action).toContain('eks:UpdateNodegroupConfig');
-    // Scoped, not '*'.
-    expect(JSON.stringify(eksStatement.Resource)).not.toBe('"*"');
-    expect(JSON.stringify(eksStatement.Resource)).toContain('ClusterArn');
+    expect(eksStatement.Action).toEqual(['eks:DescribeCluster', 'eks:ListNodegroups']);
+    // Exactly the two cluster ARNs: not '*', and no '<cluster ARN>/*', which matches no EKS
+    // resource at all (a node group's ARN is ...:nodegroup/<cluster>/...).
+    expect(eksStatement.Resource).toEqual([{ Ref: 'R0ClusterArn' }, { Ref: 'R1ClusterArn' }]);
+    // The scaling step scales the Deployment through Kubernetes and never changes a node
+    // group (Karpenter adds the nodes), so no statement grants a node group write.
+    const actions = statements.flatMap((s: any) => ([] as string[]).concat(s.Action));
+    expect(actions.filter((a) => /^eks:(Update|Create|Delete)Nodegroup|^eks:\*$/.test(a))).toEqual([]);
   });
 
   test('no mutating statement uses a wildcard resource except the documented one', () => {
@@ -3843,7 +3845,7 @@ describe('ARC Region Switch skeleton (step 7)', () => {
     )
       .map((p: any) => p.Properties)
       .flatMap((p) => p.PolicyDocument.Statement);
-    const READ_ONLY_SIDS = ['AuroraRead', 'ObserveAndReport'];
+    const READ_ONLY_SIDS = ['AuroraRead', 'ObserveAndReport', 'QuotaCheckQuotaReads'];
     const ALLOWED_WILDCARD_SIDS = ['Route53HealthChecks'];
     for (const s of statements as any[]) {
       const wildcard = JSON.stringify(s.Resource) === '"*"';
@@ -3896,6 +3898,102 @@ describe('ARC Region Switch skeleton (step 7)', () => {
     // And the plan stack itself must follow dns, whose hosted zone it needs.
     const dnsIdx = execs.findIndex((e) => e.includes(`-${DNS_SUFFIX}"`));
     expect(rsIdx).toBeGreaterThan(dnsIdx);
+  });
+});
+
+describe('Region Switch service quota checks', () => {
+  const rsName = `${APP_ID}-${FAILOVER_SUFFIX}`;
+  const resources = (): Record<string, any> => synthAll().get(rsName)!.toJSON().Resources;
+  const plan = (): any => Object.values(resources()).find((r: any) => r.Type === 'AWS::ARCRegionSwitch::Plan');
+  const execRoleId = (): string => Object.keys(resources()).find((k) =>
+    resources()[k].Type === 'AWS::IAM::Role' && (resources()[k].Properties.RoleName ?? '').endsWith('-arc-execution'))!;
+  const execPolicies = (): Array<[string, any]> => Object.entries(resources()).filter(([, r]) =>
+    r.Type === 'AWS::IAM::Policy' && JSON.stringify(r.Properties.Roles).includes(`"${execRoleId()}"`));
+  const execStatements = (): any[] => execPolicies().flatMap(([, p]) => p.Properties.PolicyDocument.Statement);
+  const actionsOf = (s: any): string[] => ([] as string[]).concat(s.Action);
+  const grants = (s: any, action: string): boolean =>
+    actionsOf(s).some((a) => new RegExp(`^${a.split('*').map((x) => x.replace(/[.?+^$()[\]{}|\\]/g, '\\$&')).join('.*')}$`).test(action));
+
+  /** Evaluate the intrinsics a synthesized resource string uses, with parameters supplied. */
+  const evaluate = (node: any, params: Record<string, string>): any => {
+    if (typeof node === 'string' || typeof node === 'number') return node;
+    if (Array.isArray(node)) return node.map((n) => evaluate(n, params));
+    if (node.Ref !== undefined) {
+      if (!(node.Ref in params)) throw new Error(`no value for Ref ${node.Ref}`);
+      return params[node.Ref];
+    }
+    if (node['Fn::Join']) return (evaluate(node['Fn::Join'][1], params) as string[]).join(node['Fn::Join'][0]);
+    if (node['Fn::Split']) return String(evaluate(node['Fn::Split'][1], params)).split(node['Fn::Split'][0]);
+    if (node['Fn::Select']) return evaluate(node['Fn::Select'][1], params)[Number(node['Fn::Select'][0])];
+    throw new Error(`unhandled intrinsic: ${JSON.stringify(node)}`);
+  };
+  /** IAM resource matching: '*' spans any characters, including '/'. */
+  const iamMatch = (pattern: string, arn: string): boolean =>
+    new RegExp(`^${pattern.split('*').map((x) => x.replace(/[.?+^$()[\]{}|\\]/g, '\\$&')).join('.*')}$`).test(arn);
+  // Placeholder account, node group name and UUID, in the ARN shape EKS returns.
+  const clusterArn = (region: string) => `arn:aws:eks:${region}:111122223333:cluster/${APP_ID}-${region}`;
+  const nodegroupArn = (region: string, cluster = `${APP_ID}-${region}`) =>
+    `arn:aws:eks:${region}:111122223333:nodegroup/${cluster}/Nodes-AbCdEf123456/11111111-2222-3333-4444-555555555555`;
+  const params = Object.fromEntries(REGIONS.map((r, i) => [`R${i}ClusterArn`, clusterArn(r.name)]));
+
+  test('the plan turns the checks on explicitly', () => {
+    // The default depends on when the plan was created and an update without the field keeps
+    // the old setting, so leaving it out would leave a redeployed plan's checks off.
+    expect(plan().Properties.ServiceQuotaChecksEnabled).toBe(true);
+  });
+
+  test('the plan waits for the policy holding the quota-check reads', () => {
+    // The plan references only the role's ARN, so without this dependency CloudFormation can
+    // create or update it before the reads exist, and a check that ran in that gap might not
+    // run again for a day.
+    const quota = execPolicies().filter(([, p]) =>
+      p.Properties.PolicyDocument.Statement.some((s: any) => grants(s, 'servicequotas:GetServiceQuota')));
+    expect(quota).toHaveLength(1);
+    const [quotaId, quotaPolicy] = quota[0];
+    expect(([] as string[]).concat(plan().DependsOn ?? [])).toContain(quotaId);
+    // Every read the check needs is in that one policy, not split across the default policy.
+    for (const action of ['eks:ListNodegroups', 'eks:ListFargateProfiles', 'eks:DescribeNodegroup', 'servicequotas:GetServiceQuota']) {
+      expect(quotaPolicy.Properties.PolicyDocument.Statement.some((s: any) => grants(s, action))).toBe(true);
+    }
+  });
+
+  test('the execution role can read quotas but never request an increase', () => {
+    // A request opens an AWS Support case in the deploying account. Checked by matching, so a
+    // later 'servicequotas:*' or 'servicequotas:Request*' fails here too.
+    const statements = execStatements().filter((s: any) => s.Effect === 'Allow');
+    expect(statements.some((s) => grants(s, 'servicequotas:GetServiceQuota'))).toBe(true);
+    for (const action of ['servicequotas:RequestServiceQuotaIncrease', 'servicequotas:GetRequestedServiceQuotaChange']) {
+      expect(statements.some((s) => grants(s, action))).toBe(false);
+    }
+  });
+
+  test('the check can list both clusters and describe their node groups, and nothing wider', () => {
+    const statements = execStatements();
+    const listing = statements.filter((s: any) => grants(s, 'eks:ListFargateProfiles'));
+    expect(listing).toHaveLength(1);
+    expect((evaluate(listing[0].Resource, params) as string[]).sort())
+      .toEqual(REGIONS.map((r) => clusterArn(r.name)).sort());
+
+    const describing = statements.filter((s: any) => grants(s, 'eks:DescribeNodegroup'));
+    const patterns = (evaluate(describing.map((s: any) => s.Resource).flat(), params) as string[]);
+    for (const r of REGIONS) {
+      expect(patterns.some((p) => iamMatch(p, nodegroupArn(r.name)))).toBe(true);
+      // Not another cluster whose name starts the same way.
+      expect(patterns.some((p) => iamMatch(p, nodegroupArn(r.name, `${APP_ID}-${r.name}-other`)))).toBe(false);
+    }
+    // The control: a pattern under the CLUSTER's ARN (EksScaling's '<cluster>/*') does not
+    // match a node group, which is why the quota check carries its own grant.
+    for (const r of REGIONS) expect(iamMatch(`${clusterArn(r.name)}/*`, nodegroupArn(r.name))).toBe(false);
+  });
+
+  test('no resource carries a cfn-lint exception', () => {
+    // cfn-lint 1.45 does not know ServiceQuotaChecksEnabled and would need E3002 ignored on the
+    // plan. 1.58.0, the version CI pins, knows it, so every resource is linted in full.
+    for (const template of synthAll().values()) {
+      for (const r of Object.values<any>(template.toJSON().Resources)) {
+        expect(r.Metadata?.['cfn-lint']).toBeUndefined();
+      }
+    }
   });
 });
 
@@ -5394,6 +5492,7 @@ describe('the ARC endpoint wrapper and operator runbook (step 9)', () => {
       'flat 100% line', // what the INERT construct defaults produced, and why they changed
       'ChaosAllowed', // the arming gesture
       'not quota headroom', // evaluation does not check quotas
+      'list-service-quota-warnings', // where quota parity warnings appear, now the plan checks them
       'regional data plane', // the endpoint rule
       'Writes recover, not just reads', // application vs platform recovery
       '3 \u2192 5', // the replica-count check: floor 3, targetPercent 150
@@ -6172,10 +6271,12 @@ describe('synthesized-template lint gate (cfn-lint)', () => {
     const src = fs.readFileSync(scriptPath, 'utf8');
     const invocation = src.slice(src.indexOf('cfn-lint "${TEMPLATES[@]}"'));
     expect(invocation).toContain('cfn-lint "${TEMPLATES[@]}"');
-    const filesAt = invocation.indexOf('"${TEMPLATES[@]}"');
-    const ignoreAt = invocation.indexOf('--ignore-checks');
+    // The call itself, up to its stderr redirect: every flag in it comes after the files.
+    const call = invocation.slice(0, invocation.indexOf('2>&1'));
+    const filesAt = call.indexOf('"${TEMPLATES[@]}"');
+    const firstFlagAt = call.search(/\s--[a-z]/);
     expect(filesAt).toBeGreaterThanOrEqual(0);
-    expect(ignoreAt).toBeGreaterThan(filesAt);
+    expect(firstFlagAt).toBeGreaterThan(filesAt);
   });
 
   it('fails loudly rather than passing when it has linted nothing', () => {
@@ -6188,13 +6289,16 @@ describe('synthesized-template lint gate (cfn-lint)', () => {
     expect(src).toContain('CFN_LINT_REQUIRED');
   });
 
-  it('suppresses only the justified cfn-lint check', () => {
-    // E3018 is a linter schema gap for AWS::ARCRegionSwitch::Plan's ReportConfiguration:
-    // the identical shape reached CREATE_COMPLETE on 2026-08-29. Keep this list short --
-    // a growing ignore list is how a gate stops gating.
+  it('ignores no cfn-lint check', () => {
+    // E3018 was ignored up to cfn-lint 1.45, a linter schema gap for
+    // AWS::ARCRegionSwitch::Plan's ReportConfiguration (the identical shape reached
+    // CREATE_COMPLETE on 2026-08-29). 1.58.0 reports no E3018, so the ignore went with the
+    // bump. A growing ignore list is how a gate stops gating: adding one back should be a
+    // deliberate edit to this test as well.
     const src = fs.readFileSync(scriptPath, 'utf8');
-    const line = src.split('\n').find((l) => l.startsWith('IGNORE_CHECKS='));
-    expect(line).toBe('IGNORE_CHECKS="E3018"');
+    const invocation = src.slice(src.indexOf('cfn-lint "${TEMPLATES[@]}"'));
+    expect(invocation.slice(0, invocation.indexOf('2>&1'))).not.toContain('--ignore-checks');
+    expect(src).not.toMatch(/^IGNORE_CHECKS=/m);
   });
 });
 
