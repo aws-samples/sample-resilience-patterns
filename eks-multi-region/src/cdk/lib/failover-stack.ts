@@ -256,6 +256,10 @@ export class FailoverStack extends cdk.Stack {
     //
     // Reads only. Without servicequotas:RequestServiceQuotaIncrease ARC cannot file an
     // increase, so it never opens an AWS Support case in the account this is deployed to.
+    // The cost: plan evaluation keeps one active warning naming that permission and
+    // servicequotas:GetRequestedServiceQuotaChange, so it reads actionRequired, not passed.
+    // The runbook says so. The evaluator probes the reads below with real calls and only
+    // simulates those two (e2e run 39775635952, 2026-10-22).
     //
     // A separate policy so the plan can depend on it. The plan references only the role's
     // ARN, so nothing else makes CloudFormation create or update the role's policies before
@@ -281,6 +285,18 @@ export class FailoverStack extends cdk.Stack {
           actions: ['servicequotas:GetServiceQuota'],
           // Read-only. Which quotas ARC reads depends on the node groups' instance families
           // and is not documented per quota code, so the quota ARNs are not known here.
+          resources: ['*'],
+        }),
+        new iam.PolicyStatement({
+          sid: 'QuotaCheckLaunchTemplateReads',
+          // Plan evaluation names this as a missing policy for the quota checks when the
+          // role lacks it, and probes it with a real call against a launch template that
+          // does not exist (e2e run 39775635952, 2026-10-22). ARC does not document what it
+          // reads it for.
+          actions: ['ec2:DescribeLaunchTemplateVersions'],
+          // The action has no resource type in the Service Authorization Reference, so '*'
+          // is the only legal resource. It returns every launch template version in the
+          // account, user data included, to a role only the ARC service can assume.
           resources: ['*'],
         }),
       ],

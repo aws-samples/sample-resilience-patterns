@@ -3845,7 +3845,7 @@ describe('ARC Region Switch skeleton (step 7)', () => {
     )
       .map((p: any) => p.Properties)
       .flatMap((p) => p.PolicyDocument.Statement);
-    const READ_ONLY_SIDS = ['AuroraRead', 'ObserveAndReport', 'QuotaCheckQuotaReads'];
+    const READ_ONLY_SIDS = ['AuroraRead', 'ObserveAndReport', 'QuotaCheckQuotaReads', 'QuotaCheckLaunchTemplateReads'];
     const ALLOWED_WILDCARD_SIDS = ['Route53HealthChecks'];
     for (const s of statements as any[]) {
       const wildcard = JSON.stringify(s.Resource) === '"*"';
@@ -3952,7 +3952,7 @@ describe('Region Switch service quota checks', () => {
     const [quotaId, quotaPolicy] = quota[0];
     expect(([] as string[]).concat(plan().DependsOn ?? [])).toContain(quotaId);
     // Every read the check needs is in that one policy, not split across the default policy.
-    for (const action of ['eks:ListNodegroups', 'eks:ListFargateProfiles', 'eks:DescribeNodegroup', 'servicequotas:GetServiceQuota']) {
+    for (const action of ['eks:ListNodegroups', 'eks:ListFargateProfiles', 'eks:DescribeNodegroup', 'servicequotas:GetServiceQuota', 'ec2:DescribeLaunchTemplateVersions']) {
       expect(quotaPolicy.Properties.PolicyDocument.Statement.some((s: any) => grants(s, action))).toBe(true);
     }
   });
@@ -3965,6 +3965,17 @@ describe('Region Switch service quota checks', () => {
     for (const action of ['servicequotas:RequestServiceQuotaIncrease', 'servicequotas:GetRequestedServiceQuotaChange']) {
       expect(statements.some((s) => grants(s, action))).toBe(false);
     }
+  });
+
+  test('the launch template read is the execution role\'s only EC2 permission', () => {
+    // DescribeLaunchTemplateVersions has no resource type, so it is granted on '*' and returns
+    // every launch template version in the account, user data included. 'ec2:Describe*' or any
+    // other EC2 action would widen what this role can read or do, so the exact action is pinned.
+    const ec2Actions = execStatements()
+      .filter((s: any) => s.Effect === 'Allow')
+      .flatMap((s: any) => actionsOf(s))
+      .filter((a) => a === '*' || a.startsWith('ec2:'));
+    expect(ec2Actions).toEqual(['ec2:DescribeLaunchTemplateVersions']);
   });
 
   test('the check can list both clusters and describe their node groups, and nothing wider', () => {
