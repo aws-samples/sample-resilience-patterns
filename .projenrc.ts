@@ -556,6 +556,84 @@ const patterns: Pattern[] = [
   },
 
   // -------------------------------------------------------------------------
+  // regional-affinity: each customer has a home Region for its reads and writes in a
+  // DynamoDB global table (multi-Region eventual consistency). A thin router redirects
+  // region-less requests to the home Region's name, and one ARC Region switch plan drains
+  // or restores a Region at all three levels of a Route 53 hierarchy. Needs aws-cdk-lib
+  // >= 2.215 for the typed aws_arcregionswitch L1, like drs-ec2.
+  // -------------------------------------------------------------------------
+  {
+    outdir: 'regional-affinity',
+    cdkVersion: '2.215.0',
+    typescriptVersion: '~5.9.3',
+    deps: ['cdk-nag@^2.37.55'],
+    gitignore: ['__pycache__/', '*.pyc', '.pytest_cache/', '.ruff_cache/'], // lambda/ and scripts/ are Python
+    e2eRoleArn: `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-regional-affinity`,
+    awsRegion: 'us-east-1',
+    // Deploy ~15 min, rehearsal (four plan executions) ~20 min, cleanup ~25 min while Lambda
+    // releases the probe's network interfaces.
+    e2eTimeoutMinutes: 120,
+    cleanupTimeoutMinutes: 60,
+    buildSteps: [
+      { uses: 'actions/checkout@v6' },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-python@v6', with: { 'python-version': '3.12' } },
+      { run: 'npm ci' },
+      { run: 'npx projen test' },
+      { name: 'Python lint and unit tests', run: 'pip install -q boto3 pytest ruff && ruff check . && python -m pytest -q' },
+      { name: 'Synthesize every stack with cdk-nag', run: 'npx cdk synth -c nag=true --quiet' },
+    ],
+    cleanupSteps: [
+      { uses: 'actions/checkout@v6' },
+      {
+        uses: 'aws-actions/configure-aws-credentials@v6',
+        with: {
+          'role-to-assume': `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-regional-affinity`,
+          'aws-region': 'us-east-1',
+        },
+      },
+      { run: 'chmod +x cleanup.sh && ./cleanup.sh' },
+    ],
+    e2eSteps: [
+      { uses: 'actions/checkout@v6' },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-python@v6', with: { 'python-version': '3.12' } },
+      {
+        uses: 'aws-actions/configure-aws-credentials@v6',
+        with: {
+          'role-to-assume': `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-regional-affinity`,
+          'aws-region': 'us-east-1',
+          'role-duration-seconds': 7200,
+        },
+      },
+      { run: 'npm ci' },
+      { run: 'npx projen test' },
+      {
+        // Unique per-run names, so a run whose teardown was interrupted cannot collide with
+        // the next one. The sha reaches the shell through env, never through run.
+        name: 'Set sha-suffixed project name',
+        env: { HEAD_SHA: '${{ github.event.pull_request.head.sha || github.sha }}' },
+        run: 'echo "PROJECT=regional-affinity-$(echo $HEAD_SHA | cut -c1-6)" >> $GITHUB_ENV',
+      },
+      { name: 'Pre-flight cleanup (idempotent)', run: 'chmod +x cleanup.sh && ./cleanup.sh' },
+      { name: 'Deploy', run: 'make deploy' },
+      // Drains and restores each Region in turn, asserting DNS answers and where every request is served.
+      { name: 'Drain and restore each Region', run: 'make rehearse' },
+      {
+        name: 'Refresh AWS credentials (pre-cleanup)',
+        if: 'always()',
+        uses: 'aws-actions/configure-aws-credentials@v6',
+        with: {
+          'role-to-assume': `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-regional-affinity`,
+          'aws-region': 'us-east-1',
+          'role-duration-seconds': 7200,
+        },
+      },
+      { name: 'Cleanup on success', if: 'success()', run: './cleanup.sh' },
+    ],
+  },
+
+  // -------------------------------------------------------------------------
   // eks-multi-region — multi-region EKS + ARC Region Switch + FIS demo.
   //
   // SELF-MANAGED: it has its own .projenrc.ts (yarn berry, aws-cdk-lib 2.248 for the
