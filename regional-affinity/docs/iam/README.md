@@ -39,7 +39,7 @@ ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 sub() { sed "s/ACCOUNT_ID/$ACCOUNT_ID/g" "$1"; }
 
 # 2 h max session: the workflow requests role-duration-seconds 7200, and a full run takes about
-# 1 h (deploy ~15 min, rehearsal ~20 min, cleanup ~25 min).
+# 50 min (deploy ~13 min, rehearsal ~11 min, cleanup ~25 min).
 aws iam create-role --role-name github-actions-regional-affinity \
   --assume-role-policy-document "$(sub docs/iam/github-actions-role-trust.json)" \
   --max-session-duration 7200 \

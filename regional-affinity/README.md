@@ -79,7 +79,7 @@ make deploy PROFILE=<aws-profile>
 make help
 ```
 
-From an empty account, `make deploy` takes about 15 minutes. It deploys the two Region stacks and the table in parallel, seeds the customers and confirms the second replica has them, adds the peering connection, deploys the plan, waits for ARC to vend the six health checks, deploys the records with their IDs, and verifies that every record carries the right check. The plan exists before its records, so its first evaluation warns that the records are missing; the last step makes ARC evaluate the plan again at both Regional endpoints and fails on any remaining warning. Running `make deploy` again updates the stacks in place and keeps the peering connection.
+From an empty account, `make deploy` takes about 13 minutes. It deploys the two Region stacks and the table in parallel, seeds the customers and confirms the second replica has them, adds the peering connection, deploys the plan, waits for ARC to vend the six health checks, deploys the records with their IDs, and verifies that every record carries the right check. The plan exists before its records, so its first evaluation warns that the records are missing; the last step makes ARC evaluate the plan again at both Regional endpoints and fails on any remaining warning. Running `make deploy` again updates the stacks in place and keeps the peering connection.
 
 **Cost:** about $0.15 per hour while deployed, mostly the Region switch plan ($70 per plan per month, prorated) and two idle ALBs. The table is on-demand and holds a few hundred small items, VPC peering has no hourly charge, and the functions run only when called. There are no NAT gateways. Run cleanup after testing.
 

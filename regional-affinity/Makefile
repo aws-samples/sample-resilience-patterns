@@ -8,7 +8,7 @@
 #   make call CUSTOMER=cust-001    # read, write and read one customer's item via the region-less name
 #   make drain REGION=us-east-1    # run the plan's deactivate workflow for a Region (~2 min)
 #   make restore REGION=us-east-1  # run the plan's activate workflow for a Region (~2 min)
-#   make rehearse                  # drain and restore each Region in turn and assert the outcome (~20 min)
+#   make rehearse                  # drain and restore each Region in turn and assert the outcome (~11 min)
 #   make clean                     # delete every stack in both Regions, unattended (./cleanup.sh, ~25 min)
 #
 # Credentials: PROFILE=<name>, else $AWS_PROFILE, else the CLI's default identity. Every target
@@ -128,7 +128,7 @@ restore: check-account ## Run the plan's activate workflow for REGION
 	@$(if $(REGION),,echo "set REGION (for example: make restore REGION=$(R1))"; exit 2)
 	@$(DEMO) restore $(REGION)
 
-rehearse: check-account ## Drain and restore each Region in turn; assert DNS, where every request lands and the data (~20 min)
+rehearse: check-account ## Drain and restore each Region in turn; assert DNS, where every request lands and the data (~11 min)
 	@$(DEMO) rehearse
 
 clean: check-account ## Delete every stack in both Regions, unattended (./cleanup.sh, ~25 min)

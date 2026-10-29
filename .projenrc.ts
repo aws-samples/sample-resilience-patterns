@@ -570,7 +570,7 @@ const patterns: Pattern[] = [
     gitignore: ['__pycache__/', '*.pyc', '.pytest_cache/', '.ruff_cache/'], // lambda/ and scripts/ are Python
     e2eRoleArn: `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-regional-affinity`,
     awsRegion: 'us-east-1',
-    // Deploy ~15 min, rehearsal (four plan executions) ~20 min, cleanup ~25 min while Lambda
+    // Deploy ~13 min, rehearsal (four plan executions) ~11 min, cleanup ~25 min while Lambda
     // releases the probe's network interfaces.
     e2eTimeoutMinutes: 120,
     cleanupTimeoutMinutes: 60,
