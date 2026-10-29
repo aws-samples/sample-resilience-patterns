@@ -17,7 +17,7 @@ def test_redirects_to_the_home_region_name_of_the_customer_in_the_body(call, tab
     response, answer = call(alb_event("POST", "/write", REGION_LESS, body))
     assert response["statusCode"] == 307
     assert response["statusDescription"] == "307 Temporary Redirect"
-    assert response["headers"]["Location"] == "http://ingest.ue1.demo.io/write"
+    assert response["headers"]["Location"] == "http://ingest.ue1.example.com/write"
     assert response["headers"]["X-Served-By"] == "router us-east-2"
     assert response["headers"]["Cache-Control"] == "no-store"
     assert (answer["customerId"], answer["homeRegion"]) == ("cust-001", "us-east-1")
@@ -27,13 +27,13 @@ def test_redirects_to_the_home_region_name_of_the_customer_in_the_body(call, tab
 def test_reads_a_base64_body(call):
     event = alb_event("POST", "/read", REGION_LESS, base64.b64encode(b'{"customerId": "cust-001"}').decode())
     event["isBase64Encoded"] = True
-    assert call(event)[0]["headers"]["Location"] == "http://ingest.ue1.demo.io/read"
+    assert call(event)[0]["headers"]["Location"] == "http://ingest.ue1.example.com/read"
 
 
 def test_keeps_the_path_query_and_scheme(call):
     event = alb_event("POST", "/read", REGION_LESS, request_body(customerId="cust-001"), query={"a": "1", "b": "x%20y"})
     event["headers"]["x-forwarded-proto"] = "https"
-    assert call(event)[0]["headers"]["Location"] == "https://ingest.ue1.demo.io/read?a=1&b=x%20y"
+    assert call(event)[0]["headers"]["Location"] == "https://ingest.ue1.example.com/read?a=1&b=x%20y"
     event["headers"]["x-forwarded-proto"] = "javascript"
     assert call(event)[0]["headers"]["Location"].startswith("http://ingest.ue1.")
 

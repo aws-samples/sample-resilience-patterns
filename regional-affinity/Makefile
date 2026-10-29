@@ -25,7 +25,7 @@ SHELL := /bin/bash
 
 PROJECT   ?= regional-affinity
 REGIONS   ?= us-east-1,us-east-2
-DOMAIN    ?= demo.io
+DOMAIN    ?= example.com
 APP_LABEL ?= ingest
 PROFILE   ?= $(AWS_PROFILE)
 ACCOUNT   ?=

@@ -4,9 +4,9 @@ from __future__ import annotations
 import json
 
 REGIONS = ("us-east-1", "us-east-2")
-REGION_LESS = "ingest.demo.io"
-REGIONAL_NAMES = {"us-east-1": "ingest.ue1.demo.io", "us-east-2": "ingest.ue2.demo.io"}
-APP_NAMES = {"us-east-1": "ingest-app.ue1.demo.io", "us-east-2": "ingest-app.ue2.demo.io"}
+REGION_LESS = "ingest.example.com"
+REGIONAL_NAMES = {"us-east-1": "ingest.ue1.example.com", "us-east-2": "ingest.ue2.example.com"}
+APP_NAMES = {"us-east-1": "ingest-app.ue1.example.com", "us-east-2": "ingest-app.ue2.example.com"}
 TABLE = "regional-affinity-customers"
 
 

@@ -50,7 +50,7 @@ const needed = (key: string, value: string, placeholder: string): string => {
 const project = checkProject(c('project', 'regional-affinity'));
 const regions = parseRegions(c('regions', 'us-east-1,us-east-2'));
 const [first, second] = regions;
-const domain = checkDomain(c('domain', 'demo.io'));
+const domain = checkDomain(c('domain', 'example.com'));
 const appLabel = checkLabel(c('appLabel', 'ingest'));
 const names = recordNames(appLabel, domain, regions);
 const tableName = `${project}-customers`;

@@ -37,7 +37,7 @@ describe('the plan', () => {
 
   test('the private hosted zone answers in both VPCs', () => {
     expect(only(t, 'AWS::Route53::HostedZone').Properties).toMatchObject({
-      Name: 'demo.io',
+      Name: 'example.com',
       VPCs: [{ VPCId: 'vpc-0000000000000000a', VPCRegion: 'us-east-1' }, { VPCId: 'vpc-0000000000000000b', VPCRegion: 'us-east-2' }],
     });
   });
@@ -136,7 +136,7 @@ describe('the records', () => {
   test('a missing or malformed health check ID stops the synth instead of deploying a bad record', () => {
     const missing = healthChecks();
     delete missing[NAMES.regional['us-east-2']]['us-east-1'];
-    expect(() => recordsStack(missing)).toThrow(/no ARC health check ID for ingest.ue2.demo.io in us-east-1/);
+    expect(() => recordsStack(missing)).toThrow(/no ARC health check ID for ingest.ue2.example.com in us-east-1/);
     const malformed = healthChecks();
     malformed[NAMES.regionLess]['us-east-1'] = 'None';
     expect(() => recordsStack(malformed)).toThrow(/got "None"/);

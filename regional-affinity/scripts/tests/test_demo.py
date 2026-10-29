@@ -17,7 +17,7 @@ import demo
 CIDRS = {"us-east-1": ipaddress.ip_network("10.11.0.0/16"), "us-east-2": ipaddress.ip_network("10.12.0.0/16")}
 ALL_HEALTHY = {(name, region): "healthy" for name in demo.ARC_NAMES for region in demo.REGIONS}
 PLAN_ARN = "arn:aws:arc-region-switch::111122223333:plan/regional-affinity:abc123"
-UE1, UE2 = "ingest.ue1.demo.io", "ingest.ue2.demo.io"
+UE1, UE2 = "ingest.ue1.example.com", "ingest.ue2.example.com"
 
 
 def drained(region: str) -> dict:
@@ -29,9 +29,9 @@ def drained(region: str) -> dict:
 
 
 def test_default_names():
-    assert demo.REGION_LESS == "ingest.demo.io"
+    assert demo.REGION_LESS == "ingest.example.com"
     assert demo.REGIONAL == {"us-east-1": UE1, "us-east-2": UE2}
-    assert demo.APP_NAME == {"us-east-1": "ingest-app.ue1.demo.io", "us-east-2": "ingest-app.ue2.demo.io"}
+    assert demo.APP_NAME == {"us-east-1": "ingest-app.ue1.example.com", "us-east-2": "ingest-app.ue2.example.com"}
     assert demo.TABLE == "regional-affinity-customers"
 
 
@@ -52,10 +52,10 @@ def test_region_label_rejects_non_region_names(bad):
 
 def test_at_rest_every_name_answers_from_its_own_region():
     exp = demo.expected_regions(ALL_HEALTHY)
-    assert exp["ingest.demo.io"] == {"us-east-1", "us-east-2"}
+    assert exp["ingest.example.com"] == {"us-east-1", "us-east-2"}
     assert (exp[UE1], exp[UE2]) == ({"us-east-1"}, {"us-east-2"})
-    assert exp["ingest-app.ue1.demo.io"] == {"us-east-1"}
-    assert exp["ingest-app.ue2.demo.io"] == {"us-east-2"}
+    assert exp["ingest-app.ue1.example.com"] == {"us-east-1"}
+    assert exp["ingest-app.ue2.example.com"] == {"us-east-2"}
 
 
 @pytest.mark.parametrize("gone,stays", [("us-east-1", "us-east-2"), ("us-east-2", "us-east-1")])
@@ -69,7 +69,7 @@ def test_a_regional_failover_alone_also_moves_its_weighted_share():
     state = {**ALL_HEALTHY, (UE1, "us-east-1"): "unhealthy"}
     exp = demo.expected_regions(state)
     assert exp[UE1] == {"us-east-2"}
-    assert exp["ingest.demo.io"] == {"us-east-2"}
+    assert exp["ingest.example.com"] == {"us-east-2"}
 
 
 def test_all_unhealthy_answers_as_if_all_were_healthy():
@@ -112,7 +112,7 @@ def test_at_rest_each_primary_answers_and_each_standby_waits():
     assert roles[(UE1, "us-east-2")] == ("standby", "healthy", False)
     assert roles[(UE2, "us-east-2")] == ("primary", "healthy", True)
     assert roles[(UE2, "us-east-1")] == ("standby", "healthy", False)
-    assert all(roles[("ingest.demo.io", r)] == ("weighted", "healthy", True) for r in demo.REGIONS)
+    assert all(roles[("ingest.example.com", r)] == ("weighted", "healthy", True) for r in demo.REGIONS)
     assert len(roles) == 6
 
 
@@ -122,13 +122,13 @@ def test_after_a_drain_the_drained_regions_standby_takes_over():
     assert roles[(UE1, "us-east-2")] == ("standby", "healthy", True)
     assert roles[(UE2, "us-east-2")] == ("primary", "healthy", True)
     assert roles[(UE2, "us-east-1")] == ("standby", "unhealthy", False)
-    assert roles[("ingest.demo.io", "us-east-1")] == ("weighted", "unhealthy", False)
+    assert roles[("ingest.example.com", "us-east-1")] == ("weighted", "unhealthy", False)
 
 
 def test_with_both_failover_records_unhealthy_route_53_returns_the_primary():
     roles = demo.record_roles({key: "unhealthy" for key in ALL_HEALTHY})
     assert roles[(UE1, "us-east-1")][2] and not roles[(UE1, "us-east-2")][2]
-    assert all(roles[("ingest.demo.io", r)][2] for r in demo.REGIONS)
+    assert all(roles[("ingest.example.com", r)][2] for r in demo.REGIONS)
 
 
 def table_lines(health: dict) -> list:
@@ -142,7 +142,7 @@ def test_health_table_labels_roles_by_region_column():
     lines = table_lines(ALL_HEALTHY)
     assert "set by the Region switch plan" in lines[1]
     row = {line.split()[0]: line for line in lines[3:6]}
-    assert row["ingest.demo.io"].split()[1:] == ["weighted", "healthy", "answering", "weighted", "healthy", "answering"]
+    assert row["ingest.example.com"].split()[1:] == ["weighted", "healthy", "answering", "weighted", "healthy", "answering"]
     assert row[UE1].split()[1:] == ["primary", "healthy", "answering", "standby", "healthy"]
     assert row[UE2].split()[1:] == ["standby", "healthy", "primary", "healthy", "answering"]
     row = {line.split()[0]: line for line in table_lines(drained("us-east-1"))[3:6]}
@@ -236,7 +236,7 @@ def hop(served, status, url, **extra):
 
 
 def router_hop(region="us-east-2", target=UE1, home="us-east-1"):
-    return hop(f"router {region}", 307, "http://ingest.demo.io/read", location=f"http://{target}/read",
+    return hop(f"router {region}", 307, "http://ingest.example.com/read", location=f"http://{target}/read",
                body={"customerId": "cust-001", "homeRegion": home})
 
 
@@ -267,19 +267,20 @@ def test_the_guard_redirect_is_a_routed_request_too():
     exp = demo.expected_regions(ALL_HEALTHY)
     assert demo.trace_problem([guard_hop("us-east-2"), app_hop("us-east-1")], exp) is None
     assert demo.hop_note(guard_hop("us-east-2")) == (
-        "app in us-east-2: cust-001 has home Region us-east-1, go to ingest.ue1.demo.io")
+        "app in us-east-2: cust-001 has home Region us-east-1, go to ingest.ue1.example.com")
 
 
 def test_a_redirect_to_another_name_or_a_trace_ending_in_a_redirect_is_a_problem():
     exp = demo.expected_regions(ALL_HEALTHY)
-    assert "not ingest.ue1.demo.io" in demo.trace_problem([router_hop(target=UE2), app_hop("us-east-1")], exp)
+    assert "not ingest.ue1.example.com" in demo.trace_problem([router_hop(target=UE2), app_hop("us-east-1")], exp)
     assert "with 307" in demo.trace_problem([router_hop(), guard_hop("us-east-1"), guard_hop("us-east-1")], exp)
 
 
 def test_errors_and_router_answers_are_problems():
     exp = demo.expected_regions(ALL_HEALTHY)
-    assert demo.trace_problem([{"url": "http://ingest.demo.io/read", "error": "timeout: timed out"}], exp) == "timeout: timed out"
-    unknown = hop("router us-east-2", 404, "http://ingest.demo.io/read", body={"error": "unknown customer cust-001"})
+    timeout = [{"url": "http://ingest.example.com/read", "error": "timeout: timed out"}]
+    assert demo.trace_problem(timeout, exp) == "timeout: timed out"
+    unknown = hop("router us-east-2", 404, "http://ingest.example.com/read", body={"error": "unknown customer cust-001"})
     assert "router us-east-2 with 404" in demo.trace_problem([unknown], exp)
     assert demo.trace_problem([], exp) == "no response"
 
@@ -293,7 +294,7 @@ def test_a_missing_item_is_still_a_routed_request():
 def test_notes_say_when_an_item_is_served_outside_its_home_region():
     read = app_hop("us-east-2", key="demo", value="{}", writtenIn="us-east-1", writtenAt="2026-10-22T17:40:02Z")
     assert demo.hop_note(read) == "app in us-east-2: read demo, written in us-east-1 at 17:40:02 (not its home Region)"
-    assert demo.hop_note(router_hop()) == "router in us-east-2: cust-001 has home Region us-east-1, go to ingest.ue1.demo.io"
+    assert demo.hop_note(router_hop()) == "router in us-east-2: cust-001 has home Region us-east-1, go to ingest.ue1.example.com"
     assert demo.hop_note(app_hop("us-east-1")) == "app in us-east-1: cust-001 has home Region us-east-1"
     assert demo.hop_note(app_hop("us-east-1", key="demo", writtenIn="us-east-1")) == "app in us-east-1: wrote demo"
 

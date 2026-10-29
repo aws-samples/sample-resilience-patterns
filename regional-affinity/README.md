@@ -9,29 +9,29 @@ Deploy this two-AWS-Region sample in your account to give each customer a home R
 The records live in a Route 53 private hosted zone associated with both VPCs:
 
 ```
-ingest.demo.io                       weighted 50/50, ARC health check on each record
-├── ingest.ue1.demo.io               failover, ARC health check on each record (us-east-1 home Region name)
-│   ├── PRIMARY    → ingest-app.ue1.demo.io → internal ALB, us-east-1
-│   └── SECONDARY  → ingest-app.ue2.demo.io → internal ALB, us-east-2
-└── ingest.ue2.demo.io               failover, ARC health check on each record (us-east-2 home Region name)
-    ├── PRIMARY    → ingest-app.ue2.demo.io → internal ALB, us-east-2
-    └── SECONDARY  → ingest-app.ue1.demo.io → internal ALB, us-east-1
+ingest.example.com                       weighted 50/50, ARC health check on each record
+├── ingest.ue1.example.com               failover, ARC health check on each record (us-east-1 home Region name)
+│   ├── PRIMARY    → ingest-app.ue1.example.com → internal ALB, us-east-1
+│   └── SECONDARY  → ingest-app.ue2.example.com → internal ALB, us-east-2
+└── ingest.ue2.example.com               failover, ARC health check on each record (us-east-2 home Region name)
+    ├── PRIMARY    → ingest-app.ue2.example.com → internal ALB, us-east-2
+    └── SECONDARY  → ingest-app.ue1.example.com → internal ALB, us-east-1
 ```
 
 A request for a customer whose home Region is us-east-1:
 
 ```
-POST http://ingest.demo.io/write
+POST http://ingest.example.com/write
      {"customerId": "cust-001", "key": "demo", "value": {"note": "hi"}}
  1. DNS answers with either Region's Application Load Balancer (ALB), weighted 50/50
  2. the ALB's rule for the region-less name invokes the router, which reads the customer from the
-    body and its home Region from that Region's replica: 307 Location: http://ingest.ue1.demo.io/write
- 3. the client repeats the POST, same body, on ingest.ue1.demo.io
+    body and its home Region from that Region's replica: 307 Location: http://ingest.ue1.example.com/write
+ 3. the client repeats the POST, same body, on ingest.ue1.example.com
  4. DNS answers with the us-east-1 ALB, or with the us-east-2 ALB while ARC has us-east-1 drained
  5. the ALB invokes the app, which writes the item to that Region's replica of the global table
 ```
 
-A 307 tells the client to repeat the same method and body at the new location. The router never checks whether the home Region is up. When the plan drains us-east-1, the failover record of `ingest.ue1.demo.io` answers with its SECONDARY, the us-east-2 ALB, so the same redirect lands there:
+A 307 tells the client to repeat the same method and body at the new location. The router never checks whether the home Region is up. When the plan drains us-east-1, the failover record of `ingest.ue1.example.com` answers with its SECONDARY, the us-east-2 ALB, so the same redirect lands there:
 
 ![After the ARC Region switch plan drains us-east-1](docs/architecture-drained.png)
 
@@ -55,7 +55,7 @@ This is the DynamoDB global tables [write to your Region mode (mixed primary)](h
 | `regional-affinity-region-us-east-1` | us-east-1 | VPC `10.11.0.0/16` with two isolated subnets (no internet gateway, no NAT gateway), internal ALB, router, app and probe functions, peering connection to the second VPC |
 | `regional-affinity-region-us-east-2` | us-east-2 | VPC `10.12.0.0/16`, same resources, return route over the peering connection |
 | `regional-affinity-data` | us-east-1 | Global table `regional-affinity-customers` (on-demand, MREC, point-in-time recovery) with a replica in us-east-2 |
-| `regional-affinity-plan` | us-east-1 | Private hosted zone `demo.io` associated with both VPCs, plan execution role, `activeActive` Region switch plan |
+| `regional-affinity-plan` | us-east-1 | Private hosted zone `example.com` associated with both VPCs, plan execution role, `activeActive` Region switch plan |
 | `regional-affinity-records` | us-east-1 | The ten records above, created bottom-up |
 
 The probe function runs inside each VPC. `scripts/demo.py` invokes it to query the VPC's Route 53 Resolver and to send HTTP requests that follow redirects, because the private hosted zone answers only inside the two VPCs. The VPCs are peered so the probe can reach whichever Region's ALB an answer names.
@@ -69,7 +69,7 @@ Deploy this sample into a sandbox AWS account. It needs one free VPC in each Reg
 - Node.js 20 or later, Python 3.9 or later, and `make`. The scripts use only the Python standard library.
 - Optional: `ACCOUNT=<12-digit account ID>` makes every target refuse to run against any other account.
 
-Set `REGIONS`, `DOMAIN` and `APP_LABEL` to change the defaults (`us-east-1,us-east-2`, `demo.io`, `ingest`). A Region's label in its names is the first letter of each word plus its number: `ue1` for us-east-1, `uw2` for us-west-2. `PROJECT` (default `regional-affinity`) prefixes every stack and named resource.
+Set `REGIONS`, `DOMAIN` and `APP_LABEL` to change the defaults (`us-east-1,us-east-2`, `example.com`, `ingest`). A Region's label in its names is the first letter of each word plus its number: `ue1` for us-east-1, `uw2` for us-west-2. `PROJECT` (default `regional-affinity`) prefixes every stack and named resource.
 
 ## Deploy
 
@@ -87,9 +87,9 @@ From an empty account, `make deploy` takes about 15 minutes. It deploys the two 
 
 | Step | Command | What to look for |
 |---|---|---|
-| Steady state | `make status` | All six ARC health checks healthy, with each home Region name's primary answering and its standby waiting. `cust-001` is redirected to `ingest.ue1.demo.io` and served in us-east-1, `cust-002` to `ingest.ue2.demo.io` and served in us-east-2. The last request sends `cust-001` straight to `ingest.ue2.demo.io`, and the app's guard redirects it to `ingest.ue1.demo.io`. |
+| Steady state | `make status` | All six ARC health checks healthy, with each home Region name's primary answering and its standby waiting. `cust-001` is redirected to `ingest.ue1.example.com` and served in us-east-1, `cust-002` to `ingest.ue2.example.com` and served in us-east-2. The last request sends `cust-001` straight to `ingest.ue2.example.com`, and the app's guard redirects it to `ingest.ue1.example.com`. |
 | Write and read | `make call CUSTOMER=cust-005` | A read (no item yet), a write and a read, each through the region-less name. All three are served in us-east-1, cust-005's home Region. |
-| Drain | `make drain REGION=us-east-1` | Starts the plan's deactivate workflow for us-east-1 at the us-east-2 endpoint (a deactivate runs in the Region that stays), follows its steps (about 2 minutes), waits for DNS to follow, then shows the status. us-east-1's checks are unhealthy and the standby of `ingest.ue1.demo.io` answers. |
+| Drain | `make drain REGION=us-east-1` | Starts the plan's deactivate workflow for us-east-1 at the us-east-2 endpoint (a deactivate runs in the Region that stays), follows its steps (about 2 minutes), waits for DNS to follow, then shows the status. us-east-1's checks are unhealthy and the standby of `ingest.ue1.example.com` answers. |
 | During the drain | `make call CUSTOMER=cust-005` | The same requests, served in us-east-2. The read returns the item written in us-east-1 before the drain, because the table replicated it. |
 | Restore | `make restore REGION=us-east-1` | Starts the activate workflow at the us-east-1 endpoint. Afterwards a call reads, in us-east-1, the value written in us-east-2 during the drain. |
 | Rehearse | `make rehearse` | Drains and restores each Region in turn, and fails if DNS, the Region that serves a request, or the data a Region reads differs from what the plan state predicts. The e2e workflow runs this. |
@@ -106,7 +106,7 @@ Reading the output:
 ## Adapting it
 
 - **Public hosted zone.** The records, plan and routing are the same with a public zone for a domain you own.
-- **TLS.** Each ALB needs a certificate for the region-less name and both home Region names, because during a drain the surviving Region's ALB answers for the drained Region's name. A wildcard such as `*.demo.io` matches one label, so it covers the region-less name but not `ingest.ue1.demo.io`. The router and the guard already redirect with the scheme the client used.
+- **TLS.** Each ALB needs a certificate for the region-less name and both home Region names, because during a drain the surviving Region's ALB answers for the drained Region's name. A wildcard such as `*.example.com` matches one label, so it covers the region-less name but not `ingest.ue1.example.com`. The router and the guard already redirect with the scheme the client used.
 - **Clients.** A client must follow a 307 and repeat the method and body. `curl -L` and the Python `requests` library do. A client can keep the home Region name for later requests for the same customer; it stays correct through a drain, so only the first request pays for the redirect.
 - **The customer in the body.** Reads are POSTs too, because many clients and proxies drop the body of a GET. The router parses every request's body to find the customer, and an ALB passes at most 1 MB of request body to a Lambda function. A router that sees only headers and the URL, such as a CloudFront Function, cannot route on a body field.
 - **Routing lookups.** The router reads the customer's profile item for each region-less request. A short in-memory cache would cut those reads, at the cost of a reassigned customer taking up to the cache lifetime to move.
@@ -128,7 +128,7 @@ Report security issues through Security issue notifications in [CONTRIBUTING.md]
 
 The sample's API has no authentication and uses plain HTTP. The ALBs are internal and accept connections only from the two sample VPCs, which have no internet gateway or NAT gateway; the only thing running in them is the probe function, and invoking it needs `lambda:InvokeFunction` in the account. The data is synthetic. A production front door needs TLS (see above) and the application's own authentication.
 
-`demo.io` is a registered domain that belongs to someone else. Inside the two VPCs the private hosted zone answers first, so the sample's requests never leave them. Outside the VPCs those names resolve through public DNS to that domain's owner, so do not send requests to them from anywhere else, and set `DOMAIN` to a name you own before you adapt the sample to a public hosted zone.
+The records use `example.com`, which [RFC 2606](https://www.rfc-editor.org/rfc/rfc2606) reserves for documentation. Inside the two VPCs the private hosted zone answers first, so the sample's requests never leave them. Set `DOMAIN` to a domain you own before you adapt the sample to a public hosted zone.
 
 The cdk-nag AwsSolutions exceptions are listed with their reasons in [`lib/nag.ts`](lib/nag.ts): `AwsSolutions-IAM4` (the documented Lambda execution policies), `AwsSolutions-IAM5` (the plan execution role reads its own plan, whose ARN ARC generates), `AwsSolutions-ELB2` (no ALB access logs) and `AwsSolutions-VPC7` (no VPC flow logs). `test/nag.test.ts` fails on any other finding.
 

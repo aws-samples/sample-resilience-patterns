@@ -13,10 +13,10 @@ describe('region labels', () => {
 });
 
 test('record names for the defaults', () => {
-  expect(recordNames('ingest', 'demo.io', ['us-east-1', 'us-east-2'])).toEqual({
-    regionLess: 'ingest.demo.io',
-    regional: { 'us-east-1': 'ingest.ue1.demo.io', 'us-east-2': 'ingest.ue2.demo.io' },
-    app: { 'us-east-1': 'ingest-app.ue1.demo.io', 'us-east-2': 'ingest-app.ue2.demo.io' },
+  expect(recordNames('ingest', 'example.com', ['us-east-1', 'us-east-2'])).toEqual({
+    regionLess: 'ingest.example.com',
+    regional: { 'us-east-1': 'ingest.ue1.example.com', 'us-east-2': 'ingest.ue2.example.com' },
+    app: { 'us-east-1': 'ingest-app.ue1.example.com', 'us-east-2': 'ingest-app.ue2.example.com' },
   });
 });
 
@@ -34,7 +34,7 @@ test('project, label and domain checks', () => {
   expect(() => checkProject('Regional')).toThrow();
   expect(checkLabel('ingest')).toBe('ingest');
   expect(() => checkLabel('in.gest')).toThrow();
-  expect(checkDomain('demo.io')).toBe('demo.io');
+  expect(checkDomain('example.com')).toBe('example.com');
   expect(() => checkDomain('Demo.io')).toThrow();
   expect(() => checkDomain('demo')).toThrow();
 });
@@ -50,7 +50,7 @@ describe('scripts/demo.py derives the same names', () => {
     { env: { PATH: process.env.PATH ?? '', ...env }, encoding: 'utf8' }));
 
   test('with the defaults', () => {
-    expect(python({})).toEqual(recordNames('ingest', 'demo.io', ['us-east-1', 'us-east-2']));
+    expect(python({})).toEqual(recordNames('ingest', 'example.com', ['us-east-1', 'us-east-2']));
   });
 
   test('with other Regions, domain and label', () => {

@@ -51,7 +51,8 @@ def test_the_guard_redirects_any_other_name_to_the_home_region_name(call, table,
 
 
 def test_the_guard_ignores_a_port_and_case_in_the_host_and_keeps_the_scheme(call):
-    assert call("us-east-1", "/read", request_body(customerId="cust-001"), host="INGEST.UE1.DEMO.IO:80")[0]["statusCode"] == 200
+    upper = call("us-east-1", "/read", request_body(customerId="cust-001"), host="INGEST.UE1.EXAMPLE.COM:80")
+    assert upper[0]["statusCode"] == 200
     response, _ = call("us-east-1", "/read", request_body(customerId="cust-001"), host=APP_NAMES["us-east-1"],
                        **{"x-forwarded-proto": "https"})
     assert response["headers"]["Location"] == f"https://{HOME}/read"

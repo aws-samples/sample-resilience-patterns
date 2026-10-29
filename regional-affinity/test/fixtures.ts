@@ -7,7 +7,7 @@ import { RegionStack } from '../lib/region-stack';
 
 export const REGIONS = ['us-east-1', 'us-east-2'] as const;
 export const PROJECT = 'regional-affinity';
-export const NAMES = recordNames('ingest', 'demo.io', REGIONS);
+export const NAMES = recordNames('ingest', 'example.com', REGIONS);
 export const TABLE = `${PROJECT}-customers`;
 export const ALB = {
   'us-east-1': { dnsName: 'internal-a-1.us-east-1.elb.amazonaws.com', hostedZoneId: 'Z35SXDOTRQ7X7K' },
@@ -35,7 +35,7 @@ export function dataStack() {
 
 export function planStack() {
   return new PlanStack(new cdk.App(), `${PROJECT}-plan`, {
-    env: { region: REGIONS[0] }, project: PROJECT, domain: 'demo.io', names: NAMES, regions: REGIONS,
+    env: { region: REGIONS[0] }, project: PROJECT, domain: 'example.com', names: NAMES, regions: REGIONS,
     vpcIds: ['vpc-0000000000000000a', 'vpc-0000000000000000b'],
   });
 }

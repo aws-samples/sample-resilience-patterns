@@ -6,7 +6,7 @@ Every request is a POST whose JSON body names the customer:
     POST /read   {"customerId": "cust-001", "key": "demo"}   (without a key: the home Region)
 
 Home-Region guard: the app serves a customer's request only when it arrives on the name of the
-customer's home Region, such as ingest.ue1.demo.io, and answers 307 to that name otherwise. Which
+customer's home Region, such as ingest.ue1.example.com, and answers 307 to that name otherwise. Which
 Region serves that name is DNS's decision: its own Region at rest, the other Region after the ARC
 Region switch plan drains the home Region. So a client that calls the wrong regional name, or an
 app name directly, is sent to the one name that tracks the plan.

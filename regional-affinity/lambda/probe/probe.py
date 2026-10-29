@@ -4,11 +4,11 @@ The private hosted zone answers only inside the two VPCs it is associated with, 
 script (scripts/demo.py) sees DNS and HTTP the way a client in the VPC does by invoking this
 function. Two kinds of event:
 
-    {"names": ["ingest.demo.io", ...], "samples": 20, "interval": 0.5}
+    {"names": ["ingest.example.com", ...], "samples": 20, "interval": 0.5}
         Sends A queries straight to this VPC's Route 53 Resolver (the VPC CIDR base plus two), so
         each answer shows the TTL the resolver hands out, and returns them per name.
 
-    {"requests": [{"method": "POST", "url": "http://ingest.demo.io/read", "body": "{...}"}]}
+    {"requests": [{"method": "POST", "url": "http://ingest.example.com/read", "body": "{...}"}]}
         Resolves each URL's host the same way, connects to the first address answered, and follows
         redirects, recording one hop per response.
 

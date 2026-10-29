@@ -35,7 +35,7 @@ FADE = 0.35
 
 # The names the sample deploys; lib/names.ts builds the same ones from its defaults.
 PROJECT = "regional-affinity"
-DOMAIN = "demo.io"
+DOMAIN = "example.com"
 REGION_LESS = f"ingest.{DOMAIN}"
 HOME_NAME = {"ue1": f"ingest.ue1.{DOMAIN}", "ue2": f"ingest.ue2.{DOMAIN}"}
 APP_NAME = {"ue1": f"ingest-app.ue1.{DOMAIN}", "ue2": f"ingest-app.ue2.{DOMAIN}"}

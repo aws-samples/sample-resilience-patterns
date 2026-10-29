@@ -4,7 +4,7 @@ The Makefile runs every command; run them directly with the same environment if 
 
   PROJECT     stack and resource prefix                  (default regional-affinity)
   REGIONS     the two Regions, first one first           (default us-east-1,us-east-2)
-  DOMAIN      private hosted zone name                   (default demo.io)
+  DOMAIN      private hosted zone name                   (default example.com)
   APP_LABEL   first label of every record name           (default ingest)
   ACCOUNT     refuse to run against any other account    (optional)
   PROFILE     AWS CLI profile                            (optional; else the CLI's credential chain)
@@ -39,7 +39,7 @@ from urllib.parse import urlsplit
 
 PROJECT = os.environ.get("PROJECT") or "regional-affinity"
 REGIONS = tuple(r.strip() for r in (os.environ.get("REGIONS") or "us-east-1,us-east-2").split(",") if r.strip())
-DOMAIN = os.environ.get("DOMAIN") or "demo.io"
+DOMAIN = os.environ.get("DOMAIN") or "example.com"
 APP_LABEL = os.environ.get("APP_LABEL") or "ingest"
 PROFILE = os.environ.get("PROFILE") or None
 

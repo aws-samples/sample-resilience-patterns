@@ -2,13 +2,13 @@
  * Names shared by every stack, and by scripts/demo.py, which derives the same names from the
  * same inputs (test/names-contract.test.ts compares the two).
  *
- * With the defaults (app label `ingest`, domain `demo.io`, Regions us-east-1 and us-east-2):
+ * With the defaults (app label `ingest`, domain `example.com`, Regions us-east-1 and us-east-2):
  *
- *   ingest.demo.io            region-less name, weighted 50/50 across the two regional names
- *   ingest.ue1.demo.io        regional name: failover, us-east-1 primary, us-east-2 standby
- *   ingest.ue2.demo.io        regional name: failover, us-east-2 primary, us-east-1 standby
- *   ingest-app.ue1.demo.io    app name: alias to the internal ALB in us-east-1
- *   ingest-app.ue2.demo.io    app name: alias to the internal ALB in us-east-2
+ *   ingest.example.com          region-less name, weighted 50/50 across the two regional names
+ *   ingest.ue1.example.com      regional name: failover, us-east-1 primary, us-east-2 standby
+ *   ingest.ue2.example.com      regional name: failover, us-east-2 primary, us-east-1 standby
+ *   ingest-app.ue1.example.com  app name: alias to the internal ALB in us-east-1
+ *   ingest-app.ue2.example.com  app name: alias to the internal ALB in us-east-2
  */
 
 /** The VPC CIDR of the first and second Region. They must not overlap: the VPCs are peered. */
@@ -79,7 +79,7 @@ export function checkLabel(appLabel: string): string {
 
 export function checkDomain(domain: string): string {
   if (!/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(domain)) {
-    throw new Error(`domain "${domain}" is not a lowercase DNS name such as demo.io`);
+    throw new Error(`domain "${domain}" is not a lowercase DNS name such as example.com`);
   }
   return domain;
 }
