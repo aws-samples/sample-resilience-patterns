@@ -18,6 +18,15 @@ The Makefile runs every command; run them directly with the same environment if 
 
 drain and restore each start an execution of the ARC Region switch plan: its deactivate workflow
 drains a Region and its activate workflow restores it, at all three ARC-controlled record names.
+drain, restore, status and call exit 1 when a check they print fails.
+
+Every command but names makes AWS calls, and all but the three deploy-time ones make data plane calls
+and no CloudFormation call: the plan is found by name, the probe has a fixed name and the VPC CIDRs
+are constants. So drain talks only to the Region that stays, restore to the Region it restores and the
+one that stays, and status and call to the Region they query from (--from). rehearse needs both Regions.
+seed, health-checks and verify run at deploy time and read stack outputs and ARC's control plane at the
+first Region.
+
 All AWS calls go through the AWS CLI v2, so this needs only the Python 3.9+ standard library.
 """
 from __future__ import annotations
@@ -38,7 +47,6 @@ from typing import NoReturn
 from urllib.parse import urlsplit
 
 PROJECT = os.environ.get("PROJECT") or "regional-affinity"
-REGIONS = tuple(r.strip() for r in (os.environ.get("REGIONS") or "us-east-1,us-east-2").split(",") if r.strip())
 DOMAIN = os.environ.get("DOMAIN") or "example.com"
 APP_LABEL = os.environ.get("APP_LABEL") or "ingest"
 PROFILE = os.environ.get("PROFILE") or None
@@ -52,6 +60,26 @@ def region_label(region: str) -> str:
     return "".join(p[0] for p in parts[:-1]) + parts[-1]
 
 
+def parse_regions(value: str) -> tuple:
+    """The two Regions of a comma-separated list, by the rules of parseRegions in lib/names.ts."""
+    regions = tuple(r.strip() for r in value.split(",") if r.strip())
+    if len(regions) != 2 or regions[0] == regions[1]:
+        raise ValueError("it must name two different Regions, such as us-east-1,us-east-2")
+    labels = [region_label(r) for r in regions]
+    if labels[0] == labels[1]:
+        raise ValueError(f"{regions[0]} and {regions[1]} would get the same label, {labels[0]}")
+    return regions
+
+
+DEFAULT_REGIONS = "us-east-1,us-east-2"
+try:
+    REGIONS, SETTINGS_ERROR = parse_regions(os.environ.get("REGIONS") or DEFAULT_REGIONS), None
+except ValueError as exc:
+    # The defaults keep this module importable, so a bad value ends in the one-line error main() prints
+    # before it does anything, not in a traceback at import. (PROJECT, DOMAIN and APP_LABEL are only
+    # pasted into names, so no value of theirs can raise here.)
+    REGIONS, SETTINGS_ERROR = parse_regions(DEFAULT_REGIONS), f'REGIONS="{os.environ.get("REGIONS")}" cannot be used: {exc}'
+
 FIRST = REGIONS[0]  # holds the data, plan and records stacks
 REGION_LESS = f"{APP_LABEL}.{DOMAIN}"
 REGIONAL = {r: f"{APP_LABEL}.{region_label(r)}.{DOMAIN}" for r in REGIONS}
@@ -60,6 +88,10 @@ ARC_NAMES = (REGION_LESS, *REGIONAL.values())
 ALL_NAMES = (*ARC_NAMES, *APP_NAME.values())
 
 TABLE = f"{PROJECT}-customers"
+# Both are fixed by the stacks (lib/region-stack.ts names the probe, lib/names.ts holds the CIDRs; a test
+# compares each), so no command has to ask CloudFormation for them, in either Region.
+PROBE_FUNCTION = f"{PROJECT}-probe"
+VPC_CIDRS = ("10.11.0.0/16", "10.12.0.0/16")  # the first and the second Region
 STACK = {"data": f"{PROJECT}-data", "plan": f"{PROJECT}-plan", "records": f"{PROJECT}-records",
          **{r: f"{PROJECT}-region-{r}" for r in REGIONS}}
 
@@ -72,13 +104,26 @@ DONE = ("completed", "completedWithExceptions", "completedMonitoringApplicationH
         "failed", "canceled", "planExecutionTimedOut")
 SUCCEEDED = ("completed", "completedMonitoringApplicationHealth")
 PAUSED = ("pausedByFailedStep", "pausedByOperator", "pendingManualApproval")
-# The fields UpdatePlan accepts, copied from GetPlan for a no-op update.
+# The fields UpdatePlan accepts, copied from GetPlan for a no-op update. serviceQuotaChecksEnabled is one of
+# them: an update that leaves it out might reset the setting.
 UPDATE_KEYS = ("arn", "description", "workflows", "executionRole", "recoveryTimeObjectiveMinutes",
-               "associatedAlarms", "triggers", "reportConfiguration")
+               "associatedAlarms", "triggers", "reportConfiguration", "serviceQuotaChecksEnabled")
+# The error codes worth another try. Anything else (AccessDenied, ResourceNotFound, ValidationException, an
+# expired token) fails the same way next time.
+TRANSIENT = ("ThrottlingException", "Throttling", "ThrottledException", "TooManyRequestsException", "RequestLimitExceeded",
+             "InternalServerException", "InternalFailure", "ServiceUnavailable", "ServiceUnavailableException",
+             "RequestTimeout", "RequestTimeoutException")
 
 
 class AwsError(RuntimeError):
-    pass
+    def __init__(self, message: str, code: str = ""):
+        super().__init__(message)
+        self.code = code  # the error code the CLI printed, such as AccessDeniedException; "" when it printed none
+
+
+def transient(error: AwsError) -> bool:
+    """Throttling, a server-side error or a connection problem. The CLI prints a connection problem with no code."""
+    return error.code in TRANSIENT or (not error.code and "endpoint URL" in str(error))
 
 
 def say(message: str) -> None:
@@ -104,7 +149,8 @@ def aws(region: str, *args: str) -> dict:
     done = subprocess.run(aws_cmd(region, "--output", "json", *args), capture_output=True, text=True)
     if done.returncode:
         lines = done.stderr.strip().splitlines()
-        raise AwsError(f"aws {' '.join(args[:2])} ({region}): {lines[-1] if lines else 'failed'}")
+        code = re.search(r"An error occurred \((\w+)\)", done.stderr)
+        raise AwsError(f"aws {' '.join(args[:2])} ({region}): {lines[-1] if lines else 'failed'}", code.group(1) if code else "")
     return json.loads(done.stdout) if done.stdout.strip() else {}
 
 
@@ -126,12 +172,15 @@ def pick_health_checks(health_checks: list) -> dict:
     """{(record name, Region): health check ID} for exactly the six checks the records need.
 
     Raises LookupError while any is missing (the plan may still be vending them) and ValueError
-    if a record name and Region has more than one check, which nothing should paper over."""
+    if a record name and Region has more than one check, which nothing should paper over. ARC can
+    list a check before it has an ID (healthCheckId is optional in its API); that one is not found yet."""
     wanted = [(name, region) for name in ARC_NAMES for region in REGIONS]
     found: dict = {}
     for hc in health_checks:
+        if not hc.get("healthCheckId"):
+            continue
         key = (hc.get("recordName", "").rstrip(".").lower(), hc.get("region"))
-        found.setdefault(key, set()).add(hc.get("healthCheckId"))
+        found.setdefault(key, set()).add(hc["healthCheckId"])
     ambiguous = [f"{n} {r}: {sorted(ids)}" for (n, r), ids in found.items() if (n, r) in wanted and len(ids) > 1]
     if ambiguous:
         raise ValueError("more than one health check for " + "; ".join(ambiguous))
@@ -328,13 +377,21 @@ def final_answer(hops: list) -> dict:
 
 
 # ---- AWS reads -----------------------------------------------------------------------------
+#
+# drain, restore, status, call and rehearse read only what the Regions they use can tell them, with data plane
+# calls (the plan by name, the health checks, the probe by its fixed name) and no CloudFormation, so a drain does
+# not depend on the Region it drains. seed, health-checks and verify run at deploy time and read CloudFormation
+# outputs and ARC's control plane at the first Region.
 
 
-def check_account(expected: str | None) -> None:
-    who = aws(FIRST, "sts", "get-caller-identity")
+def check_account(expected: str | None, region: str) -> None:
+    """Print the account in use, and stop before any change if it is not the one pinned.
+
+    region is the Region the command acts in (see acting_region), so the check needs no other Region."""
+    who = aws(region, "sts", "get-caller-identity")
     if expected and who.get("Account") != expected:
         die(f"these credentials are for account {who.get('Account')}, not {expected}; nothing was changed")
-    say(f"account {who.get('Account')} as {who.get('Arn')}")
+    say(f"account {who.get('Account')} as {who.get('Arn')} (checked in {region})")
 
 
 def stack_outputs(region: str, stack: str) -> dict:
@@ -345,34 +402,40 @@ def stack_outputs(region: str, stack: str) -> dict:
     return {o["OutputKey"]: o["OutputValue"] for o in data["Stacks"][0].get("Outputs", [])}
 
 
-def plan_arn() -> str:
+def plan_arn(region: str) -> str:
+    """The ARN of the Region switch plan, found by name (the plan is named PROJECT) at region's data plane endpoint."""
+    plans = aws(region, "arc-region-switch", "list-plans-in-region").get("plans", [])
+    arns = [plan["arn"] for plan in plans if plan.get("name") == PROJECT]
+    if not arns:
+        die(f"no Region switch plan named {PROJECT} at the {region} endpoint; run make deploy first")
+    if len(arns) > 1:
+        die(f"more than one Region switch plan is named {PROJECT} at the {region} endpoint: {', '.join(arns)}")
+    return arns[0]
+
+
+def plan_arn_from_stack() -> str:
+    """The same ARN from the plan stack's output, for deploy time: CloudFormation has it the moment the plan exists."""
     return stack_outputs(FIRST, STACK["plan"])["PlanArn"]
 
 
 def vpc_cidrs() -> dict:
-    return {r: ipaddress.ip_network(stack_outputs(r, STACK[r])["VpcCidr"]) for r in REGIONS}
+    return {r: ipaddress.ip_network(cidr) for r, cidr in zip(REGIONS, VPC_CIDRS)}
 
 
-def health_states(arn: str, prefer: str) -> tuple:
-    """({(record name, Region): healthy | unhealthy | unknown}, endpoint read), prefer's endpoint first."""
-    error = None
-    for region in (prefer, other(prefer)):
-        try:
-            data = aws(region, "arc-region-switch", "list-route53-health-checks", "--arn", arn)
-        except AwsError as exc:
-            error = exc
-            continue
-        states = {(hc["recordName"].rstrip(".").lower(), hc["region"]): hc.get("status", "unknown")
-                  for hc in data.get("healthChecks", [])}
-        return states, region
-    die(f"cannot read the ARC health checks: {error}")
+def health_states(arn: str, region: str) -> dict:
+    """{(record name, Region): healthy | unhealthy | unknown}, read at region's data plane endpoint and no other."""
+    try:
+        data = aws(region, "arc-region-switch", "list-route53-health-checks-in-region", "--arn", arn)
+    except AwsError as exc:
+        die(f"cannot read the ARC health checks: {exc}")
+    return {(hc["recordName"].rstrip(".").lower(), hc["region"]): hc.get("status", "unknown")
+            for hc in data.get("healthChecks", [])}
 
 
 def invoke_probe(region: str, payload: dict) -> dict:
-    function = stack_outputs(region, STACK[region])["ProbeFunctionName"]
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "probe.json"
-        meta = aws(region, "lambda", "invoke", "--function-name", function,
+        meta = aws(region, "lambda", "invoke", "--function-name", PROBE_FUNCTION,
                    "--cli-binary-format", "raw-in-base64-out", "--cli-read-timeout", "90",
                    "--payload", json.dumps(payload), str(out))
         body = json.loads(out.read_text() or "{}")
@@ -461,8 +524,8 @@ def body(customer: str, key: str | None = None, **extra) -> str:
 
 
 def show(arn: str, observer: str, samples: int, interval: float, cidrs: dict) -> bool:
-    health, endpoint = health_states(arn, prefer=observer)
-    print_health(health, endpoint)
+    health = health_states(arn, observer)
+    print_health(health, observer)
     expected = expected_regions(health)
     dns_ok = print_dns(run_probe(observer, samples, interval), expected, cidrs, samples, interval)
     requests = [("POST", f"http://{REGION_LESS}/read", body(c)) for c in SAMPLE_CUSTOMERS]
@@ -516,7 +579,7 @@ def vended_health_checks(arn: str, tries: int = 18) -> dict:
 
 
 def cmd_health_checks(args) -> None:
-    ids = vended_health_checks(plan_arn())
+    ids = vended_health_checks(plan_arn_from_stack())
     if args.json:
         print(json.dumps(health_check_context(ids), sort_keys=True))
         return
@@ -529,8 +592,13 @@ def evaluation(region: str, arn: str) -> dict:
     return aws(region, "arc-region-switch", "get-plan-evaluation-status", "--plan-arn", arn)
 
 
-def refresh_evaluation(arn: str) -> bool:
-    """Make ARC evaluate the plan now, at both endpoints, and report it. False if a warning is active.
+EVALUATION_POLLS, EVALUATION_POLL_SECONDS = 16, 15  # how long to wait for each endpoint's new evaluation
+
+
+def refresh_evaluation(arn: str) -> list:
+    """Make ARC evaluate the plan now, at both endpoints, and report it. Returns what is wrong, one line each.
+
+    Clean (an empty list) means each endpoint reports evaluationState passed and no active warning.
 
     The plan exists before its records do, so its first evaluation warns that the records are
     missing, and ARC keeps serving that result until its next scheduled evaluation. A no-op
@@ -539,29 +607,36 @@ def refresh_evaluation(arn: str) -> bool:
     plan = aws(FIRST, "arc-region-switch", "get-plan", "--arn", arn)["plan"]
     with json_file({k: plan[k] for k in UPDATE_KEYS if k in plan}) as path:
         aws(FIRST, "arc-region-switch", "update-plan", "--cli-input-json", f"file://{path}")
-    clean = True
+    problems = []
     for region in REGIONS:
         status: dict = {}
-        for _ in range(16):
-            time.sleep(15)
+        for _ in range(EVALUATION_POLLS):
+            time.sleep(EVALUATION_POLL_SECONDS)
             status = evaluation(region, arn)
-            if status.get("lastEvaluationTime") != before[region]:
+            # A new time with the state still pendingEvaluation means the warnings below may be the old ones.
+            if status.get("lastEvaluationTime") != before[region] and status.get("evaluationState") != "pendingEvaluation":
                 break
         else:
+            minutes = EVALUATION_POLLS * EVALUATION_POLL_SECONDS // 60
             say(f"  evaluation at the {region} endpoint has not refreshed yet ({status.get('evaluationState')})")
-            clean = False
+            problems.append(f"the {region} endpoint did not refresh its evaluation within {minutes} minutes;"
+                            " run make verify again")
             continue
+        state = status.get("evaluationState")
         active = [w for w in status.get("warnings") or [] if w.get("warningStatus") == "active"]
-        say(f"  evaluation at the {region} endpoint: {status.get('evaluationState')}, {len(active)} active warning(s)")
+        say(f"  evaluation at the {region} endpoint: {state}, {len(active)} active warning(s)")
         for w in active:
             print(f"    {w.get('stepName') or '-'}: {w.get('warningMessage')}", file=sys.stderr)
-        clean = clean and not active
-    return clean
+        if active:
+            problems.append(f"the {region} endpoint reports {len(active)} active warning(s), listed above; clear them")
+        elif state != "passed":
+            problems.append(f"the {region} endpoint evaluates the plan as {state}, not passed")
+    return problems
 
 
 def cmd_verify(_args) -> None:
-    """Every record carries the right ARC health check, and the plan evaluates without warnings."""
-    arn = plan_arn()
+    """Every record carries the right ARC health check, and the plan evaluates as passed without warnings."""
+    arn = plan_arn_from_stack()
     zone = stack_outputs(FIRST, STACK["plan"])["HostedZoneId"]
     ids = vended_health_checks(arn, tries=1)
     records = aws(FIRST, "route53", "list-resource-record-sets", "--hosted-zone-id", zone)["ResourceRecordSets"]
@@ -570,29 +645,39 @@ def cmd_verify(_args) -> None:
         die("records do not carry the expected ARC health checks:\n  " + "\n  ".join(problems))
     say("every record that sends traffic to a Region carries that Region's ARC health check")
     say("refreshing plan evaluation (takes a minute or two)")
-    if not refresh_evaluation(arn):
-        die("plan evaluation reports the warnings above; clear them before running the plan")
+    problems = refresh_evaluation(arn)
+    if problems:
+        die("the plan evaluation is not clean:\n  " + "\n  ".join(problems))
     say(f"plan {arn} evaluates clean at both endpoints")
 
 
 # ---- demo commands -------------------------------------------------------------------------
 
 
+def observer_of(args) -> str:
+    """The Region whose VPC status and call query from: --from, else the second Region."""
+    return args.from_region or REGIONS[1]
+
+
 def cmd_status(args) -> None:
-    show(plan_arn(), args.from_region or REGIONS[1], args.samples, args.interval, vpc_cidrs())
+    observer = observer_of(args)
+    if not show(plan_arn(observer), observer, args.samples, args.interval, vpc_cidrs()):
+        die("status: a check above differs from what ARC's health checks predict (DNS answers can lag by up to the TTL)")
 
 
 def cmd_call(args) -> None:
     """Read, write and read one item of one customer through the region-less name."""
-    arn = plan_arn()
-    observer = args.from_region or REGIONS[1]
-    health, _ = health_states(arn, prefer=observer)
+    observer = observer_of(args)
+    arn = plan_arn(observer)
+    health = health_states(arn, observer)
     say(f"ARC: {region_summary(health)}")
     note = {"note": f"from the {observer} VPC at {time.strftime('%H:%M:%S')}"}
     requests = [("POST", f"http://{REGION_LESS}/read", body(args.customer, "demo")),
                 ("POST", f"http://{REGION_LESS}/write", body(args.customer, "demo", value=note)),
                 ("POST", f"http://{REGION_LESS}/read", body(args.customer, "demo"))]
-    send(observer, requests, expected_regions(health), vpc_cidrs())
+    ok, _ = send(observer, requests, expected_regions(health), vpc_cidrs())
+    if not ok:
+        die("call: a request above did not end at the app in the Region DNS sends it to")
 
 
 def wait_for_execution(endpoint: str, arn: str, execution: str, t0: float, limit: int = 15 * 60) -> str:
@@ -601,6 +686,9 @@ def wait_for_execution(endpoint: str, arn: str, execution: str, t0: float, limit
         try:
             data = aws(endpoint, "arc-region-switch", "get-plan-execution", "--plan-arn", arn, "--execution-id", execution)
         except AwsError as exc:
+            if not transient(exc):
+                die(f"cannot read plan execution {execution}: {exc};"
+                    " it was started and may still be running, see the ARC console")
             say(f"  read failed, retrying: {exc}")
             time.sleep(10)
             continue
@@ -622,7 +710,7 @@ def wait_for_dns(arn: str, observer: str, cidrs: dict, t0: float, limit: int = 5
         f" (answers are cached up to their TTL)")
     deadline = time.time() + limit
     while True:
-        expected = expected_regions(health_states(arn, prefer=observer)[0])
+        expected = expected_regions(health_states(arn, observer))
         results = run_probe(observer, 1, 0)["results"]
         pending = [n for n in ALL_NAMES if not matches(n, set(summarize(results.get(n, []), cidrs)["counts"]), expected[n])]
         if not pending:
@@ -635,18 +723,21 @@ def wait_for_dns(arn: str, observer: str, cidrs: dict, t0: float, limit: int = 5
 
 
 def shift(target: str, action: str, observer: str | None, samples: int, interval: float) -> bool:
-    """Run the plan's deactivate (drain) or activate (restore) workflow for target; True if all checks pass."""
+    """Run the plan's deactivate (drain) or activate (restore) workflow for target; True if all checks pass.
+
+    A deactivate is started at the endpoint of the Region that stays and an activate at the target's, and
+    every read is made at the endpoint of the observer, which is the Region that stays unless asked
+    otherwise. So a drain never calls the Region it drains."""
     survivor = other(target)
-    arn = plan_arn()
+    endpoint = survivor if action == "deactivate" else target
+    arn = plan_arn(endpoint)
     cidrs = vpc_cidrs()
     observer = observer or survivor
     if action == "deactivate":
-        health, _ = health_states(arn, prefer=survivor)
+        health = health_states(arn, survivor)
         if any(health.get((name, survivor)) != "healthy" for name in ARC_NAMES):
             die(f"{survivor} is not fully active, so draining {target} would leave no healthy Region;"
                 f" restore {survivor} first (no plan execution was started)")
-    # A deactivate is started at the endpoint of the Region that stays, an activate at the target's.
-    endpoint = survivor if action == "deactivate" else target
     where = "a deactivate runs in the Region that stays" if action == "deactivate" else "an activate runs in its target Region"
     say(f"starting ARC Region switch plan {plan_name(arn)}: {action} workflow, target {target}, graceful mode")
     started = aws(endpoint, "arc-region-switch", "start-plan-execution", "--plan-arn", arn,
@@ -659,7 +750,7 @@ def shift(target: str, action: str, observer: str | None, samples: int, interval
     if state not in SUCCEEDED:
         die(f"plan execution {execution} ended {state}; see the plan's executions in the ARC console")
     marked = "unhealthy" if action == "deactivate" else "healthy"
-    health, _ = health_states(arn, prefer=observer)
+    health = health_states(arn, observer)
     done = sum(health.get((name, target)) == marked for name in ARC_NAMES)
     say(f"plan execution {state}: ARC marked {target}'s health checks {marked} at {done} of {len(ARC_NAMES)} record names")
     dns_ok = wait_for_dns(arn, observer, cidrs, t0)
@@ -667,7 +758,10 @@ def shift(target: str, action: str, observer: str | None, samples: int, interval
 
 
 def cmd_shift(args, action: str) -> None:
-    shift(args.region, action, args.from_region, args.samples, args.interval)
+    if not shift(args.region, action, args.from_region, args.samples, args.interval):
+        word = "drain" if action == "deactivate" else "restore"
+        die(f"{word} {args.region}: the plan execution completed, but a check above failed;"
+            " run make status to see whether DNS has caught up")
 
 
 def rehearse_item(observer: str, customer: str, cidrs: dict, failures: list, write: dict | None = None) -> dict:
@@ -675,8 +769,8 @@ def rehearse_item(observer: str, customer: str, cidrs: dict, failures: list, wri
 
     A request that does not end at the app in the expected Region is added to failures (and {} is
     returned) rather than ending the run, so a drained Region still gets restored."""
-    arn = plan_arn()
-    expected = expected_regions(health_states(arn, prefer=observer)[0])
+    arn = plan_arn(observer)
+    expected = expected_regions(health_states(arn, observer))
     path, extra = ("write", {"value": write}) if write is not None else ("read", {})
     ok, traces = send(observer, [("POST", f"http://{REGION_LESS}/{path}", body(customer, "rehearse", **extra))], expected, cidrs)
     answer = final_answer(traces[0]) if traces else {}
@@ -686,21 +780,19 @@ def rehearse_item(observer: str, customer: str, cidrs: dict, failures: list, wri
     return answer
 
 
-def cmd_rehearse(args) -> None:
-    """Drain and restore each Region in turn; assert DNS, where requests land, and the data each Region sees.
+def rehearse_region(n: int, target: str, cidrs: dict, failures: list, args) -> None:
+    """One rehearsal: drain target and restore it, with a customer whose home it is.
 
-    For each Region: write an item for a customer whose home it is, drain the Region, read the item
-    in the other Region (it has replicated) and write it there, restore the Region, and read the
-    item back in it."""
-    cidrs = vpc_cidrs()
-    failures: list = []
-    for n, target in enumerate(REGIONS, start=1):
-        survivor, customer = other(target), customer_id(n)  # cust-001's home is REGIONS[0], cust-002's REGIONS[1]
-        say(f"==== rehearsal {n} of {len(REGIONS)}: drain and restore {target}, with {customer} (home {target})")
-        before = {"phase": f"before draining {target}", "at": time.strftime("%H:%M:%S")}
-        wrote = rehearse_item(survivor, customer, cidrs, failures, before)
-        if wrote and wrote["servedBy"] != target:
-            failures.append(f"{customer}'s write before the drain was served in {wrote['servedBy']}, not {target}")
+    From the moment the drain starts to the end of the restore, a Region may be drained, so a failure anywhere
+    in that stretch (an error, a failed die(), Ctrl-C) restores target on the way out."""
+    survivor, customer = other(target), customer_id(n)  # cust-001's home is REGIONS[0], cust-002's REGIONS[1]
+    say(f"==== rehearsal {n} of {len(REGIONS)}: drain and restore {target}, with {customer} (home {target})")
+    before = {"phase": f"before draining {target}", "at": time.strftime("%H:%M:%S")}
+    wrote = rehearse_item(survivor, customer, cidrs, failures, before)
+    if wrote and wrote["servedBy"] != target:
+        failures.append(f"{customer}'s write before the drain was served in {wrote['servedBy']}, not {target}")
+    finished = False
+    try:
         if not shift(target, "deactivate", None, args.samples, args.interval):
             failures.append(f"checks after draining {target} differ (see above)")
         during = rehearse_item(survivor, customer, cidrs, failures)
@@ -713,10 +805,51 @@ def cmd_rehearse(args) -> None:
             failures.append(f"{customer}'s write during the drain was served in {wrote['servedBy']}, not {survivor}")
         if not shift(target, "activate", None, args.samples, args.interval):
             failures.append(f"checks after restoring {target} differ (see above)")
-        after = rehearse_item(survivor, customer, cidrs, failures)
-        if after and (after["servedBy"], after.get("value")) != (target, moved):
-            failures.append(f"after the restore {customer} read {after.get('value')} in {after['servedBy']},"
-                            f" expected {moved} in {target}")
+        finished = True
+    finally:
+        if not finished:
+            restore_after_failure(target, args.samples, args.interval)
+    after = rehearse_item(survivor, customer, cidrs, failures)
+    if after and (after["servedBy"], after.get("value")) != (target, moved):
+        failures.append(f"after the restore {customer} read {after.get('value')} in {after['servedBy']},"
+                        f" expected {moved} in {target}")
+
+
+def restore_after_failure(target: str, samples: int, interval: float) -> None:
+    """A rehearsal stopped while target may be drained: if ARC does not show it active, run its activate workflow once.
+
+    It runs while the error that stopped the rehearsal is on its way out, so it never raises. If the restore
+    fails too (die() is a SystemExit), or Ctrl-C stops it, it says how to restore by hand."""
+    survivor = other(target)
+    known = False  # whether ARC could be read
+    try:
+        try:
+            health = health_states(plan_arn(survivor), survivor)
+            known = True
+        except (Exception, SystemExit):
+            health = {}  # cannot tell, so assume the worst and try the restore
+        if known and all(health.get((name, target)) == "healthy" for name in ARC_NAMES):
+            return  # ARC shows it active, so the failure came before the drain or after the restore
+        say(f"rehearse stopped while {target} may be drained: running its activate workflow once")
+        shift(target, "activate", None, samples, interval)
+    except (Exception, SystemExit, KeyboardInterrupt):
+        how = f"run make restore REGION={target}"
+        print(f"error: {target} is still drained: {how}" if known else
+              f"error: {target} may still be drained (ARC could not be read to check): run make status, then {how} if it is",
+              file=sys.stderr, flush=True)
+
+
+def cmd_rehearse(args) -> None:
+    """Drain and restore each Region in turn; assert DNS, where requests land, and the data each Region sees.
+
+    For each Region: write an item for a customer whose home it is, drain the Region, read the item
+    in the other Region (it has replicated) and write it there, restore the Region, and read the
+    item back in it. If anything stops the run while the Region is drained, it is restored on the way
+    out, once; if that fails too, the last line says how to do it by hand."""
+    cidrs = vpc_cidrs()
+    failures: list = []
+    for n, target in enumerate(REGIONS, start=1):
+        rehearse_region(n, target, cidrs, failures, args)
     if failures:
         die("rehearsal found problems:\n  " + "\n  ".join(failures))
     say("rehearsal passed: each Region drained and restored, every request served where DNS sent it, data intact")
@@ -733,9 +866,24 @@ def customer_arg(value: str) -> str:
     return value
 
 
+def acting_region(args) -> str:
+    """The Region a command acts in, which is where its account check runs and its first call goes.
+
+    drain acts in the Region that stays and restore in the Region it restores (an activate runs there), so
+    neither needs the other. status and call act in the Region they query from. The deploy-time commands and
+    rehearse, which needs both Regions up, start at the first."""
+    if args.command == "drain":
+        return other(args.region)
+    if args.command == "restore":
+        return args.region
+    if args.command in ("status", "call"):
+        return observer_of(args)
+    return FIRST
+
+
 def main(argv: list | None = None) -> None:
-    if len(REGIONS) != 2 or REGIONS[0] == REGIONS[1]:
-        die(f"REGIONS must name two different Regions, such as us-east-1,us-east-2 (got {','.join(REGIONS)})")
+    if SETTINGS_ERROR:
+        die(SETTINGS_ERROR)
     observe = argparse.ArgumentParser(add_help=False)
     observe.add_argument("--from", dest="from_region", choices=REGIONS,
                          help="VPC to query from (status: the second Region; drain/restore: the other Region)")
@@ -782,7 +930,7 @@ def main(argv: list | None = None) -> None:
         "rehearse": cmd_rehearse,
     }
     try:
-        check_account(args.account)
+        check_account(args.account, acting_region(args))
         commands[args.command](args)
     except AwsError as exc:
         die(str(exc))

@@ -34,7 +34,9 @@ test('every output the Makefile reads exists on that stack', () => {
 test('every output scripts/demo.py reads exists on that stack', () => {
   const reads = [...demo.matchAll(/stack_outputs\([^,]+,\s*STACK\[(\w+|"\w+")\]\)\["(\w+)"\]/g)]
     .map((m) => [m[1].replace(/"/g, ''), m[2]]);
-  expect(reads.length).toBeGreaterThanOrEqual(4);
+  // The script reads outputs only where it must (the commands that run at deploy time); the scan has
+  // to find at least one, or the regex above has stopped matching what the script writes.
+  expect(reads.length).toBeGreaterThanOrEqual(1);
   for (const [stack, key] of reads) {
     const suffix = stack === 'plan' || stack === 'data' || stack === 'records' ? stack : 'region-$(R1)'; // STACK[region]
     expect([stack, key, outputs[suffix].has(key)]).toEqual([stack, key, true]);

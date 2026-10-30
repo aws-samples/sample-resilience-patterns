@@ -142,6 +142,19 @@ export class RegionStack extends cdk.Stack {
       targets: [new targets.LambdaTarget(router)],
     });
 
+    // The ELB documentation recommends limiting the permission that lets the load balancer invoke a
+    // function to the target group's account (aws:SourceAccount) and ARN (aws:SourceArn). CDK's
+    // LambdaTarget sets neither, so add the account to the permissions it generated. The ARN cannot
+    // be added: the permission has to exist before CloudFormation registers the function with the
+    // target group, so a SourceArn naming the target group would make each wait for the other.
+    for (const fn of [router, app]) {
+      for (const permission of fn.node.findAll().filter((c): c is lambda.CfnPermission => c instanceof lambda.CfnPermission)) {
+        if (permission.principal === 'elasticloadbalancing.amazonaws.com') {
+          permission.addPropertyOverride('SourceAccount', this.account);
+        }
+      }
+    }
+
     // ---- probe ----------------------------------------------------------------------------------
     const probeSg = new ec2.SecurityGroup(this, 'ProbeSecurityGroup', {
       vpc: this.vpc,

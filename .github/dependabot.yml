@@ -72,6 +72,23 @@ updates:
           - patch
     open-pull-requests-limit: 5
     versioning-strategy: lockfile-only
+  - package-ecosystem: pip
+    directory: /regional-affinity
+    schedule:
+      interval: weekly
+    labels:
+      - auto-approve
+      - auto-merge
+    groups:
+      all-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: pytest
+        update-types:
+          - version-update:semver-major
   - package-ecosystem: npm
     directory: /eks-multi-region
     schedule:

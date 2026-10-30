@@ -25,13 +25,14 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+      - run: npm ci
+      - run: npx projen test
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::${{ vars.E2E_ACCOUNT_ID }}:role/github-actions-regional-affinity
           aws-region: us-east-1
           role-duration-seconds: 7200
-      - run: npm ci
-      - run: npx projen test
+          mask-aws-account-id: true
       - name: Set sha-suffixed project name
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -49,7 +50,17 @@ jobs:
           role-to-assume: arn:aws:iam::${{ vars.E2E_ACCOUNT_ID }}:role/github-actions-regional-affinity
           aws-region: us-east-1
           role-duration-seconds: 7200
+          mask-aws-account-id: true
       - name: Cleanup on success
         if: success()
         run: ./cleanup.sh
+      - name: Say how to clean up a failed run
+        if: failure() || cancelled()
+        run: |-
+          if [ -n "${PROJECT:-}" ]; then
+            echo "::notice title=Stacks may remain::Remove the stacks of this run with PROJECT=$PROJECT ./cleanup.sh from regional-affinity/, or start the regional-affinity: cleanup workflow with the project $PROJECT."
+          fi
     timeout-minutes: 120
+concurrency:
+  group: regional-affinity-e2e-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: false

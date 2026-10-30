@@ -9,11 +9,14 @@ switch plan drains or restores a Region at all three levels at once.
 
 Writes architecture.svg (steady state) and architecture-drained.svg (after the plan drains
 us-east-1) into the docs directory next to this script's directory. The icon artwork is embedded,
-so each SVG stands alone. Open an SVG in a browser at its own size (1600 pixels wide) to get a PNG.
+so each SVG stands alone. Open an SVG in a browser at its own size (1600 pixels wide) to get a PNG;
+the README embeds docs/architecture.png and docs/architecture-drained.png.
 
-Needs the AWS Architecture Icons package, unzipped. Download it from
-https://aws.amazon.com/architecture/icons/ ("Icon package"), then run:
+Needs the AWS Architecture Icons package, unzipped. The checked-in diagrams were drawn with the
+release of July 31, 2026. Download an icon package from https://aws.amazon.com/architecture/icons/
+("Icon package"), unzip it, and regenerate with:
   python3 scripts/gen-architecture-diagrams.py --icons <unzipped package dir>
+A later release may rename an icon file; if the script cannot find one, adjust ICON_FILES below.
 
 Route 53 health checks have no icon of their own, so each one is a text label on the record edge
 it controls.

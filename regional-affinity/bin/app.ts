@@ -19,17 +19,21 @@
  *   records          hostedZoneId, albDnsNames, albHostedZoneIds, healthChecks
  *
  * `-c stack=base` selects the two Region stacks and the data stack, which deploy in parallel.
+ *
+ * Every stack carries the tag `sample=regional-affinity`, which cleanup.sh requires before it deletes
+ * a stack. A stack deployed before the tag existed gets it on its next deploy.
  */
 import * as cdk from 'aws-cdk-lib';
 import { AwsSolutionsChecks } from 'cdk-nag';
 import { DataStack } from '../lib/data-stack';
-import { checkDomain, checkLabel, checkProject, parseRegions, recordNames, VPC_CIDRS } from '../lib/names';
+import { checkDomain, checkLabel, checkProject, parseRegions, recordNames, SAMPLE_TAG, VPC_CIDRS } from '../lib/names';
 import { suppress } from '../lib/nag';
 import { PlanStack } from '../lib/plan-stack';
 import { HealthCheckIds, RecordsStack } from '../lib/records-stack';
 import { RegionStack } from '../lib/region-stack';
 
 const app = new cdk.App();
+cdk.Tags.of(app).add(SAMPLE_TAG.key, SAMPLE_TAG.value);
 
 // ---- context ---------------------------------------------------------------------------------
 const c = (key: string, fallback = ''): string => {
@@ -67,16 +71,16 @@ if (want('base', `region-${first}`)) {
   suppress(new RegionStack(app, `${project}-region-${first}`, {
     env: env(first), project, names, tableName, cidr: VPC_CIDRS[0],
     peer: { region: second, cidr: VPC_CIDRS[1], vpcId: c('peerVpcId') || undefined },
-  }));
+  }), 'region');
 }
 if (want('base', `region-${second}`)) {
   suppress(new RegionStack(app, `${project}-region-${second}`, {
     env: env(second), project, names, tableName, cidr: VPC_CIDRS[1],
     peer: { region: first, cidr: VPC_CIDRS[0], peeringConnectionId: c('peeringConnectionId') || undefined },
-  }));
+  }), 'region');
 }
 if (want('base', 'data')) {
-  suppress(new DataStack(app, `${project}-data`, { env: env(first), tableName, replicaRegion: second }));
+  suppress(new DataStack(app, `${project}-data`, { env: env(first), tableName, replicaRegion: second }), 'data');
 }
 
 // ---- the private hosted zone + the Region switch plan ----------------------------------------
@@ -85,7 +89,7 @@ if (want('plan')) {
   suppress(new PlanStack(app, `${project}-plan`, {
     env: env(first), project, domain, names, regions,
     vpcIds: [needed('vpcIds', vpcIds[0] ?? '', 'vpc-00000000000000001'), needed('vpcIds', vpcIds[1] ?? '', 'vpc-00000000000000002')],
-  }));
+  }), 'plan');
 }
 
 // ---- the records ----------------------------------------------------------------------------
@@ -108,7 +112,7 @@ if (want('records')) {
       hostedZoneId: needed('albHostedZoneIds', zoneIds[i] ?? '', 'Z35SXDOTRQ7X7K'),
     }])),
     albEvaluateTargetHealth: c('albEvaluateTargetHealth', 'false') === 'true',
-  }));
+  }), 'records');
 }
 
 app.synth();

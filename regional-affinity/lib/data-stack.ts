@@ -30,7 +30,10 @@ export class DataStack extends cdk.Stack {
       multiRegionConsistency: dynamodb.MultiRegionConsistency.EVENTUAL,
       replicas: [{ region: props.replicaRegion }],
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
-      // Off, and the table is deleted with the stack, so cleanup leaves nothing behind.
+      // Deletion protection is off and the table is deleted with the stack. Point-in-time recovery
+      // makes DynamoDB keep a system backup of the deleted table (<table>$DeletedTableBackup) for
+      // 35 days, at no charge. That backup, and the CDK asset files in the bootstrap bucket, are
+      // what cleanup leaves behind.
       deletionProtection: false,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });

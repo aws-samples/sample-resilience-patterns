@@ -2,7 +2,13 @@
 
 name: "regional-affinity: cleanup"
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      project:
+        description: PROJECT prefix of the run to clean (the e2e uses regional-affinity-<first 6 characters of the commit>)
+        required: false
+        default: regional-affinity
+        type: string
 jobs:
   cleanup:
     runs-on: ubuntu-latest
@@ -18,5 +24,9 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::${{ vars.E2E_ACCOUNT_ID }}:role/github-actions-regional-affinity
           aws-region: us-east-1
-      - run: chmod +x cleanup.sh && ./cleanup.sh
+          mask-aws-account-id: true
+      - name: Cleanup
+        env:
+          PROJECT: ${{ inputs.project || 'regional-affinity' }}
+        run: chmod +x cleanup.sh && ./cleanup.sh
     timeout-minutes: 60

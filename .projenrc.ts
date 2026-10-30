@@ -107,6 +107,22 @@ interface Pattern {
    * arm64 runner: its container images are Graviton-only and kaniko cannot cross-build.
    */
   runsOn?: string;
+  /**
+   * Queue e2e runs per Git ref (the pull request's head ref, or the ref name of a manual run), never
+   * cancelling one that is running. Without it, two runs on one commit share a PROJECT, so the second
+   * run's pre-flight cleanup deletes the first run's stacks mid-deploy, and runs of different commits
+   * share the account's VPC and plan quotas. Opt-in per pattern; selfManaged patterns have their own.
+   */
+  e2eConcurrencyByRef?: boolean;
+  /**
+   * Give the cleanup workflow a `project` input, the PROJECT prefix of the run to clean. The e2e names
+   * its stacks `<outdir>-<first 6 characters of the commit>`, and cleanup runs only after a successful
+   * run, so a failed run's stacks can be removed only by naming that prefix. The cleanup step must read
+   * `inputs.project` through `env`. Opt-in per pattern; selfManaged patterns have their own input.
+   */
+  cleanupProjectInput?: boolean;
+  /** Add a pip Dependabot entry for the pattern's directory, which holds a requirements-dev.txt. */
+  pipDependabot?: boolean;
 }
 
 // Common CDK app config — shared across all patterns.
@@ -560,11 +576,12 @@ const patterns: Pattern[] = [
   // DynamoDB global table (multi-Region eventual consistency). A thin router redirects
   // region-less requests to the home Region's name, and one ARC Region switch plan drains
   // or restores a Region at all three levels of a Route 53 hierarchy. Needs aws-cdk-lib
-  // >= 2.215 for the typed aws_arcregionswitch L1, like drs-ec2.
+  // >= 2.222.0: the typed aws_arcregionswitch L1 arrived in 2.215 (as in drs-ec2), and
+  // 2.222.0 added the Python 3.14 Lambda runtime that this pattern's functions use.
   // -------------------------------------------------------------------------
   {
     outdir: 'regional-affinity',
-    cdkVersion: '2.215.0',
+    cdkVersion: '2.222.0',
     typescriptVersion: '~5.9.3',
     deps: ['cdk-nag@^2.37.55'],
     gitignore: ['__pycache__/', '*.pyc', '.pytest_cache/', '.ruff_cache/'], // lambda/ and scripts/ are Python
@@ -574,13 +591,17 @@ const patterns: Pattern[] = [
     // releases the probe's network interfaces.
     e2eTimeoutMinutes: 120,
     cleanupTimeoutMinutes: 60,
+    e2eConcurrencyByRef: true,
+    cleanupProjectInput: true,
+    pipDependabot: true,
     buildSteps: [
       { uses: 'actions/checkout@v6' },
       { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
       { uses: 'actions/setup-python@v6', with: { 'python-version': '3.12' } },
       { run: 'npm ci' },
       { run: 'npx projen test' },
-      { name: 'Python lint and unit tests', run: 'pip install -q boto3 pytest ruff && ruff check . && python -m pytest -q' },
+      // requirements-dev.txt pins ruff and pytest, so a new release cannot turn the build red unannounced.
+      { name: 'Python lint and unit tests', run: 'pip install -q -r requirements-dev.txt && ruff check . && python -m pytest -q' },
       { name: 'Synthesize every stack with cdk-nag', run: 'npx cdk synth -c nag=true --quiet' },
     ],
     cleanupSteps: [
@@ -590,24 +611,35 @@ const patterns: Pattern[] = [
         with: {
           'role-to-assume': `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-regional-affinity`,
           'aws-region': 'us-east-1',
+          'mask-aws-account-id': true,
         },
       },
-      { run: 'chmod +x cleanup.sh && ./cleanup.sh' },
+      {
+        // The run to clean (a failed e2e leaves regional-affinity-<sha6>) reaches the script through
+        // env, never through run. A dispatch without the input cleans the default name.
+        name: 'Cleanup',
+        env: { PROJECT: "${{ inputs.project || 'regional-affinity' }}" },
+        run: 'chmod +x cleanup.sh && ./cleanup.sh',
+      },
     ],
     e2eSteps: [
       { uses: 'actions/checkout@v6' },
       { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
       { uses: 'actions/setup-python@v6', with: { 'python-version': '3.12' } },
+      { run: 'npm ci' },
+      // The unit tests need no AWS access, so they run before the role is assumed: the dependency
+      // install scripts of `npm ci` and the unpinned projen that `npx projen test` fetches then have
+      // no AWS credentials in their environment.
+      { run: 'npx projen test' },
       {
         uses: 'aws-actions/configure-aws-credentials@v6',
         with: {
           'role-to-assume': `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-regional-affinity`,
           'aws-region': 'us-east-1',
           'role-duration-seconds': 7200,
+          'mask-aws-account-id': true,
         },
       },
-      { run: 'npm ci' },
-      { run: 'npx projen test' },
       {
         // Unique per-run names, so a run whose teardown was interrupted cannot collide with
         // the next one. The sha reaches the shell through env, never through run.
@@ -627,9 +659,23 @@ const patterns: Pattern[] = [
           'role-to-assume': `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-regional-affinity`,
           'aws-region': 'us-east-1',
           'role-duration-seconds': 7200,
+          'mask-aws-account-id': true,
         },
       },
       { name: 'Cleanup on success', if: 'success()', run: './cleanup.sh' },
+      {
+        // Cleanup runs only after a success, so a failed, cancelled or timed-out run leaves its stacks.
+        // Say exactly how to remove them. PROJECT is in this step's environment through GITHUB_ENV (set
+        // above), so nothing is interpolated into the script; before that step has run there is nothing
+        // to remove.
+        name: 'Say how to clean up a failed run',
+        if: 'failure() || cancelled()',
+        run: [
+          'if [ -n "${PROJECT:-}" ]; then',
+          '  echo "::notice title=Stacks may remain::Remove the stacks of this run with PROJECT=$PROJECT ./cleanup.sh from regional-affinity/, or start the regional-affinity: cleanup workflow with the project $PROJECT."',
+          'fi',
+        ].join('\n'),
+      },
     ],
   },
 
@@ -909,6 +955,15 @@ for (const p of patterns) {
     // so two e2e runs in one account would collide. Queue them; never cancel an
     // in-flight one -- a half-torn-down rail is the worst state to leave behind.
     e2eWf.file?.addOverride('concurrency', { group: `${p.outdir}-e2e`, 'cancel-in-progress': false });
+  } else if (p.e2eConcurrencyByRef) {
+    // Runs on one ref queue behind each other, so a manual run on a pull request's branch cannot
+    // start while the PR's own run is deploying under the same PROJECT. Different refs run side by
+    // side. Never cancel a running one: a half-deployed or half-deleted run is the worst state to
+    // leave behind. head_ref is the PR's branch; a manual run has only ref_name.
+    e2eWf.file?.addOverride('concurrency', {
+      group: `${p.outdir}-e2e-\${{ github.head_ref || github.ref_name }}`,
+      'cancel-in-progress': false,
+    });
   }
   e2eWf.addJobs({
     e2e: {
@@ -946,6 +1001,22 @@ for (const p of patterns) {
       ...(p.e2eEnv ?? {}),
       ASSETS_BUCKET_PREFIX: `\${{ inputs.assets_bucket_prefix || '${p.outdir}' }}`,
     });
+  } else if (p.cleanupProjectInput) {
+    // Cleanup runs only after a successful e2e, and the e2e names its stacks <outdir>-<sha6>, so a
+    // failed run's stacks are invisible to a cleanup that asks for the default name. This input
+    // names the run to clean. The cleanup step reads it through env.
+    cleanupWf.on({
+      workflowDispatch: {
+        inputs: {
+          project: {
+            description: `PROJECT prefix of the run to clean (the e2e uses ${p.outdir}-<first 6 characters of the commit>)`,
+            required: false,
+            default: p.outdir,
+            type: 'string',
+          },
+        },
+      },
+    });
   } else {
     cleanupWf.on({ workflowDispatch: {} });
   }
@@ -972,7 +1043,7 @@ for (const p of patterns) {
 //   - CI is the only gate — no semver filtering
 // ---------------------------------------------------------------------------
 const dependabotEntry = (
-  ecosystem: 'npm' | 'github-actions',
+  ecosystem: 'npm' | 'pip' | 'github-actions',
   directory: string,
 ): Record<string, unknown> => {
   const entry: Record<string, unknown> = {
@@ -990,6 +1061,11 @@ const dependabotEntry = (
   if (ecosystem === 'npm') {
     entry['versioning-strategy'] = 'lockfile-only';
   }
+  if (ecosystem === 'pip') {
+    // pytest 9 needs Python 3.10, and the sample promises 3.9: requirements-dev.txt pins pytest 8.4,
+    // and a major update would pass CI on 3.12 while breaking `make test` for the promised minimum.
+    entry.ignore = [{ 'dependency-name': 'pytest', 'update-types': ['version-update:semver-major'] }];
+  }
   return entry;
 };
 
@@ -999,7 +1075,10 @@ new YamlFile(root, '.github/dependabot.yml', {
     version: 2,
     updates: [
       dependabotEntry('npm', '/'),
-      ...patterns.map((p) => dependabotEntry('npm', `/${p.outdir}`)),
+      ...patterns.flatMap((p) => [
+        dependabotEntry('npm', `/${p.outdir}`),
+        ...(p.pipDependabot ? [dependabotEntry('pip', `/${p.outdir}`)] : []),
+      ]),
     ],
   },
 });

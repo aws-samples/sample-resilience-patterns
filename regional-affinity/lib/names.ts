@@ -1,6 +1,6 @@
 /**
  * Names shared by every stack, and by scripts/demo.py, which derives the same names from the
- * same inputs (test/names-contract.test.ts compares the two).
+ * same inputs (test/names.test.ts compares the two).
  *
  * With the defaults (app label `ingest`, domain `example.com`, Regions us-east-1 and us-east-2):
  *
@@ -13,6 +13,13 @@
 
 /** The VPC CIDR of the first and second Region. They must not overlap: the VPCs are peered. */
 export const VPC_CIDRS = ['10.11.0.0/16', '10.12.0.0/16'] as const;
+
+/**
+ * The tag bin/app.ts puts on every stack. cleanup.sh deletes a stack only when it carries this tag,
+ * so a PROJECT prefix that matches another application's stack names cannot delete that application.
+ * Stacks deployed before the tag existed get it on their next deploy.
+ */
+export const SAMPLE_TAG = { key: 'sample', value: 'regional-affinity' } as const;
 
 /**
  * The label a Region gets in its regional name: the first letter of each word, then the number.
@@ -62,10 +69,13 @@ export function parseRegions(value: string): [string, string] {
 /**
  * Prefixes every stack and named resource. At most 24 characters, so that the longest name built
  * from it (`<project>-router`, a Lambda function and log group) stays readable in the console.
+ * It is also the plan's name, and Region switch rejects a plan name that ends in a hyphen: that
+ * would fail the `plan` step after the earlier stacks are already deployed.
  */
 export function checkProject(project: string): string {
-  if (!/^[a-z][a-z0-9-]{1,23}$/.test(project)) {
-    throw new Error(`project "${project}" must be 2 to 24 lowercase letters, digits and hyphens, starting with a letter`);
+  if (!/^[a-z][a-z0-9-]{0,22}[a-z0-9]$/.test(project)) {
+    throw new Error(`project "${project}" must be 2 to 24 lowercase letters, digits and hyphens, `
+      + 'starting with a letter and ending with a letter or digit');
   }
   return project;
 }

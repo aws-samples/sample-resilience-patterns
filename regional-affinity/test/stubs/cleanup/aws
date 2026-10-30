@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Stand-in for the aws CLI, for test/cleanup.test.ts: the few STS and CloudFormation calls that
+# cleanup.sh makes. Every stack is a file stacks/<region>__<name> holding "<STATUS> <tag value or None>";
+# the file `mode` picks a failure: access_denied, delete_rejected, or delete_failed:<stack>.
+# It answers describe-stacks with the two values cleanup.sh's --query selects, status and tag value,
+# tab-separated, and does not evaluate the query itself.
+d="$STUB_DIR"; mode=$(cat "$d/mode" 2>/dev/null || echo normal)
+region=; stack=; words=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --region) region=$2; shift 2 ;;
+    --stack-name) stack=$2; shift 2 ;;
+    --profile|--query|--output|--max-items) shift 2 ;;
+    --*) shift ;;
+    *) words+=("$1"); shift ;;
+  esac
+done
+op="${words[0]} ${words[1]}"
+echo "$op $region $stack" >> "$d/calls"
+file="$d/stacks/${region}__${stack}"
+fail() { echo "An error occurred ($1) when calling the $2 operation: $3" >&2; exit 254; }
+case "$op" in
+  "sts get-caller-identity") echo 111122223333 ;;
+  "cloudformation describe-stacks")
+    [ "$mode" = access_denied ] && fail AccessDenied DescribeStacks "User is not authorized to perform cloudformation:DescribeStacks"
+    [ -f "$file" ] || fail ValidationError DescribeStacks "Stack with id $stack does not exist"
+    read -r status tag < "$file"; printf '%s\t%s\n' "$status" "$tag" ;;
+  "cloudformation delete-stack")
+    [ "$mode" = delete_rejected ] && fail ValidationError DeleteStack "Stack:$stack is in UPDATE_IN_PROGRESS state and can not be deleted."
+    if [ "$mode" = "delete_failed:$stack" ]; then
+      read -r status tag < "$file"; echo "DELETE_FAILED $tag" > "$file"
+    else
+      rm -f "$file"
+    fi ;;
+  "cloudformation wait") if [ -f "$file" ] && grep -q DELETE_FAILED "$file"; then exit 255; fi ;;
+  "cloudformation describe-stack-events") printf 'PrivateZone\tThe hosted zone is not empty\n' ;;
+  *) fail InvalidAction "$op" "the stand-in does not implement it" ;;
+esac

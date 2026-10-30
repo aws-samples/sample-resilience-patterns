@@ -89,16 +89,60 @@ describe('the functions', () => {
     expect(fn('regional-affinity-probe').Properties.VpcConfig).toBeDefined();
   });
 
-  test.each([
-    ['Router', ['dynamodb:GetItem']],
-    ['App', ['dynamodb:GetItem', 'dynamodb:PutItem']],
-  ])('the %s role reaches only this Region\'s replica, with only %p', (id, actions) => {
-    const policies = Object.entries(t.findResources('AWS::IAM::Policy')).filter(([k]) => k.startsWith(`${id}Role`));
-    expect(policies).toHaveLength(1);
-    const [statement] = (policies[0][1] as any).Properties.PolicyDocument.Statement;
-    expect([statement.Action].flat()).toEqual(actions);
-    expect(JSON.stringify(statement.Resource)).toContain(':dynamodb:us-east-1:');
-    expect(JSON.stringify(statement.Resource)).toContain(`:table/${TABLE}`);
+  const iamOf = (t: Template) => {
+    const roles = t.findResources('AWS::IAM::Role') as Record<string, any>;
+    const policies = t.findResources('AWS::IAM::Policy') as Record<string, any>;
+    return { roles, policies };
+  };
+  const managed = (role: any) => (role.Properties.ManagedPolicyArns as any[]).map((arn) => arn['Fn::Join'][1][2]);
+  const statementsOf = (policies: Record<string, any>, id: string) => {
+    const found = Object.entries(policies).filter(([k]) => k.startsWith(id));
+    expect(found).toHaveLength(1);
+    return found[0][1].Properties.PolicyDocument.Statement;
+  };
+  const replica = { 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':dynamodb:us-east-1:', { Ref: 'AWS::AccountId' }, `:table/${TABLE}`]] };
+
+  test('the stack holds three roles and two policies, nothing else, and Lambda alone may assume the roles', () => {
+    const { roles, policies } = iamOf(t);
+    expect(Object.keys(roles).map((k) => k.replace(/[0-9A-F]{8}$/, '')).sort()).toEqual(['AppRole', 'ProbeServiceRole', 'RouterRole']);
+    expect(Object.keys(policies).map((k) => k.replace(/[0-9A-F]{8}$/, '')).sort()).toEqual(['AppRoleDefaultPolicy', 'RouterRoleDefaultPolicy']);
+    for (const role of Object.values(roles)) {
+      expect(role.Properties.AssumeRolePolicyDocument.Statement).toEqual([
+        { Action: 'sts:AssumeRole', Effect: 'Allow', Principal: { Service: 'lambda.amazonaws.com' } }]);
+    }
+  });
+
+  test('the router role reads this Region replica of the table, and has no other statement', () => {
+    expect(statementsOf(iamOf(t).policies, 'RouterRoleDefaultPolicy'))
+      .toEqual([{ Action: 'dynamodb:GetItem', Effect: 'Allow', Resource: replica }]);
+  });
+
+  test('the app role reads and writes this Region replica of the table, and has no other statement', () => {
+    expect(statementsOf(iamOf(t).policies, 'AppRoleDefaultPolicy'))
+      .toEqual([{ Action: ['dynamodb:GetItem', 'dynamodb:PutItem'], Effect: 'Allow', Resource: replica }]);
+  });
+
+  test('the probe role has no policy of its own: log delivery and the VPC network interfaces only', () => {
+    const { roles, policies } = iamOf(t);
+    expect(Object.keys(policies).filter((k) => k.startsWith('ProbeServiceRole'))).toEqual([]);
+    expect(managed(Object.entries(roles).find(([k]) => k.startsWith('ProbeServiceRole'))![1]).sort()).toEqual([
+      ':iam::aws:policy/service-role/AWSLambdaBasicExecutionRole', ':iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole']);
+    for (const id of ['RouterRole', 'AppRole']) {
+      expect(managed(Object.entries(roles).find(([k]) => k.startsWith(id))![1])).toEqual([
+        ':iam::aws:policy/service-role/AWSLambdaBasicExecutionRole']);
+    }
+  });
+
+  test('the load balancer may invoke the router and the app only on behalf of this account', () => {
+    const permissions = resourcesOf(t, 'AWS::Lambda::Permission');
+    expect(permissions.map((p) => p.Properties.FunctionName['Fn::GetAtt'][0].replace(/[0-9A-F]{8}$/, '')).sort()).toEqual(['App', 'Router']);
+    for (const permission of permissions) {
+      expect(permission.Properties).toMatchObject({
+        Action: 'lambda:InvokeFunction',
+        Principal: 'elasticloadbalancing.amazonaws.com',
+        SourceAccount: { Ref: 'AWS::AccountId' },
+      });
+    }
   });
 
   test('the probe may reach only the VPC resolver and the two ALBs', () => {

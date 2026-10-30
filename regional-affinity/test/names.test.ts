@@ -1,4 +1,5 @@
 import { execFileSync } from 'child_process';
+import * as fs from 'fs';
 import * as path from 'path';
 import { checkDomain, checkLabel, checkProject, parseRegions, recordNames, regionLabel } from '../lib/names';
 
@@ -37,6 +38,31 @@ test('project, label and domain checks', () => {
   expect(checkDomain('example.com')).toBe('example.com');
   expect(() => checkDomain('Demo.io')).toThrow();
   expect(() => checkDomain('demo')).toThrow();
+});
+
+describe('the project name is also the plan name, which must end in a letter or digit', () => {
+  test.each(['ab', 'a1', 'demo-1', 'a-b-c', 'a'.repeat(24), 'regional-affinity'])('%p is accepted', (project) => {
+    expect(checkProject(project)).toBe(project);
+  });
+
+  test.each(['demo-', 'a-', 'regional-affinity-', 'a'.repeat(23) + '-', 'a', '', '-demo', '1demo', 'a'.repeat(25), 'Demo', 'de mo', 'de_mo'])(
+    '%p is refused', (project) => {
+      expect(() => checkProject(project)).toThrow(/2 to 24 lowercase letters, digits and hyphens/);
+    });
+});
+
+/**
+ * The e2e names every run's stacks `regional-affinity-<first N characters of the commit>`. The
+ * workflow is generated from .projenrc.ts, so N is only in the workflow file: if it grew past what
+ * checkProject accepts, the first live run would fail at synth.
+ */
+test('the longest project name the e2e workflow builds is one checkProject accepts', () => {
+  const workflow = fs.readFileSync(path.join(__dirname, '..', '..', '.github', 'workflows', 'regional-affinity-e2e.yml'), 'utf8');
+  const [, prefix, length] = workflow.match(/PROJECT=([a-z-]+)-\$\(echo \$HEAD_SHA \| cut -c1-(\d+)\)/) ?? [];
+  expect(prefix).toBe('regional-affinity');
+  const longest = `${prefix}-${'f'.repeat(Number(length))}`; // a commit SHA is hexadecimal: it ends in a letter or digit
+  expect(longest.length).toBeLessThanOrEqual(24);
+  expect(checkProject(longest)).toBe(longest);
 });
 
 /**

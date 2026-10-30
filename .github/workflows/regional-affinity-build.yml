@@ -25,6 +25,6 @@ jobs:
       - run: npm ci
       - run: npx projen test
       - name: Python lint and unit tests
-        run: pip install -q boto3 pytest ruff && ruff check . && python -m pytest -q
+        run: pip install -q -r requirements-dev.txt && ruff check . && python -m pytest -q
       - name: Synthesize every stack with cdk-nag
         run: npx cdk synth -c nag=true --quiet

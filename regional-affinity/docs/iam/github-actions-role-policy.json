@@ -45,10 +45,17 @@
         "arc-region-switch:UpdatePlan",
         "arc-region-switch:GetPlanEvaluationStatus",
         "arc-region-switch:ListRoute53HealthChecks",
+        "arc-region-switch:ListRoute53HealthChecksInRegion",
         "arc-region-switch:StartPlanExecution",
         "arc-region-switch:GetPlanExecution"
       ],
       "Resource": "arn:aws:arc-region-switch::ACCOUNT_ID:plan/regional-affinity*"
+    },
+    {
+      "Sid": "PlanList",
+      "Effect": "Allow",
+      "Action": "arc-region-switch:ListPlansInRegion",
+      "Resource": "*"
     },
     {
       "Sid": "PassPlanRole",

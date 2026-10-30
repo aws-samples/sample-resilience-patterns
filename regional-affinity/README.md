@@ -35,6 +35,8 @@ A 307 tells the client to repeat the same method and body at the new location. T
 
 ![After the ARC Region switch plan drains us-east-1](docs/architecture-drained.png)
 
+The diagrams are drawn by `scripts/gen-architecture-diagrams.py` with the AWS Architecture Icons (release of July 31, 2026). Its docstring explains how to redraw the SVGs and export the PNGs.
+
 **The plan.** The plan is `activeActive`. ARC creates and owns one Route 53 health check per Region for each of the three ARC-controlled names, six in all, and starts them healthy, so the region-less name answers 50/50 at rest. The plan's deactivate workflow marks the target Region's three checks unhealthy in one parallel step; its activate workflow marks them healthy again. On each home Region name, the PRIMARY answers while its check is healthy. The SECONDARY's check is healthy too, but Route 53 answers with a SECONDARY only while its PRIMARY is unhealthy. Every record's set identifier is the Region it sends traffic to, and the records stack binds each record to the health check ARC vended for that name and Region.
 
 **The home Region guard.** The app serves a customer's request only when it arrives on that customer's home Region name. It answers a request on any other name, including the other Region's name and the app names, with a 307 to the home Region name. Which Region serves that name is DNS's decision, and so the plan's.
@@ -65,7 +67,7 @@ The sample's default Regions, us-east-1 and us-east-2, both support MRSC. They s
 | `regional-affinity-region-us-east-2` | us-east-2 | VPC `10.12.0.0/16`, same resources, return route over the peering connection |
 | `regional-affinity-data` | us-east-1 | Global table `regional-affinity-customers` (on-demand, MREC, point-in-time recovery) with a replica in us-east-2 |
 | `regional-affinity-plan` | us-east-1 | Private hosted zone `example.com` associated with both VPCs, plan execution role, `activeActive` Region switch plan |
-| `regional-affinity-records` | us-east-1 | The ten records above, created bottom-up |
+| `regional-affinity-records` | us-east-1 | The eight records above (two weighted, four failover, two alias), created bottom-up |
 
 The probe function runs inside each VPC. `scripts/demo.py` invokes it to query the VPC's Route 53 Resolver and to send HTTP requests that follow redirects, because the private hosted zone answers only inside the two VPCs. The VPCs are peered so the probe can reach whichever Region's ALB an answer names.
 
@@ -74,11 +76,12 @@ The probe function runs inside each VPC. `scripts/demo.py` invokes it to query t
 Deploy this sample into a sandbox AWS account. It needs one free VPC in each Region (the default quota is 5 per Region) and one Region switch plan (10 per account).
 
 - AWS CDK bootstrapped in `us-east-1` and `us-east-2`.
-- AWS CLI v2. Pass `PROFILE=<name>` to `make`, set `AWS_PROFILE`, or use the default credential chain.
+- AWS CLI v2, version 2.32.20 or later. The Region switch commands are in the CLI from 2.28.1, and 2.32.20 added `arc-region-switch list-route53-health-checks-in-region`, the newest one the scripts call. Pass `PROFILE=<name>` to `make`, set `AWS_PROFILE`, or use the default credential chain.
 - Node.js 20 or later, Python 3.9 or later, and `make`. The scripts use only the Python standard library.
-- Optional: `ACCOUNT=<12-digit account ID>` makes every target refuse to run against any other account.
+- For `make test` and `make lint`: `pip install -r requirements-dev.txt`, which installs pytest, ruff and boto3 (the build workflow installs the same file).
+- Optional: `ACCOUNT=<12-digit account ID>` makes every target that deploys or operates refuse to run against any other account.
 
-Set `REGIONS`, `DOMAIN` and `APP_LABEL` to change the defaults (`us-east-1,us-east-2`, `example.com`, `ingest`). A Region's label in its names is the first letter of each word plus its number: `ue1` for us-east-1, `uw2` for us-west-2. `PROJECT` (default `regional-affinity`) prefixes every stack and named resource.
+Set `REGIONS`, `DOMAIN` and `APP_LABEL` to change the defaults (`us-east-1,us-east-2`, `example.com`, `ingest`). A Region's label in its names is the first letter of each word plus its number: `ue1` for us-east-1, `uw2` for us-west-2. `PROJECT` (default `regional-affinity`) prefixes every stack and named resource, and is the plan's name: 2 to 24 lowercase letters, digits and hyphens, starting with a letter and ending with a letter or digit.
 
 ## Deploy
 
@@ -88,7 +91,7 @@ make deploy PROFILE=<aws-profile>
 make help
 ```
 
-From an empty account, `make deploy` takes about 13 minutes. It deploys the two Region stacks and the table in parallel, seeds the customers and confirms the second replica has them, adds the peering connection, deploys the plan, waits for ARC to vend the six health checks, deploys the records with their IDs, and verifies that every record carries the right check. The plan exists before its records, so its first evaluation warns that the records are missing; the last step makes ARC evaluate the plan again at both Regional endpoints and fails on any remaining warning. Running `make deploy` again updates the stacks in place and keeps the peering connection.
+From an empty account, `make deploy` takes about 13 minutes. It deploys the two Region stacks and the table in parallel, seeds the customers and confirms the table replicates, adds the peering connection, deploys the plan, waits for ARC to vend the six health checks, deploys the records with their IDs, and verifies that every record carries the right check. The plan exists before its records, so its first evaluation warns that the records are missing; the last step makes ARC evaluate the plan again at both Regional endpoints and fails unless both report it as passed, with no warning. Running `make deploy` again updates the stacks in place and keeps the peering connection. It also writes the 300 customer profiles again, so a home Region you changed by hand goes back to its default. If `make` cannot read a stack's outputs for a reason other than the stack not existing yet (no permission, expired credentials), it stops with the reason instead of deploying without the peering.
 
 **Cost:** about $0.15 per hour while deployed, mostly the Region switch plan ($70 per plan per month, prorated) and two idle ALBs. The table is on-demand and holds a few hundred small items, VPC peering has no hourly charge, and the functions run only when called. There are no NAT gateways. Run cleanup after testing.
 
@@ -97,13 +100,23 @@ From an empty account, `make deploy` takes about 13 minutes. It deploys the two 
 | Step | Command | What to look for |
 |---|---|---|
 | Steady state | `make status` | All six ARC health checks healthy, with each home Region name's primary answering and its standby waiting. `cust-001` is redirected to `ingest.ue1.example.com` and served in us-east-1, `cust-002` to `ingest.ue2.example.com` and served in us-east-2. The last request sends `cust-001` straight to `ingest.ue2.example.com`, and the app's guard redirects it to `ingest.ue1.example.com`. |
-| Write and read | `make call CUSTOMER=cust-005` | A read (no item yet), a write and a read, each through the region-less name. All three are served in us-east-1, cust-005's home Region. |
-| Drain | `make drain REGION=us-east-1` | Starts the plan's deactivate workflow for us-east-1 at the us-east-2 endpoint (a deactivate runs in the Region that stays), follows its steps (about 2 minutes), waits for DNS to follow, then shows the status. us-east-1's checks are unhealthy and the standby of `ingest.ue1.example.com` answers. |
+| Write and read | `make call CUSTOMER=cust-005` | A read, a write and a read, each through the region-less name. The first read is empty only the first time a customer is used, because the written item stays in the table. All three are served in us-east-1, cust-005's home Region. |
+| Drain | `make drain REGION=us-east-1` | Starts the plan's deactivate workflow for us-east-1 at the us-east-2 endpoint (a deactivate runs in the Region that stays), follows its steps (about 2 minutes), waits for DNS to follow, then shows the status. us-east-1's checks are unhealthy and the standby of `ingest.ue1.example.com` answers. The drain makes no call to us-east-1, so it also works while us-east-1's endpoints do not answer. |
 | During the drain | `make call CUSTOMER=cust-005` | The same requests, served in us-east-2. The read returns the item written in us-east-1 before the drain, because the table replicated it. |
 | Restore | `make restore REGION=us-east-1` | Starts the activate workflow at the us-east-1 endpoint. Afterwards a call reads, in us-east-1, the value written in us-east-2 during the drain. |
-| Rehearse | `make rehearse` | Drains and restores each Region in turn, and fails if DNS, the Region that serves a request, or the data a Region reads differs from what the plan state predicts. The e2e workflow runs this. |
+| Rehearse | `make rehearse` | Drains and restores each Region in turn, and fails if DNS, the Region that serves a request, or the data a Region reads differs from what the plan state predicts. If anything stops it while a Region is drained, it restores that Region before it exits; if the restore fails too, it prints the `make restore` command to run. The e2e workflow runs this. |
 
-`make drain` refuses to drain a Region while the other one is drained. `FROM=us-east-1` sends the queries and requests from the us-east-1 VPC instead; the private zone gives the same answers in both VPCs. During an execution, the plan's page in the ARC console shows the parallel step and each health check's state.
+`make drain` refuses to drain a Region while the other one is drained. `make drain`, `restore`, `status` and `call` exit 1 when a check fails, with a one-line reason under the output, so a script can stop on a drain that did not complete. `FROM=us-east-1` makes those four commands send their DNS queries and requests from the us-east-1 VPC instead; the private zone gives the same answers in both VPCs. During an execution, the plan's page in the ARC console shows the parallel step and each health check's state.
+
+Each operating command calls only the Region it acts in, so a drain does not depend on the Region it drains. Its ARC calls are [data plane operations](https://docs.aws.amazon.com/r53recovery/latest/dg/actions.region-switch.html), which each of the plan's Regions serves on its own:
+
+| Command | Regions it calls |
+|---|---|
+| `make drain REGION=<Region>` | Only the Region that stays: AWS STS, the ARC calls `list-plans-in-region`, `list-route53-health-checks-in-region`, `start-plan-execution` and `get-plan-execution`, and the probe function |
+| `make restore REGION=<Region>` | The Region it restores, for the account check, the plan and its execution (an activate runs in its target Region); the other Region, or `FROM`, for the health checks and the probe |
+| `make status`, `make call` | Only the Region they query from: the second Region, or `FROM` |
+| `make rehearse` | Both Regions in turn: each drain and restore as above |
+| `make deploy` | Both Regions, including CloudFormation, and ARC's control plane in the first Region (`list-route53-health-checks`, `get-plan`, `update-plan`) |
 
 Reading the output:
 
@@ -118,6 +131,7 @@ Reading the output:
 - **TLS.** Each ALB needs a certificate for the region-less name and both home Region names, because during a drain the surviving Region's ALB answers for the drained Region's name. A wildcard such as `*.example.com` matches one label, so it covers the region-less name but not `ingest.ue1.example.com`. The router and the guard already redirect with the scheme the client used.
 - **Clients.** A client must follow a 307 and repeat the method and body. `curl -L` and the Python `requests` library do. A client can keep the home Region name for later requests for the same customer; it stays correct through a drain, so only the first request pays for the redirect.
 - **The customer in the body.** Reads are POSTs too, because many clients and proxies drop the body of a GET. The router parses every request's body to find the customer, and an ALB passes at most 1 MB of request body to a Lambda function. A router that sees only headers and the URL, such as a CloudFront Function, cannot route on a body field.
+- **Paths, query strings and failures.** The router keeps the request's path and query string in the redirect, percent-encoding only what a URL cannot carry, so a path such as `/v1/orders/o-1:cancel` reaches the home Region unchanged. An ALB passes a Lambda target one value per query key, the last one when a key repeats, unless the target group enables multi-value headers, which the router does not read. When a Region's table does not answer, the router and the app answer 503 with a JSON reason within about 7 seconds, inside the 10-second function timeout, instead of the ALB's 502.
 - **Routing lookups.** The router reads the customer's profile item for each region-less request. A short in-memory cache would cut those reads, at the cost of a reassigned customer taking up to the cache lifetime to move.
 - **ALB target health.** With ALBs in front of real targets, add `-c albEvaluateTargetHealth=true` to the `records` target in the `Makefile`, so a Region whose targets are all unhealthy stops answering before ARC acts. The sample leaves it `false` because its Lambda targets have health checks off, so their target health carries no information.
 - **More services in one plan.** A plan holds at most [25 Route 53 health check execution blocks](https://docs.aws.amazon.com/r53recovery/latest/dg/quotas.region-switch.html). This layout needs six per service (three names, in both workflows), so one plan covers four services. For more, attach each service's region-less checks to its home Region records as well (two blocks per service), or split the services across plans and start them from a parent plan with the Region switch plan execution block.
@@ -131,6 +145,10 @@ make clean PROFILE=<aws-profile>
 
 You can also run `./cleanup.sh`. Cleanup deletes the records, then the plan, then the Region stacks and the table, and takes about 25 minutes, most of it while Lambda releases the probe's network interfaces. Re-run it after a failure: a stack whose deletion fails is retried once, and cleanup prints the failing resources and exits non-zero if any stack remains.
 
+Cleanup deletes only stacks that carry the tag `sample=regional-affinity`, which `make deploy` puts on every stack. A `PROJECT` that happens to match another application's stack names cannot delete that application: a stack without the tag is reported and left alone, and cleanup exits non-zero. Stacks deployed before the tag existed get it on their next `make deploy`. Cleanup also exits non-zero, and counts the stack as remaining, when it cannot read a stack's state (no permission, expired credentials), and when `REGIONS` does not name two different Regions.
+
+Two things outlast cleanup. Point-in-time recovery is on, so DynamoDB keeps a system backup of the deleted table for 35 days, at no charge (it is named `regional-affinity-customers$DeletedTableBackup`). And the CDK bootstrap bucket keeps the zip files of the Lambda code; they are small, and a later deploy of the same code reuses them.
+
 ## Security
 
 Report security issues through Security issue notifications in [CONTRIBUTING.md](../CONTRIBUTING.md).
@@ -139,11 +157,13 @@ The sample's API has no authentication and uses plain HTTP. The ALBs are interna
 
 The records use `example.com`, which [RFC 2606](https://www.rfc-editor.org/rfc/rfc2606) reserves for documentation. Inside the two VPCs the private hosted zone answers first, so the sample's requests never leave them. Set `DOMAIN` to a domain you own before you adapt the sample to a public hosted zone.
 
-The cdk-nag AwsSolutions exceptions are listed with their reasons in [`lib/nag.ts`](lib/nag.ts): `AwsSolutions-IAM4` (the documented Lambda execution policies), `AwsSolutions-IAM5` (the plan execution role reads its own plan, whose ARN ARC generates), `AwsSolutions-ELB2` (no ALB access logs) and `AwsSolutions-VPC7` (no VPC flow logs). `test/nag.test.ts` fails on any other finding.
+The router and app functions accept invocations from Elastic Load Balancing only on behalf of this account (`aws:SourceAccount` on their resource policies). The policies cannot also name the target group, as the Elastic Load Balancing documentation recommends: CloudFormation has to create the permission before it registers the function with the target group, so a target group ARN in the permission would make each wait for the other (see the comment in [`lib/region-stack.ts`](lib/region-stack.ts)).
+
+The cdk-nag AwsSolutions exceptions are listed with their reasons in [`lib/nag.ts`](lib/nag.ts), each on the stacks where its rule fires: `AwsSolutions-IAM4` (the documented Lambda execution policies), `AwsSolutions-ELB2` (no ALB access logs) and `AwsSolutions-VPC7` (no VPC flow logs) on the Region stacks, and `AwsSolutions-IAM5` (the plan execution role reads its own plan, whose ARN ARC generates) on the plan stack. `test/nag.test.ts` fails on any other finding, and on a listed exception that does not fire on its stack.
 
 ## Limits
 
-The sample uses two Regions, one plan, and a private hosted zone. Every `make` target is non-interactive and prints the account it acts on. `make test` runs the CDK assertion tests and the Python unit tests without AWS access.
+The sample uses two Regions, one plan, and a private hosted zone. Every `make` target that deploys or operates is non-interactive and prints the account it acts on. `make test` runs the CDK assertion tests and the Python unit tests without AWS access.
 
 ## License
 

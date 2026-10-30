@@ -3,7 +3,7 @@
 # Recovery Controller (ARC) Region switch plan drains or restores a Region at all three levels of an
 # Amazon Route 53 private hosted zone.
 #
-#   make deploy                    # 5 stacks in 2 Regions, 300 customers, ARC health checks bound (~15 min)
+#   make deploy                    # 5 stacks in 2 Regions, 300 customers, ARC health checks bound (~13 min)
 #   make status                    # ARC health checks, DNS answers and sample requests, from inside a VPC
 #   make call CUSTOMER=cust-001    # read, write and read one customer's item via the region-less name
 #   make drain REGION=us-east-1    # run the plan's deactivate workflow for a Region (~2 min)
@@ -12,16 +12,21 @@
 #   make clean                     # delete every stack in both Regions, unattended (./cleanup.sh, ~25 min)
 #
 # Credentials: PROFILE=<name>, else $AWS_PROFILE, else the CLI's default identity. Every target
-# prints the account it is about to act on; set ACCOUNT=<12 digits> to refuse any other account.
-# Knobs: PROJECT, REGIONS (two, comma-separated), DOMAIN, APP_LABEL, FROM=<region> (status, call).
+# that deploys or operates checks the account it is about to act on and prints it; set
+# ACCOUNT=<12 digits> to refuse any other account. The deploy steps and clean do it here, in
+# check-account. status, call, drain, restore and rehearse leave it to scripts/demo.py (see "operate").
+# Knobs: PROJECT, REGIONS (two, comma-separated), DOMAIN, APP_LABEL, FROM=<region> (status, call, drain,
+# restore). REGION=<region> (drain, restore) is read from the command line only, never from the environment.
 #
 # Structure note: GNU make expands $(shell ...) for a whole recipe before its first line runs, so a
 # stack's outputs can be read only in a LATER target than the one that deploys it. Hence one target
-# per deploy step, chained as prerequisites, as in the drs-ec2 pattern.
+# per deploy step, chained as prerequisites, as in the drs-ec2 pattern. The steps must run in order,
+# one at a time, so the whole file is serial even under make -j.
 
 SHELL := /bin/bash
 .SHELLFLAGS := -eo pipefail -c
 .DEFAULT_GOAL := help
+.NOTPARALLEL:
 
 PROJECT   ?= regional-affinity
 REGIONS   ?= us-east-1,us-east-2
@@ -47,10 +52,19 @@ CTX  := -c project=$(PROJECT) -c regions=$(REGIONS) -c domain=$(DOMAIN) -c appLa
 DEMO := env PROJECT=$(PROJECT) REGIONS=$(REGIONS) DOMAIN=$(DOMAIN) APP_LABEL=$(APP_LABEL) \
         PROFILE=$(PROFILE) ACCOUNT=$(ACCOUNT) python3 scripts/demo.py
 
-# so <region> <stack-suffix> <OutputKey> -> value, empty when the stack or output does not exist
-# (read at recipe-expansion time of the CALLING target)
-so = $(shell $(AWS) cloudformation describe-stacks --region $(1) --stack-name $(PROJECT)-$(2) \
-       --query "Stacks[0].Outputs[?OutputKey=='$(3)'].OutputValue" --output text 2>/dev/null)
+# so <region> <stack-suffix> <OutputKey> -> the output's value (read at recipe-expansion time of the
+# CALLING target). Empty when the stack does not exist yet (the first deploy) or has no such output
+# (a stack that rolled back has none, and the CLI prints "None" for it). Any other failure (no
+# permission, expired credentials, throttling) stops make with the reason: an empty value would
+# synthesize the Region stacks without their peering and a re-deploy would remove it.
+# The CLI's stderr goes to a file, so a warning it prints on success cannot end up in the value.
+so-query = $(AWS) cloudformation describe-stacks --region $(1) --stack-name $(PROJECT)-$(2) \
+             --query "Stacks[0].Outputs[?OutputKey=='$(3)'].OutputValue" --output text
+so-value = $(if $(findstring cannot read the outputs of,$(1)),$(error $(1)),$(filter-out None,$(1)))
+so = $(call so-value,$(shell err=$$(mktemp "$${TMPDIR:-/tmp}/so.XXXXXX"); \
+       $(call so-query,$(1),$(2),$(3)) 2>"$$err" \
+       || { grep -q 'does not exist' "$$err" || echo "cannot read the outputs of $(PROJECT)-$(2) in $(1): $$(cat "$$err")"; }; \
+       rm -f "$$err"))
 # deploy <stack-suffix> <extra context>
 define deploy
 	$(CDK) deploy $(PROJECT)-$(1) $(CTX) -c stack=$(1) $(2) -o cdk.out.$(1)
@@ -87,8 +101,12 @@ synth: ## Synthesize every stack with placeholder context (CI build)
 # ---------------------------------------------------------------------------------------------
 # deploy -- one target per step, so each can read the outputs of the steps before it
 # ---------------------------------------------------------------------------------------------
-deploy: check-account base seed peering peering-return plan health-checks records verify ## Deploy everything, seed the customers, bind and verify the ARC health checks (~15 min from empty)
+deploy: check-account base seed peering peering-return plan health-checks records verify ## Deploy everything, seed the customers, bind and verify the ARC health checks (~13 min from empty)
 	@echo "deployed. next: make status"
+
+# Each step can be run alone to resume a failed deploy, so each one checks the account itself.
+# Make builds a prerequisite once per invocation: make deploy prints the account line once.
+base seed peering peering-return plan health-checks records verify: check-account
 
 # On a re-deploy both values exist, so the peering survives; on the first deploy both are empty.
 base: ## 1. both Region stacks and the global table, in parallel
@@ -113,23 +131,33 @@ verify: ## 8. every record carries the right health check; the plan evaluates wi
 
 # ---------------------------------------------------------------------------------------------
 # operate
+#
+# status, call, drain, restore and rehearse do not depend on check-account. scripts/demo.py checks
+# the account itself before any other call (ACCOUNT reaches it through $(DEMO)), with an STS call in
+# the Region the command acts in: for drain the Region that stays, for restore the Region it restores,
+# for status and call the Region they query from. check-account would call STS first with no Region,
+# which goes to the profile's default Region or the global endpoint, and in a Regional impairment that
+# can be the very Region a drain is about to take out of service.
 # ---------------------------------------------------------------------------------------------
-status: check-account ## ARC health checks, DNS answers and sample requests (from the second Region's VPC; FROM= for the first)
+status: ## ARC health checks, DNS answers and sample requests (from the second Region's VPC; FROM= for the first)
 	@$(DEMO) status $(if $(FROM),--from $(FROM))
 
-call: check-account ## Read, write and read one customer's item via the region-less name (CUSTOMER=cust-001, FROM=)
+call: ## Read, write and read one customer's item via the region-less name (CUSTOMER=cust-001, FROM=)
 	@$(DEMO) call $(CUSTOMER) $(if $(FROM),--from $(FROM))
 
-drain: check-account ## Run the plan's deactivate workflow for REGION
-	@$(if $(REGION),,echo "set REGION (for example: make drain REGION=$(R1))"; exit 2)
-	@$(DEMO) drain $(REGION)
+# REGION must be typed on the command line: a REGION left exported in the shell (make's ?= accepts the
+# environment) must not pick the Region to drain.
+drain: ## Run the plan's deactivate workflow for REGION (FROM=<region> picks the VPC the checks run from)
+	@$(if $(and $(REGION),$(findstring command line,$(origin REGION))),,echo "pass REGION on the command line, for example: make drain REGION=$(R1) (an exported REGION is ignored)"; exit 2)
+	@$(DEMO) drain $(REGION) $(if $(FROM),--from $(FROM))
 
-restore: check-account ## Run the plan's activate workflow for REGION
-	@$(if $(REGION),,echo "set REGION (for example: make restore REGION=$(R1))"; exit 2)
-	@$(DEMO) restore $(REGION)
+restore: ## Run the plan's activate workflow for REGION (FROM=<region> picks the VPC the checks run from)
+	@$(if $(and $(REGION),$(findstring command line,$(origin REGION))),,echo "pass REGION on the command line, for example: make restore REGION=$(R1) (an exported REGION is ignored)"; exit 2)
+	@$(DEMO) restore $(REGION) $(if $(FROM),--from $(FROM))
 
-rehearse: check-account ## Drain and restore each Region in turn; assert DNS, where every request lands and the data (~11 min)
+rehearse: ## Drain and restore each Region in turn; assert DNS, where every request lands and the data (~11 min)
 	@$(DEMO) rehearse
 
+# clean runs cleanup.sh, which makes no scripts/demo.py call, so it keeps the check here.
 clean: check-account ## Delete every stack in both Regions, unattended (./cleanup.sh, ~25 min)
 	@PROJECT=$(PROJECT) REGIONS=$(REGIONS) ./cleanup.sh $(or $(PROFILE),-)

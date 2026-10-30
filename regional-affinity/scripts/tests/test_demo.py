@@ -4,26 +4,15 @@ from __future__ import annotations
 import argparse
 import contextlib
 import io
-import ipaddress
 import json
 import types
 from pathlib import Path
 from unittest import mock
 
 import pytest
+from demo_fakes import ALL_HEALTHY, CIDRS, PLAN_ARN, UE1, UE2, FakeAws, drained, installed, vended
 
 import demo
-
-CIDRS = {"us-east-1": ipaddress.ip_network("10.11.0.0/16"), "us-east-2": ipaddress.ip_network("10.12.0.0/16")}
-ALL_HEALTHY = {(name, region): "healthy" for name in demo.ARC_NAMES for region in demo.REGIONS}
-PLAN_ARN = "arn:aws:arc-region-switch::111122223333:plan/regional-affinity:abc123"
-UE1, UE2 = "ingest.ue1.example.com", "ingest.ue2.example.com"
-
-
-def drained(region: str) -> dict:
-    """ARC's states after a deactivate execution of region: that Region's checks are unhealthy."""
-    return {key: ("unhealthy" if key[1] == region else "healthy") for key in ALL_HEALTHY}
-
 
 # ---- names -----------------------------------------------------------------------------------
 
@@ -156,11 +145,6 @@ def test_plan_name_comes_from_the_arn():
 # ---- health check binding ----------------------------------------------------------------------
 
 
-def vended() -> list:
-    return [{"recordName": f"{name}.", "region": region, "healthCheckId": f"id-{name}-{region}", "status": "healthy"}
-            for name in demo.ARC_NAMES for region in demo.REGIONS]
-
-
 def test_picks_all_six_by_name_and_region_regardless_of_order():
     picked = demo.pick_health_checks(list(reversed(vended())))
     assert len(picked) == 6
@@ -172,6 +156,27 @@ def test_a_missing_check_is_retryable_and_a_duplicate_is_not():
         demo.pick_health_checks(vended()[1:])
     with pytest.raises(ValueError):
         demo.pick_health_checks(vended() + [dict(vended()[0], healthCheckId="another")])
+
+
+def without_id(check: dict) -> dict:
+    return {key: value for key, value in check.items() if key != "healthCheckId"}
+
+
+def test_a_check_listed_before_it_has_an_id_is_not_found_yet():
+    """healthCheckId is optional in ARC's API. Counting such a check as found would hand None to the records stack."""
+    with pytest.raises(LookupError) as missing:
+        demo.pick_health_checks([without_id(check) for check in vended()])
+    assert all(name in str(missing.value) for name in demo.ARC_NAMES)
+    one_short = vended()
+    one_short[3] = without_id(one_short[3])  # the second Region's check of the second name
+    with pytest.raises(LookupError) as missing:
+        demo.pick_health_checks(one_short)
+    assert str(missing.value) == f"no health check yet for {demo.ARC_NAMES[1]} {demo.REGIONS[1]}"
+
+
+def test_a_check_without_an_id_does_not_make_its_twin_ambiguous():
+    picked = demo.pick_health_checks(vended() + [without_id(vended()[0])])
+    assert len(picked) == 6 and None not in picked.values()
 
 
 def test_health_check_context_has_the_shape_the_records_stack_reads():
@@ -299,15 +304,12 @@ def test_notes_say_when_an_item_is_served_outside_its_home_region():
     assert demo.hop_note(app_hop("us-east-1", key="demo", writtenIn="us-east-1")) == "app in us-east-1: wrote demo"
 
 
-def test_requests_name_the_customer_in_the_body_never_in_the_url():
-    sent = []
-    with mock.patch.object(demo, "run_requests", lambda region, requests: sent.extend(requests) or [[] for _ in requests]), \
-            mock.patch.object(demo, "plan_arn", lambda: PLAN_ARN), mock.patch.object(demo, "vpc_cidrs", lambda: CIDRS), \
-            mock.patch.object(demo, "health_states", lambda arn, prefer: (ALL_HEALTHY, prefer)), \
-            mock.patch.object(demo, "run_probe", lambda *a: {"region": "us-east-2", "resolver": "10.12.0.2", "results": {}}), \
-            mock.patch.object(demo, "say"), contextlib.redirect_stdout(io.StringIO()):
-        demo.cmd_call(types.SimpleNamespace(customer="cust-007", from_region=None))
-        demo.cmd_status(types.SimpleNamespace(from_region=None, samples=1, interval=0))
+def test_requests_name_the_customer_in_the_body_never_in_the_url(capsys):
+    fake = FakeAws()
+    with installed(fake):
+        demo.main(["call", "cust-007"])
+        demo.main(["status", "--samples", "1", "--interval", "0"])
+    sent = [(r["method"], r["url"], r["body"]) for r in fake.requests]
     assert sent and all("cust-" not in url for _, url, _ in sent)
     assert all(json.loads(b)["customerId"].startswith("cust-") for _, _, b in sent)
     # status also sends the first sample customer to the other Region's name, to show the guard
@@ -325,24 +327,31 @@ def test_call_takes_a_customer_id():
 
 
 def run_shift(action, target, states):
-    said, calls = [], []
+    said, calls, reads = [], [], []
     states = iter(states)
 
     def fake_aws(region, *args):
         calls.append((region, args))
         return {"executionId": f"{region}/abc"}
 
-    with mock.patch.object(demo, "plan_arn", lambda: PLAN_ARN), mock.patch.object(demo, "vpc_cidrs", lambda: CIDRS), \
-            mock.patch.object(demo, "health_states", lambda arn, prefer: (next(states), prefer)), \
+    def fake_plan_arn(region):
+        reads.append(("plan", region))
+        return PLAN_ARN
+
+    def fake_health_states(arn, region):
+        reads.append(("health", region))
+        return next(states)
+
+    with mock.patch.object(demo, "plan_arn", fake_plan_arn), mock.patch.object(demo, "health_states", fake_health_states), \
             mock.patch.object(demo, "aws", fake_aws), mock.patch.object(demo, "wait_for_execution", lambda *a: "completed"), \
             mock.patch.object(demo, "wait_for_dns", lambda *a: True), mock.patch.object(demo, "show", lambda *a: True), \
             mock.patch.object(demo, "say", said.append):
         ok = demo.shift(target, action, None, 1, 0)
-    return said, calls, ok
+    return said, calls, ok, reads
 
 
 def test_drain_runs_the_plans_deactivate_workflow_at_the_endpoint_that_stays():
-    said, calls, ok = run_shift("deactivate", "us-east-1", [ALL_HEALTHY, drained("us-east-1")])
+    said, calls, ok, reads = run_shift("deactivate", "us-east-1", [ALL_HEALTHY, drained("us-east-1")])
     assert said[0] == "starting ARC Region switch plan regional-affinity: deactivate workflow, target us-east-1, graceful mode"
     assert said[1] == ("  plan execution us-east-2/abc started at the us-east-2 endpoint"
                        " (a deactivate runs in the Region that stays)")
@@ -350,46 +359,70 @@ def test_drain_runs_the_plans_deactivate_workflow_at_the_endpoint_that_stays():
     ((region, args),) = calls
     assert region == "us-east-2" and args[:2] == ("arc-region-switch", "start-plan-execution")
     assert args[args.index("--action") + 1] == "deactivate" and ok
+    # the plan and the health checks are read where the drain runs, never in the Region being drained
+    assert reads == [("plan", "us-east-2"), ("health", "us-east-2"), ("health", "us-east-2")]
 
 
 def test_restore_runs_the_activate_workflow_at_its_target_and_counts_what_changed():
-    said, calls, ok = run_shift("activate", "us-east-1", [{**ALL_HEALTHY, (UE1, "us-east-1"): "unhealthy"}])
+    said, calls, ok, reads = run_shift("activate", "us-east-1", [{**ALL_HEALTHY, (UE1, "us-east-1"): "unhealthy"}])
     assert said[0].startswith("starting ARC Region switch plan regional-affinity: activate workflow")
     assert said[1] == "  plan execution us-east-1/abc started at the us-east-1 endpoint (an activate runs in its target Region)"
     assert "healthy at 2 of 3 record names" in said[2]
     assert calls[0][0] == "us-east-1" and not ok  # one name did not change, so the shift reports a problem
+    # the plan is read where the activate runs, the health checks from the Region that stays
+    assert reads == [("plan", "us-east-1"), ("health", "us-east-2")]
 
 
-def test_a_refused_drain_says_no_plan_execution_started():
-    with mock.patch.object(demo, "plan_arn", lambda: PLAN_ARN), mock.patch.object(demo, "vpc_cidrs", lambda: CIDRS), \
-            mock.patch.object(demo, "health_states", lambda arn, prefer: (drained("us-east-2"), prefer)), \
-            mock.patch.object(demo, "aws") as aws, mock.patch("sys.stderr", new_callable=io.StringIO) as err, \
-            pytest.raises(SystemExit):
+def test_a_refused_drain_says_no_plan_execution_started(capsys):
+    """The Region that stays is itself drained. If the precondition broke, the fake clock and the fake execution
+    would let the drain run to the end at once, and the assertions below fail by name instead of after 15 minutes."""
+    fake = FakeAws(drained={"us-east-2"})
+    with installed(fake), pytest.raises(SystemExit):
         demo.shift("us-east-1", "deactivate", None, 1, 0)
-    assert "no plan execution was started" in err.getvalue()
-    aws.assert_not_called()
+    assert "no plan execution was started" in capsys.readouterr().err
+    assert fake.started == [] and ("us-east-2", "arc-region-switch", "start-plan-execution") not in fake.calls
+    assert fake.regions_called() == {"us-east-2"}
 
 
 # ---- rehearsal ---------------------------------------------------------------------------------
 
 
 class FakeSystem:
-    """Just enough of the sample for cmd_rehearse: a drained Region, a replicated item, the guard."""
+    """Just enough of the sample for cmd_rehearse: a drained Region, a replicated item, the guard.
 
-    def __init__(self, break_replication=False):
+    send_fails, shift_fails and health_fails make the nth call (counting from 1) fail. For a shift the value is
+    (error, takes_effect): whether the Region is drained or restored before the error, as when the plan
+    execution ran and a later check died."""
+
+    def __init__(self, break_replication=False, send_fails=None, shift_fails=None, health_fails=None):
         self.drained, self.items, self.shifts = set(), {}, []
         self.break_replication = break_replication
+        self.send_fails, self.shift_fails, self.health_fails = send_fails or {}, shift_fails or {}, health_fails or {}
+        self.sends = self.reads = 0
 
     def serving(self, customer):
         home = demo.home_region_of(int(customer.split("-")[1]))
         return other_region(home) if home in self.drained else home
 
+    def health_states(self, arn, region):
+        self.reads += 1
+        if self.reads in self.health_fails:
+            raise self.health_fails[self.reads]
+        return {key: ("unhealthy" if key[1] in self.drained else "healthy") for key in ALL_HEALTHY}
+
     def shift(self, target, action, *_):
         self.shifts.append((action, target))
-        (self.drained.add if action == "deactivate" else self.drained.discard)(target)
+        error, takes_effect = self.shift_fails.get(len(self.shifts), (None, True))
+        if takes_effect:
+            (self.drained.add if action == "deactivate" else self.drained.discard)(target)
+        if error:
+            raise error
         return True
 
     def send(self, observer, requests, expected, cidrs):
+        self.sends += 1
+        if self.sends in self.send_fails:
+            raise self.send_fails[self.sends]
         (method, url, raw), = requests
         req = json.loads(raw)
         region = self.serving(req["customerId"])
@@ -406,8 +439,8 @@ def other_region(region):
 
 
 def run_rehearse(system):
-    with mock.patch.object(demo, "vpc_cidrs", lambda: CIDRS), mock.patch.object(demo, "plan_arn", lambda: PLAN_ARN), \
-            mock.patch.object(demo, "health_states", lambda arn, prefer: (ALL_HEALTHY, prefer)), \
+    with mock.patch.object(demo, "plan_arn", lambda region: PLAN_ARN), \
+            mock.patch.object(demo, "health_states", system.health_states), \
             mock.patch.object(demo, "shift", system.shift), mock.patch.object(demo, "send", system.send), \
             mock.patch.object(demo, "say"):
         demo.cmd_rehearse(types.SimpleNamespace(samples=1, interval=0))
@@ -427,3 +460,117 @@ def test_rehearse_fails_when_the_other_region_does_not_see_the_data_but_still_re
         run_rehearse(system)
     assert "during the drain cust-001 read None in us-east-2" in err.getvalue()
     assert not system.drained  # every drained Region was restored before the run failed
+
+
+# The requests of the first rehearsal: 1 writes before the drain, 2 reads and 3 writes while us-east-1 is
+# drained, 4 reads after the restore. The second rehearsal's are 5 to 8. Its shifts are 1 and 2, then 3 and 4.
+DRAIN_AND_RESTORE_US_EAST_1 = [("deactivate", "us-east-1"), ("activate", "us-east-1")]
+
+
+@pytest.mark.parametrize("error", [SystemExit(1), demo.AwsError("aws lambda invoke (us-east-2): TooManyRequestsException"),
+                                   KeyboardInterrupt()], ids=["die", "aws-error", "ctrl-c"])
+@pytest.mark.parametrize("request_number", [2, 3])
+def test_rehearse_restores_the_region_when_anything_fails_while_it_is_drained(error, request_number):
+    system = FakeSystem(send_fails={request_number: error})
+    with pytest.raises(type(error)):
+        run_rehearse(system)
+    assert system.shifts == DRAIN_AND_RESTORE_US_EAST_1
+    assert not system.drained
+
+
+def test_rehearse_restores_the_second_region_too():
+    system = FakeSystem(send_fails={6: SystemExit(1)})
+    with pytest.raises(SystemExit):
+        run_rehearse(system)
+    assert system.shifts == [("deactivate", "us-east-1"), ("activate", "us-east-1"),
+                             ("deactivate", "us-east-2"), ("activate", "us-east-2")]
+    assert not system.drained
+
+
+def test_rehearse_leaves_a_region_it_never_drained_alone(capsys):
+    system = FakeSystem(send_fails={1: SystemExit(1)})
+    with pytest.raises(SystemExit):
+        run_rehearse(system)
+    assert system.shifts == [] and system.reads == 1  # not even a look at ARC: nothing was drained
+    assert "drained" not in capsys.readouterr().err
+
+
+def test_a_failure_before_the_drain_never_claims_a_region_is_drained(capsys):
+    """ARC unreadable from the first call (no permission, expired credentials) must not end in "still drained"."""
+    system = FakeSystem(health_fails={1: demo.AwsError("aws arc-region-switch (us-east-2): AccessDeniedException")})
+    with pytest.raises(demo.AwsError):
+        run_rehearse(system)
+    assert system.shifts == [] and "drained" not in capsys.readouterr().err
+
+
+def test_a_failure_after_the_restore_has_nothing_left_to_restore(capsys):
+    system = FakeSystem(send_fails={4: SystemExit(1)})  # the read after us-east-1 is restored
+    with pytest.raises(SystemExit):
+        run_rehearse(system)
+    assert system.shifts == DRAIN_AND_RESTORE_US_EAST_1 and not system.drained
+    assert "drained" not in capsys.readouterr().err
+
+
+def test_rehearse_restores_a_region_whose_drain_started_but_did_not_finish():
+    """The plan execution ran and then something died (a paused step, a probe error): the Region is drained."""
+    system = FakeSystem(shift_fails={1: (SystemExit(1), True)})
+    with pytest.raises(SystemExit):
+        run_rehearse(system)
+    assert system.shifts == DRAIN_AND_RESTORE_US_EAST_1
+    assert not system.drained
+
+
+def test_rehearse_does_not_run_a_second_activate_when_the_first_one_worked():
+    system = FakeSystem(shift_fails={2: (SystemExit(1), True)})  # the restore ran; a check after it died
+    with pytest.raises(SystemExit):
+        run_rehearse(system)
+    assert system.shifts == DRAIN_AND_RESTORE_US_EAST_1
+    assert not system.drained
+
+
+def test_rehearse_tries_the_restore_once_more_when_its_own_restore_did_not_work():
+    system = FakeSystem(shift_fails={2: (SystemExit(1), False)})
+    with pytest.raises(SystemExit):
+        run_rehearse(system)
+    assert system.shifts == [*DRAIN_AND_RESTORE_US_EAST_1, ("activate", "us-east-1")]
+    assert not system.drained
+
+
+def test_rehearse_restores_even_when_arc_cannot_be_read_to_check():
+    unreadable = demo.AwsError("aws arc-region-switch list-route53-health-checks-in-region (us-east-2): failed")
+    system = FakeSystem(send_fails={2: SystemExit(1)}, health_fails={3: unreadable})
+    with pytest.raises(SystemExit):
+        run_rehearse(system)
+    assert system.shifts == DRAIN_AND_RESTORE_US_EAST_1
+    assert not system.drained
+
+
+@pytest.mark.parametrize("second_error", [SystemExit(1), KeyboardInterrupt()], ids=["die", "ctrl-c"])
+def test_rehearse_says_how_to_restore_by_hand_when_the_restore_fails_too(second_error, capsys):
+    system = FakeSystem(send_fails={2: SystemExit(7)}, shift_fails={2: (second_error, False)})
+    with pytest.raises(SystemExit) as stopped:
+        run_rehearse(system)
+    assert stopped.value.code == 7  # the error that stopped the rehearsal is the one that propagates
+    assert system.shifts == DRAIN_AND_RESTORE_US_EAST_1  # one try, not a loop
+    assert system.drained == {"us-east-1"}
+    assert "error: us-east-1 is still drained: run make restore REGION=us-east-1" in capsys.readouterr().err
+
+
+def test_rehearse_does_not_claim_more_than_it_knows_when_arc_cannot_be_read_and_the_restore_fails(capsys):
+    unreadable = demo.AwsError("aws arc-region-switch list-route53-health-checks-in-region (us-east-2): failed")
+    system = FakeSystem(send_fails={2: SystemExit(1)}, health_fails={3: unreadable}, shift_fails={2: (SystemExit(1), False)})
+    with pytest.raises(SystemExit):
+        run_rehearse(system)
+    err = capsys.readouterr().err
+    assert ("error: us-east-1 may still be drained (ARC could not be read to check): "
+            "run make status, then run make restore REGION=us-east-1 if it is") in err
+    assert "is still drained" not in err
+
+
+def test_a_second_ctrl_c_while_rehearse_checks_arc_stops_without_starting_the_restore(capsys):
+    system = FakeSystem(send_fails={2: SystemExit(7)}, health_fails={3: KeyboardInterrupt()})
+    with pytest.raises(SystemExit) as stopped:
+        run_rehearse(system)
+    assert stopped.value.code == 7  # still the error that stopped the rehearsal
+    assert system.shifts == [("deactivate", "us-east-1")] and system.drained == {"us-east-1"}  # the user said stop
+    assert "error: us-east-1 may still be drained" in capsys.readouterr().err
