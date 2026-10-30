@@ -1,0 +1,8 @@
+# Python tools for the build workflow, which installs this file, and for `make test` and `make lint`.
+# ruff and pytest are pinned so that a new release cannot turn the build red with no change here;
+# Dependabot proposes the updates. pytest 8.4 is the last line that supports Python 3.9, the
+# sample's minimum, so the repository's Dependabot configuration skips pytest major versions.
+pytest==8.4.2
+ruff==0.17.3
+# The router and the app import boto3 when they load; in Lambda the runtime provides it.
+boto3>=1.35,<2

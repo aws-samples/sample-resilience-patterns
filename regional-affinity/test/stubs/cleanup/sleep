@@ -1,0 +1,3 @@
+#!/bin/sh
+# Stand-in for sleep, so cleanup.sh's retry pause costs nothing in a test.
+exit 0

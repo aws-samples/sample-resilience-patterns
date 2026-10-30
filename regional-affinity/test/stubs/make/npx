@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Stand-in for npx (cdk deploy), for test/makefile.test.ts: records the call, then holds a lock for a
+# moment, like a deploy that takes time. A second step that starts while the lock is held is logged
+# as OVERLAP, which is how a test sees steps run in parallel.
+echo "npx $*" >> "$STUB_DIR/calls"
+if ! mkdir "$STUB_DIR/busy" 2>/dev/null; then echo "OVERLAP npx $*" >> "$STUB_DIR/calls"; exit 0; fi
+sleep 0.2
+rmdir "$STUB_DIR/busy"
