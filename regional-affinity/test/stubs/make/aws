@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Stand-in for the aws CLI, for test/makefile.test.ts: sts get-caller-identity and cloudformation
+# describe-stacks. Files in $STUB_DIR pick the scenario:
+#   account   the account the credentials resolve to (default 111122223333)
+#   stacks    none      no stack exists yet (the first deploy)
+#             outputs   every stack exists and has the outputs the Makefile reads
+#             rollback  every stack exists without outputs (it rolled back), so the CLI prints "None"
+#             warn      like outputs, and the CLI also prints a warning on stderr
+#             denied    every lookup fails with AccessDenied
+echo "aws $*" >> "$STUB_DIR/calls"
+case "$*" in
+  *"sts get-caller-identity"*) cat "$STUB_DIR/account" 2>/dev/null || echo 111122223333 ;;
+  *"cloudformation describe-stacks"*)
+    scenario=$(cat "$STUB_DIR/stacks" 2>/dev/null || echo none)
+    case "$scenario" in
+      none)
+        echo "An error occurred (ValidationError) when calling the DescribeStacks operation: Stack with id x does not exist" >&2
+        exit 254 ;;
+      denied)
+        echo "An error occurred (AccessDenied) when calling the DescribeStacks operation: User is not authorized" >&2
+        exit 254 ;;
+      rollback) echo None ;;
+      outputs | warn)
+        [ "$scenario" = warn ] && echo "aws: [WARNING]: a warning the CLI prints on stderr" >&2
+        case "$*" in
+          *PeeringConnectionId*) echo pcx-0abc ;;
+          *VpcId*) echo "vpc-0abc-$(echo "$*" | grep -o 'region [a-z0-9-]*' | cut -d' ' -f2)" ;;
+          *HostedZoneId*) echo Z0PRIVATE ;;
+          *AlbDnsName*) echo "alb.example.internal" ;;
+        esac ;;
+    esac ;;
+esac

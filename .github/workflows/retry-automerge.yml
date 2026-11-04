@@ -25,7 +25,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           DRY_RUN: ${{ inputs.dry_run }}
-          E2E_WORKFLOWS: '["aurora: e2e","s3mrap-crr: e2e","drs-ec2: e2e","eks-multi-region: e2e"]'
+          E2E_WORKFLOWS: '["aurora: e2e","s3mrap-crr: e2e","drs-ec2: e2e","regional-affinity: e2e","eks-multi-region: e2e"]'
         run: |-
           set -euo pipefail
           gh pr list --repo "$REPO" --author app/dependabot --label auto-merge --state open --limit 100 \

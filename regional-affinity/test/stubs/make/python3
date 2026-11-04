@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Stand-in for python3 (scripts/demo.py), for test/makefile.test.ts: records the call and the ACCOUNT
+# it was given (in the file demo-account), then holds the same lock as the npx stand-in, so a test
+# sees any two steps that run at the same time.
+echo "python3 $*" >> "$STUB_DIR/calls"
+echo "$ACCOUNT" > "$STUB_DIR/demo-account"
+if ! mkdir "$STUB_DIR/busy" 2>/dev/null; then echo "OVERLAP python3 $*" >> "$STUB_DIR/calls"; exit 0; fi
+sleep 0.2
+rmdir "$STUB_DIR/busy"

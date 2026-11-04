@@ -1,0 +1,9 @@
+line-length = 130
+target-version = "py39"
+extend-exclude = ["cdk.out", "cdk.out.*", "node_modules"]
+
+[lint]
+select = ["E", "F", "W", "B", "I"]
+
+[lint.isort]
+known-first-party = ["router", "ingest_app", "probe", "demo", "fakes"]
