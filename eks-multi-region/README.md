@@ -148,10 +148,16 @@ is also what lets the cluster run with no NAT and no egress at all.
   a dedicated sandbox account with no customer data.
 - Node 20 with corepack (yarn berry is pinned by `packageManager`), Python 3.11+, the AWS
   CLI v2, and the [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)
-  for `tunnel.sh`. `crane` for `make mirror`. `cfn-lint` for the template gate (the build
-  warns and skips if it is absent; set `CFN_LINT_REQUIRED=1` to make that fatal, as CI does).
+  for `tunnel.sh`. `crane` for `make mirror`. `cfn-lint` 1.58.0 for the template gate (CI
+  pins it; 1.45 rejects a property this plan uses). The build warns and skips if it is
+  absent; set `CFN_LINT_REQUIRED=1` to make that fatal, as CI does.
 - Service quotas: enough On-Demand Standard vCPU in both regions for ARC to scale the
-  standby (`targetPercent` 150 of the primary's 24-hour max replica count).
+  standby (`targetPercent` 150 of the primary's 24-hour max replica count). The plan has
+  ARC's service quota checks on, which warn when a quota is lower in one region than in the
+  other but do not check headroom. The plan's role can read quotas but not request
+  increases, so ARC opens no AWS Support cases in your account. Plan evaluation therefore
+  keeps one warning naming the two request permissions and reads `actionRequired`; that
+  warning is expected.
 - Two environment variables, with **no defaults** so a deploy that forgot them fails at the
   first AWS call rather than landing in the wrong account. They are not the same kind of
   input: `AWS_REGION` is a **fixed value**, `ASSETS_BUCKET_PREFIX` is **your choice**.

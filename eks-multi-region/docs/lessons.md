@@ -307,8 +307,9 @@ this demo's own findings as PDD uncovers them.
   `cfn-lint --ignore-checks E3018 <files>` eats the paths as check names and lints
   **nothing** while printing `E1001 ... None:1:1`; pass the files FIRST, because a form with
   another flag in between only works by accident. And `E3018` on the ARC plan's
-  `ReportConfiguration` is a linter schema gap, not a defect: the identical template reached
-  `CREATE_COMPLETE` on 2026-08-29. The script hard-fails on zero templates or a
+  `ReportConfiguration` was a linter schema gap, not a defect: the identical template reached
+  `CREATE_COMPLETE` on 2026-08-29. cfn-lint 1.58.0 no longer reports it, so the gate stopped
+  ignoring it when CI moved to that version. The script hard-fails on zero templates or a
   lint-that-checked-nothing, and skips with a loud warning when cfn-lint is absent so a CI
   image without it cannot block a deploy (`CFN_LINT_REQUIRED=1` makes it fatal).
 
@@ -316,7 +317,7 @@ this demo's own findings as PDD uncovers them.
   task (`compile → synth:silent → lint:templates → test → package:assets`). A gate wired
   only into `postCompile` therefore runs locally and **never in CI**. Add lifecycle steps to
   BOTH or the pipeline stays green while checking nothing. The CI build job must also
-  install any tool such a step depends on: it installs `cfn-lint==1.45.0` and sets
+  install any tool such a step depends on: it installs `cfn-lint==1.58.0` and sets
   `CFN_LINT_REQUIRED=1` so a missing linter FAILS CI instead of skipping without an error.
   (On an Alpine-based CI image, `pip install` needs `--break-system-packages`. PEP 668 marks
   its Python externally-managed and plain pip exits 1.)

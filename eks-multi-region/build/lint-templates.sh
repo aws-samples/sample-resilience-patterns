@@ -45,11 +45,12 @@ set -euo pipefail
 
 OUT_DIR="${CDK_OUT_DIR:-cdk.out}"
 
-# cfn-lint's registry schema for AWS::ARCRegionSwitch::Plan rejects a ReportConfiguration
-# shape that DEPLOYED SUCCESSFULLY (verified against the 2026-08-29 template that reached
-# CREATE_COMPLETE, which cfn-lint flags identically). It is a schema gap in the linter,
-# not a defect in the template. Keep this list SHORT and justify every entry.
-IGNORE_CHECKS="E3018"
+# No check is ignored. Up to cfn-lint 1.45 this ignored E3018: that release's schema for
+# AWS::ARCRegionSwitch::Plan rejected a ReportConfiguration shape that deployed
+# successfully (the 2026-08-29 template reached CREATE_COMPLETE). 1.58.0, the version CI
+# pins, reports no E3018 on any template here, so the ignore went with the bump. If a check
+# ever has to be ignored again, append `--ignore-checks <id>` AFTER the templates (see the
+# argument-order note above) and justify it here.
 
 # Warnings are reported but do not fail the gate: the repo carries 27 of them (W2001
 # unused parameters, W3005 redundant DependsOn) that are stylistic. Errors fail.
@@ -90,7 +91,6 @@ echo "cfn-lint: checking ${#TEMPLATES[@]} synthesized template(s) in $OUT_DIR/"
 set +e
 # TEMPLATES FIRST, FLAGS AFTER -- see the argument-order note at the top of this file.
 LINT_OUT="$(cfn-lint "${TEMPLATES[@]}" \
-  --ignore-checks "$IGNORE_CHECKS" \
   --non-zero-exit-code "$FAIL_LEVEL" 2>&1)"
 LINT_RC=$?
 set -e

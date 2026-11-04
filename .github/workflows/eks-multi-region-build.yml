@@ -23,7 +23,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install cfn-lint (template lint gate)
-        run: pip install cfn-lint==1.45.0
+        run: pip install cfn-lint==1.58.0
       - name: Install app deps (in-image smoke test)
         run: pip install -r src/app/requirements.txt
       - run: corepack enable && yarn install --immutable
