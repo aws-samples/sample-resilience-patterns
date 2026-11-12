@@ -5,4 +5,4 @@
 pytest==9.2.0
 ruff==0.17.4
 # The router and the app import boto3 when they load; in Lambda the runtime provides it.
-boto3>=1.43.123,<2
+boto3>=1.43.126,<2
