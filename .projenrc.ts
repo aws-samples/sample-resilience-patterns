@@ -123,6 +123,12 @@ interface Pattern {
   cleanupProjectInput?: boolean;
   /** Add a pip Dependabot entry for the pattern's directory, which holds a requirements-dev.txt. */
   pipDependabot?: boolean;
+  /**
+   * Further Dependabot entries for folders below the pattern's directory. Dependabot reads one folder
+   * per entry and does not look into its subfolders, so each folder that holds Python requirements
+   * (pip), a Dockerfile (docker) or Terraform files (terraform) is listed, relative to the pattern.
+   */
+  dependabotDirs?: { pip?: string[]; docker?: string[]; terraform?: string[] };
 }
 
 // Common CDK app config — shared across all patterns.
@@ -160,6 +166,16 @@ const patterns: Pattern[] = [
   // -------------------------------------------------------------------------
   {
     outdir: 'aurora',
+    // One entry per Lambda folder that holds a requirements.txt.
+    dependabotDirs: {
+      pip: [
+        'lambda/aurora-app',
+        'lambda/dns-status',
+        'lambda/reconciliation',
+        'lambda/rpo-monitor',
+        'lambda/schema-migration',
+      ],
+    },
     e2eRoleArn: `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-aurora`,
     awsRegion: 'us-east-1',
     buildSteps: [
@@ -523,6 +539,8 @@ const patterns: Pattern[] = [
   // -------------------------------------------------------------------------
   {
     outdir: 'drs-ec2',
+    // The Terraform module's root, its local region module and the example plan that calls it.
+    dependabotDirs: { terraform: ['terraform', 'terraform/modules/region', 'terraform/examples/plan'] },
     cdkVersion: '2.215.0',
     typescriptVersion: '~5.9.3',
     deps: ['cdk-nag@^2.37.55'], // same major as the other patterns; 3.x moved NagSuppressions
@@ -706,6 +724,12 @@ const patterns: Pattern[] = [
   {
     outdir: 'eks-multi-region',
     selfManaged: true,
+    // The app image, the load-generation image and the locust overlay each have their own
+    // requirements.txt and Dockerfile.
+    dependabotDirs: {
+      pip: ['src/app', 'src/cdk/lib/constructs/load-generation/container', 'src/locust'],
+      docker: ['src/app', 'src/cdk/lib/constructs/load-generation/container', 'src/locust'],
+    },
     runsOn: 'ubuntu-24.04-arm',
     e2eRoleArn: `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-eks-multi-region`,
     awsRegion: 'us-east-2',
@@ -1053,9 +1077,10 @@ for (const p of patterns) {
 //   - weekly schedule, grouped minor+patch per ecosystem × directory
 //   - 'auto-approve' + 'auto-merge' labels trigger the approval workflow
 //   - CI is the only gate — no semver filtering
+//   - pip, docker and terraform entries for folders below a pattern (Pattern.dependabotDirs)
 // ---------------------------------------------------------------------------
 const dependabotEntry = (
-  ecosystem: 'npm' | 'pip' | 'github-actions',
+  ecosystem: 'npm' | 'pip' | 'docker' | 'terraform' | 'github-actions',
   directory: string,
 ): Record<string, unknown> => {
   const entry: Record<string, unknown> = {
@@ -1090,6 +1115,9 @@ new YamlFile(root, '.github/dependabot.yml', {
       ...patterns.flatMap((p) => [
         dependabotEntry('npm', `/${p.outdir}`),
         ...(p.pipDependabot ? [dependabotEntry('pip', `/${p.outdir}`)] : []),
+        ...(['pip', 'docker', 'terraform'] as const).flatMap((ecosystem) =>
+          (p.dependabotDirs?.[ecosystem] ?? []).map((dir) => dependabotEntry(ecosystem, `/${p.outdir}/${dir}`)),
+        ),
       ]),
     ],
   },
