@@ -164,7 +164,7 @@ const patterns: Pattern[] = [
     awsRegion: 'us-east-1',
     buildSteps: [
       { uses: 'actions/checkout@v6' },
-      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '24' } },
       { run: 'npm ci' },
       { run: 'npx projen test' },
       { run: 'npx cdk synth -c stack=bootstrap' },
@@ -182,7 +182,7 @@ const patterns: Pattern[] = [
     ],
     e2eSteps: [
       { uses: 'actions/checkout@v6' },
-      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '24' } },
       {
         uses: 'aws-actions/configure-aws-credentials@v6',
         with: {
@@ -337,7 +337,7 @@ const patterns: Pattern[] = [
     cleanupTimeoutMinutes: 15,
     buildSteps: [
       { uses: 'actions/checkout@v6' },
-      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '24' } },
       { run: 'npm ci' },
       { run: 'npx projen build' },
     ],
@@ -362,7 +362,7 @@ const patterns: Pattern[] = [
     ],
     e2eSteps: [
       { uses: 'actions/checkout@v6' },
-      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '24' } },
       { name: 'Install dependencies', run: 'npm ci' },
       { name: 'Build and test', run: 'npx projen build' },
       {
@@ -532,7 +532,7 @@ const patterns: Pattern[] = [
     e2eTimeoutMinutes: 300,
     buildSteps: [
       { uses: 'actions/checkout@v6' },
-      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '24' } },
       { uses: 'actions/setup-python@v5', with: { 'python-version': '3.12' } },
       { run: 'npm ci' },
       { run: 'npx projen test' },
@@ -552,7 +552,7 @@ const patterns: Pattern[] = [
     ],
     e2eSteps: [
       { uses: 'actions/checkout@v6' },
-      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '24' } },
       {
         uses: 'aws-actions/configure-aws-credentials@v6',
         with: {
@@ -606,7 +606,7 @@ const patterns: Pattern[] = [
     pipDependabot: true,
     buildSteps: [
       { uses: 'actions/checkout@v6' },
-      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '24' } },
       { uses: 'actions/setup-python@v6', with: { 'python-version': '3.12' } },
       { run: 'npm ci' },
       { run: 'npx projen test' },
@@ -634,7 +634,7 @@ const patterns: Pattern[] = [
     ],
     e2eSteps: [
       { uses: 'actions/checkout@v6' },
-      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '24' } },
       { uses: 'actions/setup-python@v6', with: { 'python-version': '3.12' } },
       { run: 'npm ci' },
       // The unit tests need no AWS access, so they run before the role is assumed: the dependency
@@ -729,7 +729,7 @@ const patterns: Pattern[] = [
     cleanupTimeoutMinutes: 60,
     buildSteps: [
       { uses: 'actions/checkout@v6' },
-      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '24' } },
       { uses: 'actions/setup-python@v6', with: { 'python-version': '3.12' } },
       // Pinned so a new cfn-lint rule cannot fail the build unannounced; the gate
       // script FAILS (not skips) when the linter is missing because CFN_LINT_REQUIRED=1.
@@ -760,7 +760,7 @@ const patterns: Pattern[] = [
     ],
     e2eSteps: [
       { uses: 'actions/checkout@v6' },
-      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '24' } },
       { uses: 'actions/setup-python@v6', with: { 'python-version': '3.12' } },
       { run: 'pip install cfn-lint==1.58.0 && pip install -r src/app/requirements.txt' },
       { run: 'corepack enable && yarn install --immutable' },
