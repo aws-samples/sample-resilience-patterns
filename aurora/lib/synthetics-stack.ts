@@ -92,7 +92,7 @@ export class SyntheticsStack extends cdk.Stack {
       autoDeleteObjects: true,
     });
 
-    const runtime = new synthetics.Runtime('syn-python-selenium-10.0', synthetics.RuntimeFamily.PYTHON);
+    const runtime = new synthetics.Runtime('syn-python-selenium-14.0', synthetics.RuntimeFamily.PYTHON);
 
     const regionCode = this.region === 'us-east-1' ? 'e1' : 'w2';
     // Short suffixes: canary names cap at 21 chars, and the e2e passes a
