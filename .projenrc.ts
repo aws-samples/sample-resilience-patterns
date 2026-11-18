@@ -1175,6 +1175,18 @@ autoMergeWf.on({
     types: ['opened', 'reopened', 'ready_for_review', 'synchronize'],
   },
 });
+// A PR that touches a pattern is left to retry-automerge below, which merges it only
+// after every check and the e2e of each touched pattern have passed. Arming auto-merge
+// here would merge it as soon as auto-approve approves: main has no required checks.
+const enableAutoMergeScript = String.raw`set -euo pipefail
+gh pr view "$PR_NUMBER" --repo "$REPO" --json files > "$RUNNER_TEMP/files.json"
+held=$(jq -r --argjson patterns "$PATTERNS" '[.files[].path | split("/")[0]] | unique | map(select(IN($patterns[]))) | join(", ")' "$RUNNER_TEMP/files.json")
+if [ -n "$held" ]; then
+  echo "Touches $held: left to retry-automerge, which merges after the e2e has passed."
+  exit 0
+fi
+gh pr merge --auto --squash "$PR_NUMBER" --repo "$REPO"`;
+
 autoMergeWf.addJobs({
   'enable-auto-merge': {
     runsOn: ['ubuntu-latest'],
@@ -1190,8 +1202,9 @@ autoMergeWf.addJobs({
           GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}',
           PR_NUMBER: '${{ github.event.pull_request.number }}',
           REPO: '${{ github.repository }}',
+          PATTERNS: JSON.stringify(patterns.map((p) => p.outdir)),
         },
-        run: 'gh pr merge --auto --squash "$PR_NUMBER" --repo "$REPO"',
+        run: enableAutoMergeScript,
       },
     ],
   },

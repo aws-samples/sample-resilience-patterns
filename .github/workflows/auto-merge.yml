@@ -21,4 +21,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
-        run: gh pr merge --auto --squash "$PR_NUMBER" --repo "$REPO"
+          PATTERNS: '["aurora","s3mrap-crr","drs-ec2","regional-affinity","eks-multi-region"]'
+        run: |-
+          set -euo pipefail
+          gh pr view "$PR_NUMBER" --repo "$REPO" --json files > "$RUNNER_TEMP/files.json"
+          held=$(jq -r --argjson patterns "$PATTERNS" '[.files[].path | split("/")[0]] | unique | map(select(IN($patterns[]))) | join(", ")' "$RUNNER_TEMP/files.json")
+          if [ -n "$held" ]; then
+            echo "Touches $held: left to retry-automerge, which merges after the e2e has passed."
+            exit 0
+          fi
+          gh pr merge --auto --squash "$PR_NUMBER" --repo "$REPO"
