@@ -120,6 +120,11 @@ jobs:
           role-to-assume: arn:aws:iam::${{ vars.E2E_ACCOUNT_ID }}:role/github-actions-aurora
           aws-region: us-east-1
           role-duration-seconds: 7200
-      - name: Cleanup on success
-        if: success()
-        run: ./cleanup.sh
+      - name: Cleanup
+        if: always()
+        run: |-
+          if [ -z "${PROJECT:-}" ]; then
+            echo "PROJECT is not set, so no stacks were deployed and there is nothing to clean."
+            exit 0
+          fi
+          ./cleanup.sh

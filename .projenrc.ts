@@ -308,9 +308,19 @@ const patterns: Pattern[] = [
         },
       },
       {
-        name: 'Cleanup on success',
-        if: 'success()',
-        run: './cleanup.sh',
+        // Always, not only on success: a failed or cancelled run would otherwise leave its sha-suffixed
+        // stacks behind, Aurora clusters included, and the manual cleanup workflow only knows the default
+        // project name. PROJECT reaches this step through GITHUB_ENV once the naming step has run. Before
+        // that nothing was deployed, and cleanup.sh would fall back to its default project name.
+        name: 'Cleanup',
+        if: 'always()',
+        run: [
+          'if [ -z "${PROJECT:-}" ]; then',
+          '  echo "PROJECT is not set, so no stacks were deployed and there is nothing to clean."',
+          '  exit 0',
+          'fi',
+          './cleanup.sh',
+        ].join('\n'),
       },
     ],
   },
