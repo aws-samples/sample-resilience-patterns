@@ -123,6 +123,12 @@ interface Pattern {
   cleanupProjectInput?: boolean;
   /** Add a pip Dependabot entry for the pattern's directory, which holds a requirements-dev.txt. */
   pipDependabot?: boolean;
+  /**
+   * Further Dependabot entries for folders below the pattern's directory. Dependabot reads one folder
+   * per entry and does not look into its subfolders, so each folder that holds Python requirements
+   * (pip), a Dockerfile (docker) or Terraform files (terraform) is listed, relative to the pattern.
+   */
+  dependabotDirs?: { pip?: string[]; docker?: string[]; terraform?: string[] };
 }
 
 // Common CDK app config — shared across all patterns.
@@ -160,11 +166,21 @@ const patterns: Pattern[] = [
   // -------------------------------------------------------------------------
   {
     outdir: 'aurora',
+    // One entry per Lambda folder that holds a requirements.txt.
+    dependabotDirs: {
+      pip: [
+        'lambda/aurora-app',
+        'lambda/dns-status',
+        'lambda/reconciliation',
+        'lambda/rpo-monitor',
+        'lambda/schema-migration',
+      ],
+    },
     e2eRoleArn: `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-aurora`,
     awsRegion: 'us-east-1',
     buildSteps: [
       { uses: 'actions/checkout@v6' },
-      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '24' } },
       { run: 'npm ci' },
       { run: 'npx projen test' },
       { run: 'npx cdk synth -c stack=bootstrap' },
@@ -182,7 +198,7 @@ const patterns: Pattern[] = [
     ],
     e2eSteps: [
       { uses: 'actions/checkout@v6' },
-      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '24' } },
       {
         uses: 'aws-actions/configure-aws-credentials@v6',
         with: {
@@ -337,7 +353,7 @@ const patterns: Pattern[] = [
     cleanupTimeoutMinutes: 15,
     buildSteps: [
       { uses: 'actions/checkout@v6' },
-      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '24' } },
       { run: 'npm ci' },
       { run: 'npx projen build' },
     ],
@@ -362,7 +378,7 @@ const patterns: Pattern[] = [
     ],
     e2eSteps: [
       { uses: 'actions/checkout@v6' },
-      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '24' } },
       { name: 'Install dependencies', run: 'npm ci' },
       { name: 'Build and test', run: 'npx projen build' },
       {
@@ -523,6 +539,8 @@ const patterns: Pattern[] = [
   // -------------------------------------------------------------------------
   {
     outdir: 'drs-ec2',
+    // The Terraform module's root, its local region module and the example plan that calls it.
+    dependabotDirs: { terraform: ['terraform', 'terraform/modules/region', 'terraform/examples/plan'] },
     cdkVersion: '2.215.0',
     typescriptVersion: '~5.9.3',
     deps: ['cdk-nag@^2.37.55'], // same major as the other patterns; 3.x moved NagSuppressions
@@ -532,7 +550,7 @@ const patterns: Pattern[] = [
     e2eTimeoutMinutes: 300,
     buildSteps: [
       { uses: 'actions/checkout@v6' },
-      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '24' } },
       { uses: 'actions/setup-python@v5', with: { 'python-version': '3.12' } },
       { run: 'npm ci' },
       { run: 'npx projen test' },
@@ -552,7 +570,7 @@ const patterns: Pattern[] = [
     ],
     e2eSteps: [
       { uses: 'actions/checkout@v6' },
-      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '24' } },
       {
         uses: 'aws-actions/configure-aws-credentials@v6',
         with: {
@@ -606,7 +624,7 @@ const patterns: Pattern[] = [
     pipDependabot: true,
     buildSteps: [
       { uses: 'actions/checkout@v6' },
-      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '24' } },
       { uses: 'actions/setup-python@v6', with: { 'python-version': '3.12' } },
       { run: 'npm ci' },
       { run: 'npx projen test' },
@@ -634,7 +652,7 @@ const patterns: Pattern[] = [
     ],
     e2eSteps: [
       { uses: 'actions/checkout@v6' },
-      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '24' } },
       { uses: 'actions/setup-python@v6', with: { 'python-version': '3.12' } },
       { run: 'npm ci' },
       // The unit tests need no AWS access, so they run before the role is assumed: the dependency
@@ -706,6 +724,12 @@ const patterns: Pattern[] = [
   {
     outdir: 'eks-multi-region',
     selfManaged: true,
+    // The app image, the load-generation image and the locust overlay each have their own
+    // requirements.txt and Dockerfile.
+    dependabotDirs: {
+      pip: ['src/app', 'src/cdk/lib/constructs/load-generation/container', 'src/locust'],
+      docker: ['src/app', 'src/cdk/lib/constructs/load-generation/container', 'src/locust'],
+    },
     runsOn: 'ubuntu-24.04-arm',
     e2eRoleArn: `arn:aws:iam::${E2E_ACCOUNT}:role/github-actions-eks-multi-region`,
     awsRegion: 'us-east-2',
@@ -729,7 +753,7 @@ const patterns: Pattern[] = [
     cleanupTimeoutMinutes: 60,
     buildSteps: [
       { uses: 'actions/checkout@v6' },
-      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '24' } },
       { uses: 'actions/setup-python@v6', with: { 'python-version': '3.12' } },
       // Pinned so a new cfn-lint rule cannot fail the build unannounced; the gate
       // script FAILS (not skips) when the linter is missing because CFN_LINT_REQUIRED=1.
@@ -760,7 +784,7 @@ const patterns: Pattern[] = [
     ],
     e2eSteps: [
       { uses: 'actions/checkout@v6' },
-      { uses: 'actions/setup-node@v6', with: { 'node-version': '20' } },
+      { uses: 'actions/setup-node@v6', with: { 'node-version': '24' } },
       { uses: 'actions/setup-python@v6', with: { 'python-version': '3.12' } },
       { run: 'pip install cfn-lint==1.58.0 && pip install -r src/app/requirements.txt' },
       { run: 'corepack enable && yarn install --immutable' },
@@ -1053,9 +1077,10 @@ for (const p of patterns) {
 //   - weekly schedule, grouped minor+patch per ecosystem × directory
 //   - 'auto-approve' + 'auto-merge' labels trigger the approval workflow
 //   - CI is the only gate — no semver filtering
+//   - pip, docker and terraform entries for folders below a pattern (Pattern.dependabotDirs)
 // ---------------------------------------------------------------------------
 const dependabotEntry = (
-  ecosystem: 'npm' | 'pip' | 'github-actions',
+  ecosystem: 'npm' | 'pip' | 'docker' | 'terraform' | 'github-actions',
   directory: string,
 ): Record<string, unknown> => {
   const entry: Record<string, unknown> = {
@@ -1090,6 +1115,9 @@ new YamlFile(root, '.github/dependabot.yml', {
       ...patterns.flatMap((p) => [
         dependabotEntry('npm', `/${p.outdir}`),
         ...(p.pipDependabot ? [dependabotEntry('pip', `/${p.outdir}`)] : []),
+        ...(['pip', 'docker', 'terraform'] as const).flatMap((ecosystem) =>
+          (p.dependabotDirs?.[ecosystem] ?? []).map((dir) => dependabotEntry(ecosystem, `/${p.outdir}/${dir}`)),
+        ),
       ]),
     ],
   },
@@ -1147,6 +1175,18 @@ autoMergeWf.on({
     types: ['opened', 'reopened', 'ready_for_review', 'synchronize'],
   },
 });
+// A PR that touches a pattern is left to retry-automerge below, which merges it only
+// after every check and the e2e of each touched pattern have passed. Arming auto-merge
+// here would merge it as soon as auto-approve approves: main has no required checks.
+const enableAutoMergeScript = String.raw`set -euo pipefail
+gh pr view "$PR_NUMBER" --repo "$REPO" --json files > "$RUNNER_TEMP/files.json"
+held=$(jq -r --argjson patterns "$PATTERNS" '[.files[].path | split("/")[0]] | unique | map(select(IN($patterns[]))) | join(", ")' "$RUNNER_TEMP/files.json")
+if [ -n "$held" ]; then
+  echo "Touches $held: left to retry-automerge, which merges after the e2e has passed."
+  exit 0
+fi
+gh pr merge --auto --squash "$PR_NUMBER" --repo "$REPO"`;
+
 autoMergeWf.addJobs({
   'enable-auto-merge': {
     runsOn: ['ubuntu-latest'],
@@ -1162,8 +1202,9 @@ autoMergeWf.addJobs({
           GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}',
           PR_NUMBER: '${{ github.event.pull_request.number }}',
           REPO: '${{ github.repository }}',
+          PATTERNS: JSON.stringify(patterns.map((p) => p.outdir)),
         },
-        run: 'gh pr merge --auto --squash "$PR_NUMBER" --repo "$REPO"',
+        run: enableAutoMergeScript,
       },
     ],
   },

@@ -89,7 +89,7 @@ export class BootstrapStack extends cdk.Stack {
       }),
       environment: {
         buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
-        computeType: codebuild.ComputeType.SMALL,
+        computeType: codebuild.ComputeType.MEDIUM,
       },
       environmentVariables: {
         PROJECT: { value: props.project },

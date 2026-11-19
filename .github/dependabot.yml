@@ -30,6 +30,91 @@ updates:
           - patch
     open-pull-requests-limit: 5
     versioning-strategy: lockfile-only
+  - package-ecosystem: pip
+    directory: /aurora/lambda/aurora-app
+    schedule:
+      interval: weekly
+    labels:
+      - auto-approve
+      - auto-merge
+    groups:
+      all-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: pytest
+        update-types:
+          - version-update:semver-major
+  - package-ecosystem: pip
+    directory: /aurora/lambda/dns-status
+    schedule:
+      interval: weekly
+    labels:
+      - auto-approve
+      - auto-merge
+    groups:
+      all-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: pytest
+        update-types:
+          - version-update:semver-major
+  - package-ecosystem: pip
+    directory: /aurora/lambda/reconciliation
+    schedule:
+      interval: weekly
+    labels:
+      - auto-approve
+      - auto-merge
+    groups:
+      all-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: pytest
+        update-types:
+          - version-update:semver-major
+  - package-ecosystem: pip
+    directory: /aurora/lambda/rpo-monitor
+    schedule:
+      interval: weekly
+    labels:
+      - auto-approve
+      - auto-merge
+    groups:
+      all-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: pytest
+        update-types:
+          - version-update:semver-major
+  - package-ecosystem: pip
+    directory: /aurora/lambda/schema-migration
+    schedule:
+      interval: weekly
+    labels:
+      - auto-approve
+      - auto-merge
+    groups:
+      all-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: pytest
+        update-types:
+          - version-update:semver-major
   - package-ecosystem: npm
     directory: /s3mrap-crr
     schedule:
@@ -58,6 +143,45 @@ updates:
           - patch
     open-pull-requests-limit: 5
     versioning-strategy: lockfile-only
+  - package-ecosystem: terraform
+    directory: /drs-ec2/terraform
+    schedule:
+      interval: weekly
+    labels:
+      - auto-approve
+      - auto-merge
+    groups:
+      all-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+  - package-ecosystem: terraform
+    directory: /drs-ec2/terraform/modules/region
+    schedule:
+      interval: weekly
+    labels:
+      - auto-approve
+      - auto-merge
+    groups:
+      all-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+  - package-ecosystem: terraform
+    directory: /drs-ec2/terraform/examples/plan
+    schedule:
+      interval: weekly
+    labels:
+      - auto-approve
+      - auto-merge
+    groups:
+      all-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
   - package-ecosystem: npm
     directory: /regional-affinity
     schedule:
@@ -103,3 +227,93 @@ updates:
           - patch
     open-pull-requests-limit: 5
     versioning-strategy: lockfile-only
+  - package-ecosystem: pip
+    directory: /eks-multi-region/src/app
+    schedule:
+      interval: weekly
+    labels:
+      - auto-approve
+      - auto-merge
+    groups:
+      all-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: pytest
+        update-types:
+          - version-update:semver-major
+  - package-ecosystem: pip
+    directory: /eks-multi-region/src/cdk/lib/constructs/load-generation/container
+    schedule:
+      interval: weekly
+    labels:
+      - auto-approve
+      - auto-merge
+    groups:
+      all-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: pytest
+        update-types:
+          - version-update:semver-major
+  - package-ecosystem: pip
+    directory: /eks-multi-region/src/locust
+    schedule:
+      interval: weekly
+    labels:
+      - auto-approve
+      - auto-merge
+    groups:
+      all-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: pytest
+        update-types:
+          - version-update:semver-major
+  - package-ecosystem: docker
+    directory: /eks-multi-region/src/app
+    schedule:
+      interval: weekly
+    labels:
+      - auto-approve
+      - auto-merge
+    groups:
+      all-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+  - package-ecosystem: docker
+    directory: /eks-multi-region/src/cdk/lib/constructs/load-generation/container
+    schedule:
+      interval: weekly
+    labels:
+      - auto-approve
+      - auto-merge
+    groups:
+      all-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+  - package-ecosystem: docker
+    directory: /eks-multi-region/src/locust
+    schedule:
+      interval: weekly
+    labels:
+      - auto-approve
+      - auto-merge
+    groups:
+      all-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
