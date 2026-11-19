@@ -1221,7 +1221,7 @@ depReviewWf.addJobs({
     permissions: { contents: github.workflows.JobPermission.READ },
     steps: [
       { uses: 'actions/checkout@v6' },
-      { uses: 'actions/dependency-review-action@v4' },
+      { uses: 'actions/dependency-review-action@v5' },
     ],
   },
 });
