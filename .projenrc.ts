@@ -551,7 +551,7 @@ const patterns: Pattern[] = [
     buildSteps: [
       { uses: 'actions/checkout@v6' },
       { uses: 'actions/setup-node@v6', with: { 'node-version': '24' } },
-      { uses: 'actions/setup-python@v5', with: { 'python-version': '3.12' } },
+      { uses: 'actions/setup-python@v6', with: { 'python-version': '3.12' } },
       { run: 'npm ci' },
       { run: 'npx projen test' },
       { name: 'Lambda unit tests', run: 'pip install -q boto3 pytest ruff && (cd lambda && ruff check . && python -m pytest -q)' },
