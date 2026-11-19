@@ -30,7 +30,7 @@
 #   crane digest index.docker.io/library/python:3.12-slim
 # Resolved 2026-10-06; its linux/arm64 child is
 # sha256:16bf2b5c59a08523519d3c8589deca849285dee1d62a3653e124c3dba340f15e.
-FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
+FROM python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
