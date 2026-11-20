@@ -117,7 +117,7 @@ export class RegionStack extends cdk.Stack {
       return new lambda.Function(this, id, {
         functionName: `${project}-${name}`,
         description,
-        runtime: lambda.Runtime.PYTHON_3_14,
+        runtime: lambda.Runtime.PYTHON_3_15,
         architecture: lambda.Architecture.ARM_64,
         code: code(name),
         handler,
@@ -169,7 +169,7 @@ export class RegionStack extends cdk.Stack {
     const probe = new lambda.Function(this, 'Probe', {
       functionName: `${project}-probe`,
       description: 'From inside this VPC, queries the Route 53 Resolver or sends HTTP requests that follow redirects',
-      runtime: lambda.Runtime.PYTHON_3_14,
+      runtime: lambda.Runtime.PYTHON_3_15,
       architecture: lambda.Architecture.ARM_64,
       code: code('probe'),
       handler: 'probe.handler',

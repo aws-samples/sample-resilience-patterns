@@ -15,12 +15,13 @@ jobs:
   retry-auto-merge:
     runs-on: ubuntu-latest
     permissions:
+      actions: write
       contents: write
       pull-requests: write
       checks: read
       statuses: read
     steps:
-      - name: Merge Dependabot PRs whose checks passed
+      - name: Merge Dependabot PRs whose checks passed, then build main
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -60,7 +61,8 @@ jobs:
              elif ($missing | length) > 0 then "no passing run of \($missing | join(", "))"
              else "" end) as $why
           | {number, head: .headRefOid, merge: ($why == ""),
-             reason: (if $why == "" then "all checks passed" else $why end)}
+             reason: (if $why == "" then "all checks passed" else $why end),
+             builds: ($need | map(sub(": e2e$"; ": build")))}
           JQ
           jq -c --argjson e2e "$E2E_WORKFLOWS" -f "$RUNNER_TEMP/decide.jq" "$RUNNER_TEMP/prs.json" \
             > "$RUNNER_TEMP/decisions.jsonl"
@@ -73,10 +75,19 @@ jobs:
               echo "#$number: would merge ($reason)"
             else
               echo "#$number: merging ($reason)"
-              gh pr merge "$number" --repo "$REPO" --squash --match-head-commit "$(jq -r .head <<<"$d")" \
-                || echo "::warning::#$number did not merge; the next run tries again"
+              if gh pr merge "$number" --repo "$REPO" --squash --match-head-commit "$(jq -r .head <<<"$d")"; then
+                jq -r '.builds[]' <<<"$d" >> "$RUNNER_TEMP/builds.txt"
+              else
+                echo "::warning::#$number did not merge; the next run tries again"
+              fi
             fi
           done < "$RUNNER_TEMP/decisions.jsonl"
+          if [ -s "$RUNNER_TEMP/builds.txt" ]; then
+            sort -u "$RUNNER_TEMP/builds.txt" | while read -r build; do
+              echo "Starting '$build' on main"
+              gh workflow run "$build" --repo "$REPO" --ref main || echo "::warning::'$build' did not start on main"
+            done
+          fi
 concurrency:
   group: retry-automerge
   cancel-in-progress: false

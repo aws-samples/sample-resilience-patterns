@@ -551,7 +551,7 @@ const patterns: Pattern[] = [
     buildSteps: [
       { uses: 'actions/checkout@v6' },
       { uses: 'actions/setup-node@v6', with: { 'node-version': '24' } },
-      { uses: 'actions/setup-python@v5', with: { 'python-version': '3.12' } },
+      { uses: 'actions/setup-python@v6', with: { 'python-version': '3.12' } },
       { run: 'npm ci' },
       { run: 'npx projen test' },
       { name: 'Lambda unit tests', run: 'pip install -q boto3 pytest ruff && (cd lambda && ruff check . && python -m pytest -q)' },
@@ -604,12 +604,12 @@ const patterns: Pattern[] = [
   // DynamoDB global table (multi-Region eventual consistency). A thin router redirects
   // region-less requests to the home Region's name, and one ARC Region switch plan drains
   // or restores a Region at all three levels of a Route 53 hierarchy. Needs aws-cdk-lib
-  // >= 2.222.0: the typed aws_arcregionswitch L1 arrived in 2.215 (as in drs-ec2), and
-  // 2.222.0 added the Python 3.14 Lambda runtime that this pattern's functions use.
+  // >= 2.276.0: the typed aws_arcregionswitch L1 arrived in 2.215 (as in drs-ec2), and
+  // 2.276.0 added the Python 3.15 Lambda runtime that this pattern's functions use.
   // -------------------------------------------------------------------------
   {
     outdir: 'regional-affinity',
-    cdkVersion: '2.222.0',
+    cdkVersion: '2.276.0',
     typescriptVersion: '~5.9.3',
     deps: ['cdk-nag@^2.37.55'],
     gitignore: ['__pycache__/', '*.pyc', '.pytest_cache/', '.ruff_cache/'], // lambda/ and scripts/ are Python
@@ -1221,7 +1221,7 @@ depReviewWf.addJobs({
     permissions: { contents: github.workflows.JobPermission.READ },
     steps: [
       { uses: 'actions/checkout@v6' },
-      { uses: 'actions/dependency-review-action@v4' },
+      { uses: 'actions/dependency-review-action@v5' },
     ],
   },
 });
@@ -1247,6 +1247,12 @@ depReviewWf.addJobs({
 // every pattern the PR touches has a successful run of its e2e. A queued
 // eks-multi-region e2e cancelled by a newer one leaves no check row at all, so
 // a missing e2e is not a pass. Anything else leaves the PR open for a person.
+//
+// After a merge: a merge made with the workflow token starts no push workflows,
+// so main would get no build of its own. A bad update merged on 2026-11-19 went
+// unnoticed for that reason. The job therefore starts the build of each pattern
+// it merged, once per run, on main. workflow_dispatch is one of the two events
+// the workflow token may start.
 // ---------------------------------------------------------------------------
 const retryAutoMergeScript = String.raw`set -euo pipefail
 gh pr list --repo "$REPO" --author app/dependabot --label auto-merge --state open --limit 100 \
@@ -1281,7 +1287,8 @@ def title: if .workflow == "" then .name else "\(.workflow) / \(.name)" end;
    elif ($missing | length) > 0 then "no passing run of \($missing | join(", "))"
    else "" end) as $why
 | {number, head: .headRefOid, merge: ($why == ""),
-   reason: (if $why == "" then "all checks passed" else $why end)}
+   reason: (if $why == "" then "all checks passed" else $why end),
+   builds: ($need | map(sub(": e2e$"; ": build")))}
 JQ
 jq -c --argjson e2e "$E2E_WORKFLOWS" -f "$RUNNER_TEMP/decide.jq" "$RUNNER_TEMP/prs.json" \
   > "$RUNNER_TEMP/decisions.jsonl"
@@ -1294,10 +1301,19 @@ while read -r d; do
     echo "#$number: would merge ($reason)"
   else
     echo "#$number: merging ($reason)"
-    gh pr merge "$number" --repo "$REPO" --squash --match-head-commit "$(jq -r .head <<<"$d")" \
-      || echo "::warning::#$number did not merge; the next run tries again"
+    if gh pr merge "$number" --repo "$REPO" --squash --match-head-commit "$(jq -r .head <<<"$d")"; then
+      jq -r '.builds[]' <<<"$d" >> "$RUNNER_TEMP/builds.txt"
+    else
+      echo "::warning::#$number did not merge; the next run tries again"
+    fi
   fi
-done < "$RUNNER_TEMP/decisions.jsonl"`;
+done < "$RUNNER_TEMP/decisions.jsonl"
+if [ -s "$RUNNER_TEMP/builds.txt" ]; then
+  sort -u "$RUNNER_TEMP/builds.txt" | while read -r build; do
+    echo "Starting '$build' on main"
+    gh workflow run "$build" --repo "$REPO" --ref main || echo "::warning::'$build' did not start on main"
+  done
+fi`;
 
 const retryAutoMergeWf = new github.GithubWorkflow(root.github!, 'retry-automerge');
 retryAutoMergeWf.on({
@@ -1319,6 +1335,7 @@ retryAutoMergeWf.addJobs({
   'retry-auto-merge': {
     runsOn: ['ubuntu-latest'],
     permissions: {
+      actions: github.workflows.JobPermission.WRITE,
       contents: github.workflows.JobPermission.WRITE,
       pullRequests: github.workflows.JobPermission.WRITE,
       checks: github.workflows.JobPermission.READ,
@@ -1326,7 +1343,7 @@ retryAutoMergeWf.addJobs({
     },
     steps: [
       {
-        name: 'Merge Dependabot PRs whose checks passed',
+        name: 'Merge Dependabot PRs whose checks passed, then build main',
         env: {
           GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}',
           REPO: '${{ github.repository }}',
