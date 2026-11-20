@@ -604,12 +604,12 @@ const patterns: Pattern[] = [
   // DynamoDB global table (multi-Region eventual consistency). A thin router redirects
   // region-less requests to the home Region's name, and one ARC Region switch plan drains
   // or restores a Region at all three levels of a Route 53 hierarchy. Needs aws-cdk-lib
-  // >= 2.222.0: the typed aws_arcregionswitch L1 arrived in 2.215 (as in drs-ec2), and
-  // 2.222.0 added the Python 3.14 Lambda runtime that this pattern's functions use.
+  // >= 2.276.0: the typed aws_arcregionswitch L1 arrived in 2.215 (as in drs-ec2), and
+  // 2.276.0 added the Python 3.15 Lambda runtime that this pattern's functions use.
   // -------------------------------------------------------------------------
   {
     outdir: 'regional-affinity',
-    cdkVersion: '2.222.0',
+    cdkVersion: '2.276.0',
     typescriptVersion: '~5.9.3',
     deps: ['cdk-nag@^2.37.55'],
     gitignore: ['__pycache__/', '*.pyc', '.pytest_cache/', '.ruff_cache/'], // lambda/ and scripts/ are Python
